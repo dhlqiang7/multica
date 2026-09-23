@@ -138,10 +138,10 @@ export function IssueDuplicatesSection({ issueId }: { issueId: string }) {
 
 /**
  * "→ MUL-123" beside a duplicate in list rows, board cards and table cells,
- * so the original is one click away instead of two. Those rows are anchors,
- * so this is a nested control: it navigates on its own and stops the row from
- * also opening the duplicate. The original is resolved through the detail
- * query, shared with every other row pointing at the same issue.
+ * so the original is one click away instead of two. Rows that are not
+ * duplicates render nothing and subscribe to nothing: the query and
+ * navigation hooks live in the inner component, which only mounts once the
+ * issue carries a mark.
  */
 export function IssueDuplicateOfMarker({
   issue,
@@ -150,17 +150,32 @@ export function IssueDuplicateOfMarker({
   issue: Issue;
   className?: string;
 }) {
+  if (!isDuplicateIssue(issue)) return null;
+  return <DuplicateOfLink originalId={issue.duplicate_of_issue_id!} className={className} />;
+}
+
+/**
+ * The marker's link. Those rows are anchors, so this is a nested control: it
+ * navigates on its own and stops the row from also opening the duplicate.
+ * The original is resolved through the detail query, shared with every other
+ * row pointing at the same issue.
+ */
+function DuplicateOfLink({
+  originalId,
+  className,
+}: {
+  originalId: string;
+  className?: string;
+}) {
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
   const navigate = useIntentNavigate();
-  const originalId = isDuplicateIssue(issue) ? issue.duplicate_of_issue_id! : "";
   const { data: original } = useQuery({
     ...issueDetailOptions(wsId, originalId),
-    enabled: originalId !== "",
     staleTime: 60_000,
   });
-  if (!originalId || !original) return null;
+  if (!original) return null;
 
   const href = paths.issueDetail(original.id);
   const stop = (e: React.SyntheticEvent) => {
