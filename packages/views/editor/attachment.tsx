@@ -41,7 +41,7 @@ import { useAttachmentPreview } from "./attachment-preview-modal";
 import { usePreviewSequence } from "./preview-sequence-context";
 import {
   isObjectURL,
-  useResignedInlineMediaURL,
+  useResignedInlineMedia,
 } from "./hooks/use-inline-media-url";
 import { useDownloadAttachment } from "./use-download-attachment";
 import { AttachmentCard } from "./attachment-card";
@@ -339,7 +339,7 @@ export function Attachment({
   // on deployments that have no signed URL to give — to an object URL built
   // from the authenticated byte fetch. Only the image branch renders a native
   // resource load, so only it opts into that byte fetch.
-  const mediaUrl = useResignedInlineMediaURL(
+  const { url: mediaUrl } = useResignedInlineMedia(
     state.attachmentId,
     state.url,
     kind === "image",

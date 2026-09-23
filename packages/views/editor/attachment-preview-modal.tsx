@@ -92,7 +92,7 @@ import {
 import { formatBytes } from "../common/format-bytes";
 import { useDownloadAttachment } from "./use-download-attachment";
 import { useAttachmentHtmlText } from "./hooks/use-attachment-html-text";
-import { useResignedInlineMediaURL } from "./hooks/use-inline-media-url";
+import { useResignedInlineMedia } from "./hooks/use-inline-media-url";
 import { useZoomCanvas, type ZoomCanvasApi } from "./hooks/use-zoom-canvas";
 import { ZoomCanvas, ZoomControls } from "./zoom-canvas";
 import type { Size } from "./utils/zoom-transform";
@@ -308,10 +308,13 @@ function useSettledImageURL(
   onErrorRef.current = onLoadError;
 
   useEffect(() => {
-    if (!enabled || !targetUrl) {
+    if (!enabled) {
       setSettled(null);
       return;
     }
+    // Nothing loadable yet (the URL is still being re-signed): keep holding
+    // whatever frame is up.
+    if (!targetUrl) return;
     let cancelled = false;
     const probe = new window.Image();
     if (typeof probe.decode !== "function") {
@@ -341,17 +344,17 @@ function useSettledImageURL(
 // then fetches the bytes through a detached <img>. Renders nothing.
 export function PreviewImagePrefetch({ source }: { source: PreviewSource }) {
   const state = normalize(source);
-  const url = useResignedInlineMediaURL(
+  const { url, pending } = useResignedInlineMedia(
     state.attachmentId ?? undefined,
     state.mediaUrl,
     true,
   );
 
   useEffect(() => {
-    if (!url) return;
+    if (!url || pending) return;
     const probe = new window.Image();
     probe.src = url;
-  }, [url]);
+  }, [url, pending]);
 
   return null;
 }
@@ -567,11 +570,16 @@ function PreviewPanel({
   // clicked, so — unlike the click-through path, where <Attachment> had
   // already upgraded the URL — the viewer has to run the re-sign itself. A
   // no-op for URLs that are already loadable (signed CDN, public storage).
-  const targetUrl = useResignedInlineMediaURL(
+  const resigned = useResignedInlineMedia(
     state.attachmentId ?? undefined,
     state.mediaUrl,
     kind === "image",
   );
+  // Until that upgrade lands the picked URL may be one this client cannot
+  // load natively (desktop, split-origin web); handed to <img> it would fail
+  // and, in a sequence, read as a broken image to skip. Hold the previous
+  // frame — or show loading — instead.
+  const targetUrl = resigned.pending ? "" : resigned.url;
   // The previous image stays on the canvas until this one has decoded — the
   // swap itself is what used to flash. Also absorbs the re-sign URL upgrade
   // (raw -> signed) without a second visible load.
@@ -579,7 +587,8 @@ function PreviewPanel({
   // A load error from the <img> belongs to the file being opened only when
   // that is what it shows — a frame held from the previous image never
   // reports against the next one.
-  const imageLoadError = mediaUrl === targetUrl ? onImageError : undefined;
+  const imageLoadError =
+    mediaUrl !== "" && mediaUrl === targetUrl ? onImageError : undefined;
 
   // Natural size is carried with the URL it was measured from, so a panel
   // reused for a different attachment can never fit the new image against the
@@ -845,6 +854,15 @@ function ImagePreview({
     },
     [onNaturalSize, url],
   );
+
+  if (!url) {
+    return (
+      <div className="dark flex h-full items-center justify-center gap-2 text-body text-muted-foreground">
+        <Loader2 className="size-4 animate-spin" />
+        {t(($) => $.attachment.preview_loading)}
+      </div>
+    );
+  }
 
   // A flex column: the canvas sizes itself with `flex: 1 1 auto` and its
   // content is absolutely positioned, so in a plain block parent it would
