@@ -12,6 +12,7 @@ import { useT } from "../../../i18n";
 import { useOptionalNavigation } from "../../../navigation";
 
 import { ConversationStartersEditor } from "../conversation-starters-editor";
+import { useConfigDraft, type ConfigDraftSlot } from "../config-drafts";
 
 /** How long the deep-linked conversation-starters editor stays ringed. */
 const FOCUS_FLASH_MS = 1600;
@@ -19,14 +20,15 @@ const FOCUS_FLASH_MS = 1600;
 export function InstructionsTab({
   agent,
   onSave,
-  onDirtyChange,
+  draftSlot,
 }: {
   agent: Agent;
   onSave: (updates: {
     instructions: string;
     conversation_starters?: AgentConversationStarter[];
   }) => Promise<void>;
-  onDirtyChange?: (dirty: boolean) => void;
+  /** Hands saving to the configuration page's shared save bar. */
+  draftSlot?: ConfigDraftSlot;
 }) {
   const { t } = useT("agents");
   // Optional read: this tab is a leaf that tests mount in isolation, and its
@@ -166,11 +168,6 @@ export function InstructionsTab({
     [],
   );
 
-  // Report dirty state up so the parent can guard tab switches.
-  useEffect(() => {
-    onDirtyChange?.(isDirty);
-  }, [isDirty, onDirtyChange]);
-
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -186,6 +183,18 @@ export function InstructionsTab({
       setSaving(false);
     }
   };
+
+  const managed = useConfigDraft(draftSlot, {
+    dirty: isDirty,
+    valid: conversationStartersValid,
+    save: handleSave,
+    discard: () => {
+      setValue(agent.instructions ?? "");
+      setConversationStarters(
+        JSON.parse(persistedConversationStartersKey) as AgentConversationStarter[],
+      );
+    },
+  });
 
   return (
     <div className="space-y-5">
@@ -264,28 +273,30 @@ export function InstructionsTab({
         </div>
       ) : null}
 
-      <div className="flex items-center justify-end gap-3">
-        {isDirty && (
-          <span className="text-caption text-muted-foreground">
-            {t(($) => $.tab_body.common.unsaved_changes)}
-          </span>
-        )}
-        <Button
-          size="sm"
-          onClick={handleSave}
-          disabled={!isDirty || !conversationStartersValid || saving}
-        >
-          {saving ? (
-            <Loader2
-              className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none"
-              aria-hidden="true"
-            />
-          ) : (
-            <Save className="h-3.5 w-3.5" aria-hidden="true" />
+      {managed ? null : (
+        <div className="flex items-center justify-end gap-3">
+          {isDirty && (
+            <span className="text-caption text-muted-foreground">
+              {t(($) => $.tab_body.common.unsaved_changes)}
+            </span>
           )}
-          {t(($) => $.tab_body.common.save)}
-        </Button>
-      </div>
+          <Button
+            size="sm"
+            onClick={handleSave}
+            disabled={!isDirty || !conversationStartersValid || saving}
+          >
+            {saving ? (
+              <Loader2
+                className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none"
+                aria-hidden="true"
+              />
+            ) : (
+              <Save className="h-3.5 w-3.5" aria-hidden="true" />
+            )}
+            {t(($) => $.tab_body.common.save)}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

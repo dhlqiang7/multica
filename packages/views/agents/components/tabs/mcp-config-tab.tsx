@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Loader2,
   Lock,
@@ -66,7 +66,6 @@ export function McpConfigTab({
   currentUserId,
   canEdit = true,
   onSave,
-  onDirtyChange,
 }: {
   agent: Agent;
   runtime: AgentRuntime | null;
@@ -78,7 +77,6 @@ export function McpConfigTab({
    */
   canEdit?: boolean;
   onSave: (updates: { mcp_config: unknown | null }) => Promise<void>;
-  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const { t } = useT("agents");
   const canReadRuntime =
@@ -145,7 +143,6 @@ export function McpConfigTab({
     useState<ManagedMcpServer | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  useEffect(() => onDirtyChange?.(false), [onDirtyChange]);
 
   const startRename = (server: ManagedMcpServer) => {
     if (renamePending) return;

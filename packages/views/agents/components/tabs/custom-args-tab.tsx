@@ -19,6 +19,7 @@ import {
   SettingsCard,
   SettingsSection,
 } from "../../../settings/components/settings-layout";
+import { useConfigDraft, type ConfigDraftSlot } from "../config-drafts";
 
 interface ArgEntry {
   id: string;
@@ -46,12 +47,13 @@ export function CustomArgsTab({
   agent,
   runtimeDevice,
   onSave,
-  onDirtyChange,
+  draftSlot,
 }: {
   agent: Agent;
   runtimeDevice?: RuntimeDevice;
   onSave: (updates: Partial<Agent>) => Promise<void>;
-  onDirtyChange?: (dirty: boolean) => void;
+  /** Hands saving to the configuration page's shared save bar. */
+  draftSlot?: ConfigDraftSlot;
 }) {
   const { t } = useT("agents");
   const [entries, setEntries] = useState<ArgEntry[]>(
@@ -65,10 +67,6 @@ export function CustomArgsTab({
   const currentArgs = entriesToArgs(entries);
   const originalArgs = agent.custom_args ?? [];
   const dirty = JSON.stringify(currentArgs) !== JSON.stringify(originalArgs);
-
-  useEffect(() => {
-    onDirtyChange?.(dirty);
-  }, [dirty, onDirtyChange]);
 
   useEffect(() => {
     if (editor) editorInputRef.current?.focus();
@@ -125,6 +123,18 @@ export function CustomArgsTab({
       setSaving(false);
     }
   };
+
+  // An open add/edit row is unsaved work the draft does not contain yet, so
+  // it blocks saving rather than being dropped by it.
+  const managed = useConfigDraft(draftSlot, {
+    dirty: dirty || editor !== null,
+    valid: editor === null,
+    save: handleSave,
+    discard: () => {
+      setEntries(argsToEntries(agent.custom_args ?? []));
+      closeEditor();
+    },
+  });
 
   const renderEditor = (index?: number) => (
     <form
@@ -277,28 +287,30 @@ export function CustomArgsTab({
         </SettingsSection>
       ) : null}
 
-      <div className="flex items-center justify-end gap-3 pt-1">
-        {dirty ? (
-          <span role="status" className="text-caption text-muted-foreground">
-            {t(($) => $.tab_body.common.unsaved_changes)}
-          </span>
-        ) : null}
-        <Button
-          onClick={handleSave}
-          disabled={!dirty || saving || editor !== null}
-          size="sm"
-        >
-          {saving ? (
-            <Loader2
-              className="size-3.5 animate-spin motion-reduce:animate-none"
-              aria-hidden="true"
-            />
-          ) : (
-            <Save className="size-3.5" aria-hidden="true" />
-          )}
-          {t(($) => $.tab_body.common.save)}
-        </Button>
-      </div>
+      {managed ? null : (
+        <div className="flex items-center justify-end gap-3 pt-1">
+          {dirty ? (
+            <span role="status" className="text-caption text-muted-foreground">
+              {t(($) => $.tab_body.common.unsaved_changes)}
+            </span>
+          ) : null}
+          <Button
+            onClick={handleSave}
+            disabled={!dirty || saving || editor !== null}
+            size="sm"
+          >
+            {saving ? (
+              <Loader2
+                className="size-3.5 animate-spin motion-reduce:animate-none"
+                aria-hidden="true"
+              />
+            ) : (
+              <Save className="size-3.5" aria-hidden="true" />
+            )}
+            {t(($) => $.tab_body.common.save)}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

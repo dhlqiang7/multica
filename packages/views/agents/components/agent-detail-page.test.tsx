@@ -24,20 +24,30 @@ const TEST_RESOURCES = { en: { common: enCommon, agents: enAgents } };
 // The DM tests exercise the header action wiring plus the real permission
 // rules (via auth + member fixtures); the tabbed body and avatar/presence
 // widgets are irrelevant weight, so they're stubbed.
-vi.mock("./agent-overview-pane", () => ({
-  AgentOverviewPane: ({
+vi.mock("./agent-detail-views", () => ({
+  AgentDetailViews: ({
     agent,
     onUpdate,
+    notice,
+    navIntent,
   }: {
     agent: Agent;
     onUpdate: (id: string, data: Record<string, unknown>) => Promise<void>;
+    notice?: React.ReactNode;
+    navIntent?: string | null;
   }) => (
-    <button
-      type="button"
-      onClick={() => void onUpdate(agent.id, { model: "new-model" })}
-    >
-      update model
-    </button>
+    <div>
+      {notice}
+      <span data-testid="nav-intent">{navIntent ?? ""}</span>
+      {/* The header no longer repeats the model; the views receive it. */}
+      <span>{agent.model}</span>
+      <button
+        type="button"
+        onClick={() => void onUpdate(agent.id, { model: "new-model" })}
+      >
+        update model
+      </button>
+    </div>
   ),
 }));
 vi.mock("../../common/actor-avatar", () => ({
@@ -138,6 +148,7 @@ vi.mock("@multica/core/paths", () => ({
   useWorkspacePaths: () => ({
     agents: () => "/acme/agents",
     chat: () => "/acme/chat",
+    runtimeDetail: (id: string) => `/acme/runtimes/${id}`,
   }),
 }));
 vi.mock("@multica/core/api", () => {
@@ -472,9 +483,10 @@ describe("AgentDetailPage DM button", () => {
     expect(
       await screen.findByText(/needs a runtime before it can run/i),
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Bind runtime" }),
-    ).toBeInTheDocument();
+    // Binding happens on the configuration page, so the callout sends the
+    // views there instead of opening a picker of its own.
+    fireEvent.click(screen.getByRole("button", { name: "Bind runtime" }));
+    expect(screen.getByTestId("nav-intent")).toHaveTextContent("execution");
 
     fireEvent.click(screen.getByRole("button", { name: "DM" }));
     expect(mockToastError).toHaveBeenCalledWith(

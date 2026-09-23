@@ -535,7 +535,7 @@ function AgentFailureItem({
     <li className={`${OFFENDER_GRID} py-2`}>
       {name ? (
         <AppLink
-          href={`${wsPaths.agentDetail(row.agentId)}?view=overview`}
+          href={`${wsPaths.agentDetail(row.agentId)}?view=activity`}
           newTabTitle={name}
           className="min-w-0 hover:underline"
         >

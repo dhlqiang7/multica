@@ -4,20 +4,16 @@ import { useState } from "react";
 import {
   AlertCircle,
   ArrowLeft,
-  Bot,
-  Clock3,
   Lock,
   MessageSquare,
   MoreHorizontal,
   Plus,
-  Server,
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   Agent,
-  AgentRuntime,
   UpdateAgentRequest,
 } from "@multica/core/types";
 import {
@@ -37,7 +33,7 @@ import {
   memberListOptions,
   workspaceKeys,
 } from "@multica/core/workspace/queries";
-import { runtimeDisplayLabel, runtimeListOptions } from "@multica/core/runtimes";
+import { runtimeListOptions } from "@multica/core/runtimes";
 import { useAgentPermissions } from "@multica/core/permissions";
 import { Button } from "@multica/ui/components/ui/button";
 import { CapabilityBanner } from "@multica/ui/components/common/capability-banner";
@@ -61,10 +57,10 @@ import { AppLink, useNavigation } from "../../navigation";
 import { PAGE_GUTTER, PAGE_RAIL, PageHeader } from "../../layout/page-header";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { AgentPresenceIndicator } from "./agent-presence-indicator";
-import { VisibilityBadge } from "./visibility-badge";
-import { AgentOverviewPane, type DetailTab } from "./agent-overview-pane";
+import { AgentDetailViews, type AgentViewTarget } from "./agent-detail-views";
+import { AgentHealthCallout } from "./agent-health-callout";
 import { ExpandableDescription } from "../../common/expandable-description";
-import { useT, useTimeAgo } from "../../i18n";
+import { useT } from "../../i18n";
 
 interface AgentDetailPageProps {
   agentId: string;
@@ -127,9 +123,11 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
 
   const [confirmArchive, setConfirmArchive] = useState(false);
 
-  // One-shot channel: the inspector's compact Lark status row asks the
-  // overview pane to focus a tab. The pane clears it after consuming.
-  const [tabNavIntent, setTabNavIntent] = useState<DetailTab | null>(null);
+  // One-shot channel: the health callout asks the views to open a place on
+  // the configuration page. The views clear it after consuming.
+  const [viewNavIntent, setViewNavIntent] = useState<AgentViewTarget | null>(
+    null,
+  );
 
   const handleUpdate = async (id: string, data: Record<string, unknown>) => {
     // Optimistic update: patch the matching agent in the cached list
@@ -343,7 +341,6 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
     <div className="flex flex-1 min-h-0 flex-col">
       <DetailHeader
         agent={agent}
-        runtime={runtime}
         presence={presence}
         backHref={paths.agents()}
         canAssign={canAssign.allowed}
@@ -357,60 +354,8 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
         }
       />
 
-      {!canEdit.allowed && (
-        <div className={cn(PAGE_RAIL, PAGE_GUTTER, "pt-3")}>
-          <CapabilityBanner
-            reason={canEdit.reason}
-            resource="agent"
-            ownerName={owner?.name}
-          />
-        </div>
-      )}
-
-      {isArchived && (
-        <div className="shrink-0 border-b bg-muted/50 py-2 text-caption text-muted-foreground">
-          <div className={cn(PAGE_RAIL, PAGE_GUTTER, "flex items-center gap-2")}>
-            <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-            <span className="flex-1">
-              {t(($) => $.detail.archived_banner)}
-            </span>
-            {canEdit.allowed && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-6 text-caption"
-                onClick={() => handleRestore(agent.id)}
-              >
-                {t(($) => $.detail.restore)}
-              </Button>
-            )}
-          </div>
-        </div>
-      )}
-
-      {!isArchived && !runtimeBound && (
-        <div className="shrink-0 border-b border-amber-500/30 bg-amber-500/10 py-2 text-caption text-amber-900 dark:text-amber-100">
-          <div className={cn(PAGE_RAIL, PAGE_GUTTER, "flex items-center gap-2")}>
-            <Server className="h-3.5 w-3.5 shrink-0" />
-            <span className="flex-1">
-              {t(($) => $.detail.runtime_required_banner)}
-            </span>
-            {canEdit.allowed && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-6 border-amber-500/40 bg-background/70 text-caption"
-                onClick={() => setTabNavIntent("general")}
-              >
-                {t(($) => $.detail.bind_runtime)}
-              </Button>
-            )}
-          </div>
-        </div>
-      )}
-
       <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
-        <AgentOverviewPane
+        <AgentDetailViews
           agent={agent}
           runtime={runtime}
           owner={owner}
@@ -419,8 +364,28 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
           onUpdate={handleUpdate}
           currentUserId={currentUser?.id ?? null}
           canEdit={canEdit.allowed}
-          navIntent={tabNavIntent}
-          onNavIntentHandled={() => setTabNavIntent(null)}
+          notice={
+            <AgentHealthCallout
+              archived={isArchived}
+              runtimeBound={runtimeBound}
+              presence={presence}
+              canEdit={canEdit.allowed}
+              runtimeHref={runtime ? paths.runtimeDetail(runtime.id) : null}
+              onRestore={() => handleRestore(agent.id)}
+              onBindRuntime={() => setViewNavIntent("execution")}
+            />
+          }
+          readOnlyNotice={
+            canEdit.allowed ? null : (
+              <CapabilityBanner
+                reason={canEdit.reason}
+                resource="agent"
+                ownerName={owner?.name}
+              />
+            )
+          }
+          navIntent={viewNavIntent}
+          onNavIntentHandled={() => setViewNavIntent(null)}
         />
       </div>
 
@@ -472,7 +437,6 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
 
 function DetailHeader({
   agent,
-  runtime,
   presence,
   backHref,
   canAssign,
@@ -484,7 +448,6 @@ function DetailHeader({
   onArchive,
 }: {
   agent: Agent;
-  runtime: AgentRuntime | null;
   presence: AgentPresenceDetail | null;
   backHref: string;
   canAssign: boolean;
@@ -500,14 +463,11 @@ function DetailHeader({
   onArchive?: () => void;
 }) {
   const { t } = useT("agents");
-  const timeAgo = useTimeAgo();
   const isArchived = !!agent.archived_at;
   const hasMoreActions = !!onArchive;
 
   return (
-    <header
-      className="shrink-0 border-b bg-background pb-5 pt-3"
-    >
+    <header className="shrink-0 bg-background pb-4 pt-3">
       <div className={cn(PAGE_RAIL, PAGE_GUTTER)}>
         <div className="flex min-w-0 items-center gap-1.5 text-caption text-muted-foreground">
           <AppLink
@@ -534,31 +494,16 @@ function DetailHeader({
                 <h1 className="min-w-0 text-balance text-title-lg font-semibold tracking-tight sm:text-display-sm">
                   {agent.name}
                 </h1>
-                <AgentPresenceIndicator detail={presence} />
-              </div>
-              <ExpandableDescription>
-                {agent.description ||
-                  t(($) => $.inspector.no_description_placeholder)}
-              </ExpandableDescription>
-              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-caption text-muted-foreground">
-                <span className="inline-flex min-w-0 items-center gap-1.5">
-                  <Bot className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                  <span className="truncate">{agent.model || t(($) => $.pickers.model_default)}</span>
-                </span>
-                <span className="inline-flex min-w-0 items-center gap-1.5">
-                  <Server className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                  <span className="truncate">
-                    {runtime
-                      ? runtimeDisplayLabel(runtime)
-                      : t(($) => $.pickers.runtime_none)}
-                  </span>
-                </span>
-                <VisibilityBadge value={agent.visibility} />
-                <span className="inline-flex items-center gap-1.5">
-                  <Clock3 className="h-3.5 w-3.5" aria-hidden="true" />
-                  {t(($) => $.detail.updated, { when: timeAgo(agent.updated_at) })}
+                {/* Runtime, model and access live in the Activity rail and
+                    the configuration page; the header only says whether the
+                    agent can work right now. */}
+                <span className="inline-flex h-6 items-center rounded-full border border-surface-border bg-surface px-2.5">
+                  <AgentPresenceIndicator detail={presence} />
                 </span>
               </div>
+              {agent.description ? (
+                <ExpandableDescription>{agent.description}</ExpandableDescription>
+              ) : null}
             </div>
           </div>
 

@@ -24,11 +24,11 @@ import {
   SettingsCard,
   SettingsRow,
   SettingsSaveState,
-  SettingsSection,
 } from "../../settings/components/settings-layout";
 import { useAutoSave } from "../../settings/components/use-auto-save";
 import { useT } from "../../i18n";
 import { CharCounter } from "./char-counter";
+import { ConfigSection } from "./config-section";
 import { ModelPicker } from "./inspector/model-picker";
 import {
   buildModelChangeUpdate,
@@ -38,15 +38,7 @@ import { RuntimePicker } from "./inspector/runtime-picker";
 import { ThinkingSettingField } from "./inspector/thinking-prop-row";
 import { ServiceTierSettingField } from "./inspector/service-tier-setting-field";
 
-interface InspectorProps {
-  agent: Agent;
-  runtime: AgentRuntime | null;
-  runtimes: AgentRuntime[];
-  members: MemberWithUser[];
-  currentUserId: string | null;
-  canEdit: boolean;
-  onUpdate: (id: string, data: Record<string, unknown>) => Promise<void>;
-}
+type UpdateAgent = (id: string, data: Record<string, unknown>) => Promise<void>;
 
 interface ProfileDraft {
   name: string;
@@ -58,19 +50,22 @@ function profileDraftsEqual(left: ProfileDraft, right: ProfileDraft) {
 }
 
 /**
- * Full-width General settings form. Every editable value is presented as an
- * explicit field; compact inspector chips are used only through their
- * settings-field variants, where the whole control is a visible click target.
+ * Name, description and avatar. These autosave as the user types, so the
+ * section heading carries the save state rather than the page save bar.
  */
-export function AgentDetailInspector({
+export function AgentProfileSettings({
   agent,
-  runtime,
-  runtimes,
-  members,
-  currentUserId,
   canEdit,
   onUpdate,
-}: InspectorProps) {
+  anchor,
+  title,
+}: {
+  agent: Agent;
+  canEdit: boolean;
+  onUpdate: UpdateAgent;
+  anchor: string;
+  title: string;
+}) {
   const { t } = useT("agents");
   const { t: ts } = useT("settings");
   const update = useCallback(
@@ -117,11 +112,124 @@ export function AgentDetailInspector({
     isEqual: profileDraftsEqual,
   });
 
+  const nameInvalid = name.trim().length === 0;
+
+  return (
+    <ConfigSection
+      anchor={anchor}
+      title={title}
+      action={
+        <SettingsSaveState
+          status={profileAutoSave.status}
+          savingLabel={ts(($) => $.auto_save.saving)}
+          savedLabel={ts(($) => $.auto_save.saved)}
+          errorLabel={ts(($) => $.auto_save.failed)}
+        />
+      }
+    >
+      <SettingsCard>
+        <SettingsRow
+          label={t(($) => $.inspector.avatar_label)}
+          size="none"
+        >
+          <div className="flex justify-start sm:justify-end">
+            <AvatarUploadControl
+              variant="agent"
+              value={agent.avatar_url ?? null}
+              name={agent.name}
+              size={56}
+              disabled={!canEdit}
+              onUploaded={(url) => update({ avatar_url: url })}
+              onEmojiSelected={(value) => update({ avatar_url: value })}
+            />
+          </div>
+        </SettingsRow>
+
+        <SettingsRow
+          label={t(($) => $.inspector.name_label)}
+          size="text"
+        >
+          <div>
+            <Input
+              type="text"
+              name="agent-name"
+              autoComplete="off"
+              aria-label={t(($) => $.inspector.name_label)}
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              onBlur={profileAutoSave.flush}
+              disabled={!canEdit}
+              aria-invalid={nameInvalid || undefined}
+            />
+            {nameInvalid ? (
+              <p className="mt-1 text-caption text-destructive">
+                {t(($) => $.inspector.rename_required)}
+              </p>
+            ) : null}
+          </div>
+        </SettingsRow>
+
+        <SettingsRow
+          label={t(($) => $.inspector.description_label)}
+          size="text"
+          align="start"
+        >
+          <div>
+            <Textarea
+              name="agent-description"
+              autoComplete="off"
+              aria-label={t(($) => $.inspector.description_label)}
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              onBlur={profileAutoSave.flush}
+              disabled={!canEdit}
+              rows={5}
+              maxLength={AGENT_DESCRIPTION_MAX_LENGTH}
+              className="resize-y"
+              placeholder={t(($) => $.inspector.description_placeholder)}
+            />
+            <CharCounter
+              length={[...description].length}
+              max={AGENT_DESCRIPTION_MAX_LENGTH}
+            />
+          </div>
+        </SettingsRow>
+      </SettingsCard>
+    </ConfigSection>
+  );
+}
+
+/**
+ * Runtime, model, reasoning, speed and concurrency. Each picker commits on
+ * change, the same as before the page merged into one configuration view.
+ */
+export function AgentExecutionSettings({
+  agent,
+  runtime,
+  runtimes,
+  members,
+  currentUserId,
+  canEdit,
+  onUpdate,
+}: {
+  agent: Agent;
+  runtime: AgentRuntime | null;
+  runtimes: AgentRuntime[];
+  members: MemberWithUser[];
+  currentUserId: string | null;
+  canEdit: boolean;
+  onUpdate: UpdateAgent;
+}) {
+  const { t } = useT("agents");
+  const update = useCallback(
+    (data: Record<string, unknown>) => onUpdate(agent.id, data),
+    [agent.id, onUpdate],
+  );
+
   const isOnline = runtime?.status === "online";
   const canReadRuntime =
     runtime != null && isRuntimeUsableForUser(runtime, currentUserId);
   const canDiscoverRuntimeModels = isOnline && canReadRuntime;
-  const nameInvalid = name.trim().length === 0;
 
   // Same query the Thinking / Speed fields already use, so switching model
   // costs no extra request. `null` = not authoritative (offline runtime, still
@@ -153,166 +261,79 @@ export function AgentDetailInspector({
   );
 
   return (
-    <div className="space-y-8">
-      <SettingsSection
-        title={t(($) => $.inspector.section_profile)}
-        action={
-          <SettingsSaveState
-            status={profileAutoSave.status}
-            savingLabel={ts(($) => $.auto_save.saving)}
-            savedLabel={ts(($) => $.auto_save.saved)}
-            errorLabel={ts(($) => $.auto_save.failed)}
-          />
+    <SettingsCard>
+      <SettingsRow
+        label={t(($) => $.inspector.prop_runtime)}
+        size="select-wide"
+      >
+        <RuntimePicker
+          variant="field"
+          showLabel={false}
+          value={agent.runtime_id}
+          runtimes={runtimes}
+          members={members}
+          currentUserId={currentUserId}
+          canEdit={canEdit}
+          // Model, thinking level, and service tier are runtime/model
+          // native. Clear them together so the new runtime resolves its
+          // own defaults instead of inheriting incompatible tokens.
+          onChange={(id) =>
+            update({
+              runtime_id: id,
+              model: "",
+              thinking_level: "",
+              service_tier: "",
+            })
+          }
+        />
+      </SettingsRow>
+      <SettingsRow
+        label={t(($) => $.inspector.prop_model)}
+        size="select-wide"
+      >
+        <ModelPicker
+          variant="field"
+          showLabel={false}
+          runtimeId={agent.runtime_id}
+          runtimeOnline={canDiscoverRuntimeModels}
+          value={agent.model ?? ""}
+          canEdit={canEdit}
+          onChange={handleModelChange}
+        />
+      </SettingsRow>
+      <ThinkingSettingField
+        label={t(($) => $.inspector.prop_thinking)}
+        runtimeId={agent.runtime_id}
+        runtimeOnline={canDiscoverRuntimeModels}
+        provider={runtime?.provider ?? ""}
+        model={agent.model ?? ""}
+        value={agent.thinking_level ?? ""}
+        canEdit={canEdit}
+        onChange={(thinkingLevel) =>
+          update({ thinking_level: thinkingLevel })
         }
+      />
+      <ServiceTierSettingField
+        label={t(($) => $.inspector.prop_speed)}
+        runtimeId={agent.runtime_id}
+        runtimeOnline={canDiscoverRuntimeModels}
+        provider={runtime?.provider ?? ""}
+        model={agent.model ?? ""}
+        value={agent.service_tier ?? ""}
+        canEdit={canEdit}
+        onChange={(serviceTier) => update({ service_tier: serviceTier })}
+      />
+      <SettingsRow
+        label={t(($) => $.inspector.prop_concurrency)}
+        size="select-wide"
       >
-        <SettingsCard>
-          <SettingsRow
-            label={t(($) => $.inspector.avatar_label)}
-            size="none"
-          >
-            <div className="flex justify-start sm:justify-end">
-              <AvatarUploadControl
-                variant="agent"
-                value={agent.avatar_url ?? null}
-                name={agent.name}
-                size={56}
-                disabled={!canEdit}
-                onUploaded={(url) => update({ avatar_url: url })}
-                onEmojiSelected={(value) => update({ avatar_url: value })}
-              />
-            </div>
-          </SettingsRow>
-
-          <SettingsRow
-            label={t(($) => $.inspector.name_label)}
-            size="text"
-          >
-            <div>
-              <Input
-                type="text"
-                name="agent-name"
-                autoComplete="off"
-                aria-label={t(($) => $.inspector.name_label)}
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                onBlur={profileAutoSave.flush}
-                disabled={!canEdit}
-                aria-invalid={nameInvalid || undefined}
-              />
-              {nameInvalid ? (
-                <p className="mt-1 text-caption text-destructive">
-                  {t(($) => $.inspector.rename_required)}
-                </p>
-              ) : null}
-            </div>
-          </SettingsRow>
-
-          <SettingsRow
-            label={t(($) => $.inspector.description_label)}
-            size="text"
-            align="start"
-          >
-            <div>
-              <Textarea
-                name="agent-description"
-                autoComplete="off"
-                aria-label={t(($) => $.inspector.description_label)}
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-                onBlur={profileAutoSave.flush}
-                disabled={!canEdit}
-                rows={5}
-                maxLength={AGENT_DESCRIPTION_MAX_LENGTH}
-                className="resize-y"
-                placeholder={t(($) => $.inspector.description_placeholder)}
-              />
-              <CharCounter
-                length={[...description].length}
-                max={AGENT_DESCRIPTION_MAX_LENGTH}
-              />
-            </div>
-          </SettingsRow>
-        </SettingsCard>
-      </SettingsSection>
-
-      <SettingsSection
-        title={t(($) => $.inspector.section_execution)}
-      >
-        <SettingsCard>
-          <SettingsRow
-            label={t(($) => $.inspector.prop_runtime)}
-            size="select-wide"
-          >
-            <RuntimePicker
-              variant="field"
-              showLabel={false}
-              value={agent.runtime_id}
-              runtimes={runtimes}
-              members={members}
-              currentUserId={currentUserId}
-              canEdit={canEdit}
-              // Model, thinking level, and service tier are runtime/model
-              // native. Clear them together so the new runtime resolves its
-              // own defaults instead of inheriting incompatible tokens.
-              onChange={(id) =>
-                update({
-                  runtime_id: id,
-                  model: "",
-                  thinking_level: "",
-                  service_tier: "",
-                })
-              }
-            />
-          </SettingsRow>
-          <SettingsRow
-            label={t(($) => $.inspector.prop_model)}
-            size="select-wide"
-          >
-            <ModelPicker
-              variant="field"
-              showLabel={false}
-              runtimeId={agent.runtime_id}
-              runtimeOnline={canDiscoverRuntimeModels}
-              value={agent.model ?? ""}
-              canEdit={canEdit}
-              onChange={handleModelChange}
-            />
-          </SettingsRow>
-          <ThinkingSettingField
-            label={t(($) => $.inspector.prop_thinking)}
-            runtimeId={agent.runtime_id}
-            runtimeOnline={canDiscoverRuntimeModels}
-            provider={runtime?.provider ?? ""}
-            model={agent.model ?? ""}
-            value={agent.thinking_level ?? ""}
-            canEdit={canEdit}
-            onChange={(thinkingLevel) =>
-              update({ thinking_level: thinkingLevel })
-            }
-          />
-          <ServiceTierSettingField
-            label={t(($) => $.inspector.prop_speed)}
-            runtimeId={agent.runtime_id}
-            runtimeOnline={canDiscoverRuntimeModels}
-            provider={runtime?.provider ?? ""}
-            model={agent.model ?? ""}
-            value={agent.service_tier ?? ""}
-            canEdit={canEdit}
-            onChange={(serviceTier) => update({ service_tier: serviceTier })}
-          />
-          <SettingsRow
-            label={t(($) => $.inspector.prop_concurrency)}
-            size="select-wide"
-          >
-            <ConcurrencyField
-              value={agent.max_concurrent_tasks}
-              canEdit={canEdit}
-              onSave={(next) => update({ max_concurrent_tasks: next })}
-            />
-          </SettingsRow>
-        </SettingsCard>
-      </SettingsSection>
-    </div>
+        <ConcurrencyField
+          value={agent.max_concurrent_tasks}
+          canEdit={canEdit}
+          onSave={(next) => update({ max_concurrent_tasks: next })}
+        />
+      </SettingsRow>
+    </SettingsCard>
   );
 }
 

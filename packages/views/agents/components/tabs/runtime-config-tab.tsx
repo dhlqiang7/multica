@@ -17,6 +17,7 @@ import { Label } from "@multica/ui/components/ui/label";
 import { Switch } from "@multica/ui/components/ui/switch";
 import { toast } from "sonner";
 import { useT } from "../../../i18n";
+import { useConfigDraft, type ConfigDraftSlot } from "../config-drafts";
 
 // Form state mirrors OpenclawRuntimeConfig, but always carries a defined
 // mode value so the radio group is fully controlled. Empty-string mode
@@ -79,11 +80,12 @@ function formToConfig(state: FormState): OpenclawRuntimeConfig {
 export function RuntimeConfigTab({
   agent,
   onSave,
-  onDirtyChange,
+  draftSlot,
 }: {
   agent: Agent;
   onSave: (updates: { runtime_config: Record<string, unknown> }) => Promise<void>;
-  onDirtyChange?: (dirty: boolean) => void;
+  /** Hands saving to the configuration page's shared save bar. */
+  draftSlot?: ConfigDraftSlot;
 }) {
   const { t } = useT("agents");
 
@@ -110,10 +112,6 @@ export function RuntimeConfigTab({
   const currentCfg = useMemo(() => formToConfig(state), [state]);
   const dirty = !openclawRuntimeConfigEquals(original, currentCfg);
 
-  useEffect(() => {
-    onDirtyChange?.(dirty);
-  }, [dirty, onDirtyChange]);
-
   const portValid = state.port === "" || /^\d+$/.test(state.port);
   const canSave = portValid && !saving;
 
@@ -135,6 +133,13 @@ export function RuntimeConfigTab({
       setSaving(false);
     }
   };
+
+  const managed = useConfigDraft(draftSlot, {
+    dirty,
+    valid: portValid,
+    save: handleSave,
+    discard: () => setState(originalForm),
+  });
 
   const isGateway = state.mode === "gateway";
 
@@ -273,21 +278,23 @@ export function RuntimeConfigTab({
         </div>
       </fieldset>
 
-      <div className="flex items-center justify-end gap-3 pt-2">
-        {dirty && (
-          <span className="text-caption text-muted-foreground">
-            {t(($) => $.tab_body.common.unsaved_changes)}
-          </span>
-        )}
-        <Button onClick={handleSave} disabled={!dirty || !canSave} size="sm">
-          {saving ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Save className="h-3.5 w-3.5" />
+      {managed ? null : (
+        <div className="flex items-center justify-end gap-3 pt-2">
+          {dirty && (
+            <span className="text-caption text-muted-foreground">
+              {t(($) => $.tab_body.common.unsaved_changes)}
+            </span>
           )}
-          {t(($) => $.tab_body.common.save)}
-        </Button>
-      </div>
+          <Button onClick={handleSave} disabled={!dirty || !canSave} size="sm">
+            {saving ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Save className="h-3.5 w-3.5" />
+            )}
+            {t(($) => $.tab_body.common.save)}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

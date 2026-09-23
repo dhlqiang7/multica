@@ -165,8 +165,7 @@
     "dm_no_permission_toast": "Vous n'avez pas accès à la discussion avec cet agent.",
     "runtime_required_toast": "Associez un runtime avant d'exécuter cet agent.",
     "assign_work": "Assigner du travail",
-    "more_actions_aria": "Actions de l'agent",
-    "updated": "Mis à jour {{when}}"
+    "more_actions_aria": "Actions de l'agent"
   },
   "inspector": {
     "section_profile": "Profil",
@@ -186,7 +185,6 @@
     "prop_owner": "Propriétaire",
     "prop_created": "Création",
     "prop_updated": "Mise à jour",
-    "no_description_placeholder": "Aucune description",
     "avatar_label": "Avatar",
     "name_label": "Nom",
     "description_label": "Description",
@@ -202,8 +200,6 @@
     "cancel": "Annuler"
   },
   "overview": {
-    "agent_context": "Agent",
-    "access": "Accès",
     "attention_title": "Des exécutions demandent votre attention",
     "attention_queued_one": "{{count}} exécution est en attente car le runtime est indisponible.",
     "attention_queued_other": "{{count}} exécutions sont en attente car le runtime est indisponible."
@@ -261,15 +257,12 @@
     "clear_full": "Effacer la sélection (utiliser la valeur par défaut du fournisseur)"
   },
   "tabs": {
-    "overview": "Vue d'ensemble",
-    "work": "Travail",
-    "capabilities": "Capacités",
-    "settings": "Paramètres",
-    "general": "Général",
     "access": "Accès",
     "page_navigation_aria": "Page de l'agent",
     "section_navigation_aria": "Section de l'agent",
     "activity": "Activité",
+    "issues": "Tâches",
+    "configuration": "Configuration",
     "tasks": "Exécutions",
     "instructions": "Instructions",
     "skills": "Skills",
@@ -283,6 +276,20 @@
     "discard_dialog_description": "Cet onglet contient des modifications non enregistrées. Les quitter maintenant les abandonnera.",
     "discard_keep": "Continuer à modifier",
     "discard_confirm": "Abandonner les modifications"
+  },
+  "config": {
+    "tools": "Outils",
+    "advanced": "Avancé",
+    "save_bar_aria": "Modifications non enregistrées",
+    "unsaved_count_one": "{{count}} modification non enregistrée",
+    "unsaved_count_other": "{{count}} modifications non enregistrées",
+    "fix_before_saving": "À corriger avant d'enregistrer : {{sections}}",
+    "discard": "Abandonner",
+    "list_separator": ", "
+  },
+  "callout": {
+    "view_runtime": "Voir le runtime",
+    "switch_runtime": "Changer de runtime"
   },
   "creation_studio": {
     "title": "Créer un agent",
@@ -777,7 +784,6 @@
     }
   },
   "access": {
-    "section_title": "Qui peut exécuter cet agent",
     "tooltip": "Accès · qui peut exécuter cet agent",
     "trigger_private": "Moi uniquement",
     "trigger_workspace": "Espace de travail",

@@ -14,6 +14,7 @@ import { Button } from "@multica/ui/components/ui/button";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import { ActorAvatar } from "../../../common/actor-avatar";
 import { useT } from "../../../i18n";
+import { useConfigDraft, type ConfigDraftSlot } from "../config-drafts";
 
 export type AccessChange = {
   permission_mode: AgentPermissionMode;
@@ -51,6 +52,7 @@ export function AccessPicker({
   onReadyChange,
   onChange,
   hideFooter = false,
+  draftSlot,
 }: {
   permissionMode: AgentPermissionMode;
   invocationTargets: AgentInvocationTarget[] | undefined;
@@ -69,6 +71,8 @@ export function AccessPicker({
   /** When true, suppress the bottom Save footer — the parent dialog owns
    *  the apply trigger (e.g. the bulk "Set access scope" dialog). */
   hideFooter?: boolean;
+  /** Hands saving to the configuration page's shared save bar. */
+  draftSlot?: ConfigDraftSlot;
 }) {
   const { t } = useT("agents");
   const { t: tc } = useT("common");
@@ -202,6 +206,16 @@ export function AccessPicker({
     }
   };
 
+  const managed = useConfigDraft(canEdit ? draftSlot : undefined, {
+    dirty,
+    valid: draftChange !== null,
+    save,
+    discard: () => {
+      setDraftScope(persistedScope);
+      setDraftMembers(persistedMembers);
+    },
+  });
+
   if (!canEdit) {
     const summaryLabel = persistedPrivate
       ? t(($) => $.access.trigger_private)
@@ -325,7 +339,7 @@ export function AccessPicker({
         </div>
       ) : null}
 
-      {hideFooter ? null : (
+      {hideFooter || managed ? null : (
         <div className="flex justify-end border-t border-surface-border px-4 py-3.5">
           <Button
             type="button"

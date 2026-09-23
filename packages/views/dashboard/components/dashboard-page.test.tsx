@@ -496,10 +496,10 @@ describe("DashboardPage — failure visibility", () => {
 
     const byAgent = within(screen.getByRole("list", { name: "Top offenders" }));
     const link = byAgent.getByRole("link", { name: /Agent One/ });
-    // Overview, NOT ?view=work: Work lists the issues assigned to the agent,
-    // while its recent runs (and each failure's reason) live in the Overview
-    // pane's ActivityTab.
-    expect(link).toHaveAttribute("href", "/acme/agents/agent-1?view=overview");
+    // Activity, NOT ?view=issues: Issues lists the work assigned to the
+    // agent, while its recent runs (and each failure's reason) live in the
+    // Activity view.
+    expect(link).toHaveAttribute("href", "/acme/agents/agent-1?view=activity");
     // One labelled column per number instead of the old unlabelled
     // `4 / 10 · 40%` blob.
     const row = byAgent.getAllByRole("listitem")[0] as HTMLElement;

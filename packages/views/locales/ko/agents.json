@@ -156,8 +156,7 @@
     "dm_no_permission_toast": "이 에이전트와 채팅할 권한이 없습니다.",
     "runtime_required_toast": "이 에이전트를 실행하기 전에 런타임을 연결하세요.",
     "assign_work": "작업 할당",
-    "more_actions_aria": "에이전트 작업",
-    "updated": "{{when}} 업데이트됨"
+    "more_actions_aria": "에이전트 작업"
   },
   "inspector": {
     "section_profile": "프로필",
@@ -177,7 +176,6 @@
     "prop_owner": "소유자",
     "prop_created": "생성일",
     "prop_updated": "수정일",
-    "no_description_placeholder": "설명 없음",
     "avatar_label": "아바타",
     "name_label": "이름",
     "description_label": "설명",
@@ -193,8 +191,6 @@
     "cancel": "취소"
   },
   "overview": {
-    "agent_context": "에이전트",
-    "access": "접근 권한",
     "attention_title": "확인이 필요한 실행",
     "attention_queued_other": "런타임을 사용할 수 없어 {{count}}개의 실행이 대기 중입니다."
   },
@@ -251,15 +247,12 @@
     "clear_full": "선택 지우기(제공자 기본값 사용)"
   },
   "tabs": {
-    "overview": "개요",
-    "work": "작업",
-    "capabilities": "기능",
-    "settings": "설정",
-    "general": "일반",
     "access": "접근 권한",
     "page_navigation_aria": "에이전트 페이지",
     "section_navigation_aria": "에이전트 섹션",
     "activity": "활동",
+    "issues": "태스크",
+    "configuration": "구성",
     "tasks": "실행",
     "instructions": "지침",
     "skills": "스킬",
@@ -273,6 +266,19 @@
     "discard_dialog_description": "이 탭에 저장하지 않은 변경사항이 있습니다. 지금 나가면 변경사항이 사라집니다.",
     "discard_keep": "계속 편집",
     "discard_confirm": "변경사항 버리기"
+  },
+  "config": {
+    "tools": "도구",
+    "advanced": "고급",
+    "save_bar_aria": "저장하지 않은 변경사항",
+    "unsaved_count_other": "저장하지 않은 변경사항 {{count}}개",
+    "fix_before_saving": "저장하기 전에 수정하세요: {{sections}}",
+    "discard": "버리기",
+    "list_separator": ", "
+  },
+  "callout": {
+    "view_runtime": "런타임 보기",
+    "switch_runtime": "런타임 전환"
   },
   "create_dialog": {
     "title_create": "에이전트 만들기",
@@ -668,7 +674,6 @@
     }
   },
   "access": {
-    "section_title": "이 에이전트를 실행할 수 있는 사용자",
     "tooltip": "접근 권한 · 누가 이 에이전트를 실행할 수 있는지",
     "trigger_private": "나만",
     "trigger_workspace": "워크스페이스",

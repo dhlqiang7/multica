@@ -209,7 +209,7 @@ export function AgentPerformanceSummary({ agent }: { agent: Agent }) {
   );
 
   return (
-    <section className="mt-5 border-t pt-5">
+    <section>
       <h2 className="text-body font-medium">
         {t(($) => $.tab_body.activity.section_last_30d)}
       </h2>

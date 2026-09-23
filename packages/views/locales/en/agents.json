@@ -165,8 +165,7 @@
     "dm_no_permission_toast": "You don't have access to chat with this agent.",
     "runtime_required_toast": "Bind a runtime before running this agent.",
     "assign_work": "Assign work",
-    "more_actions_aria": "Agent actions",
-    "updated": "Updated {{when}}"
+    "more_actions_aria": "Agent actions"
   },
   "inspector": {
     "section_profile": "Profile",
@@ -186,7 +185,6 @@
     "prop_owner": "Owner",
     "prop_created": "Created",
     "prop_updated": "Updated",
-    "no_description_placeholder": "No description",
     "avatar_label": "Avatar",
     "name_label": "Name",
     "description_label": "Description",
@@ -202,8 +200,6 @@
     "cancel": "Cancel"
   },
   "overview": {
-    "agent_context": "Agent",
-    "access": "Access",
     "attention_title": "Runs need attention",
     "attention_queued_one": "{{count}} run is queued while the runtime is unavailable.",
     "attention_queued_other": "{{count}} runs are queued while the runtime is unavailable."
@@ -261,15 +257,12 @@
     "clear_full": "Clear selection (use provider default)"
   },
   "tabs": {
-    "overview": "Overview",
-    "work": "Work",
-    "capabilities": "Capabilities",
-    "settings": "Settings",
-    "general": "General",
     "access": "Access",
     "page_navigation_aria": "Agent page",
     "section_navigation_aria": "Agent section",
     "activity": "Activity",
+    "issues": "Issues",
+    "configuration": "Configuration",
     "tasks": "Runs",
     "instructions": "Instructions",
     "skills": "Skills",
@@ -283,6 +276,20 @@
     "discard_dialog_description": "You have unsaved changes in this tab. Leaving now will discard them.",
     "discard_keep": "Keep editing",
     "discard_confirm": "Discard changes"
+  },
+  "config": {
+    "tools": "Tools",
+    "advanced": "Advanced",
+    "save_bar_aria": "Unsaved changes",
+    "unsaved_count_one": "{{count}} unsaved change",
+    "unsaved_count_other": "{{count}} unsaved changes",
+    "fix_before_saving": "Fix before saving: {{sections}}",
+    "discard": "Discard",
+    "list_separator": ", "
+  },
+  "callout": {
+    "view_runtime": "View runtime",
+    "switch_runtime": "Switch runtime"
   },
   "creation_studio": {
     "title": "Create an agent",
@@ -777,7 +784,6 @@
     }
   },
   "access": {
-    "section_title": "Who can run this agent",
     "tooltip": "Access · who may run this agent",
     "trigger_private": "Only me",
     "trigger_workspace": "Workspace",

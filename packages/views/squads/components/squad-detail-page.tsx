@@ -933,7 +933,7 @@ function SquadDescriptionEditorBody({
 
 // ---------------------------------------------------------------------------
 // SquadOverviewPane — right column with two tabs (Members | Instructions).
-// Mirrors AgentOverviewPane: dirty-guard via AlertDialog when switching tabs
+// Dirty-guard via AlertDialog when switching tabs
 // with unsaved Instructions.
 // ---------------------------------------------------------------------------
 type SquadDetailTab = "members" | "instructions";

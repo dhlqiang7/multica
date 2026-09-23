@@ -156,8 +156,7 @@
     "dm_no_permission_toast": "你没有权限与该智能体聊天。",
     "runtime_required_toast": "请先绑定运行时，再运行该智能体。",
     "assign_work": "分配工作",
-    "more_actions_aria": "智能体操作",
-    "updated": "{{when}}更新"
+    "more_actions_aria": "智能体操作"
   },
   "inspector": {
     "section_profile": "资料",
@@ -177,7 +176,6 @@
     "prop_owner": "所有者",
     "prop_created": "创建时间",
     "prop_updated": "更新时间",
-    "no_description_placeholder": "暂无描述",
     "avatar_label": "头像",
     "name_label": "名称",
     "description_label": "描述",
@@ -193,8 +191,6 @@
     "cancel": "取消"
   },
   "overview": {
-    "agent_context": "智能体",
-    "access": "访问权限",
     "attention_title": "需要处理的运行",
     "attention_queued_other": "运行时不可用，当前有 {{count}} 次运行正在排队。"
   },
@@ -251,15 +247,12 @@
     "clear_full": "清除选择（使用提供方默认）"
   },
   "tabs": {
-    "overview": "概览",
-    "work": "工作",
-    "capabilities": "能力",
-    "settings": "设置",
-    "general": "通用",
     "access": "访问权限",
     "page_navigation_aria": "智能体页面",
     "section_navigation_aria": "智能体分区",
     "activity": "动态",
+    "issues": "任务",
+    "configuration": "配置",
     "tasks": "运行",
     "instructions": "指令",
     "skills": "Skills",
@@ -273,6 +266,19 @@
     "discard_dialog_description": "当前 tab 有未保存的修改，离开会丢弃这些修改。",
     "discard_keep": "继续编辑",
     "discard_confirm": "放弃修改"
+  },
+  "config": {
+    "tools": "工具",
+    "advanced": "高级",
+    "save_bar_aria": "未保存的修改",
+    "unsaved_count_other": "{{count}} 处未保存的修改",
+    "fix_before_saving": "请先修正：{{sections}}",
+    "discard": "放弃",
+    "list_separator": "、"
+  },
+  "callout": {
+    "view_runtime": "查看运行时",
+    "switch_runtime": "切换运行时"
   },
   "creation_studio": {
     "title": "创建智能体",
@@ -762,7 +768,6 @@
     }
   },
   "access": {
-    "section_title": "谁可以运行该智能体",
     "tooltip": "访问权限 · 谁可以运行该智能体",
     "trigger_private": "仅自己",
     "trigger_workspace": "工作区",

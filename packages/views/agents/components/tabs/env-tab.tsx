@@ -20,6 +20,7 @@ import { Input } from "@multica/ui/components/ui/input";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { toast } from "sonner";
 import { useT } from "../../../i18n";
+import { useConfigDraft, type ConfigDraftSlot } from "../config-drafts";
 import type { EnvParseError } from "./env-file";
 import {
   formatEnvFile,
@@ -81,6 +82,7 @@ export function EnvTab({
   agent,
   onDirtyChange,
   onSaved,
+  draftSlot,
 }: {
   agent: Agent;
   onDirtyChange?: (dirty: boolean) => void;
@@ -89,6 +91,8 @@ export function EnvTab({
   // the page reads (name, has_custom_env, etc.). Optional so call
   // sites without invalidation logic stay simple.
   onSaved?: () => void;
+  /** Hands saving to the configuration page's shared save bar. */
+  draftSlot?: ConfigDraftSlot;
 }) {
   const { t } = useT("agents");
 
@@ -319,6 +323,16 @@ export function EnvTab({
     }
   };
 
+  const managed = useConfigDraft(draftSlot, {
+    dirty: hasUnsavedWork,
+    valid: bulkError === null,
+    save: handleSave,
+    discard: () => {
+      setRevealed(envMapToEntries(originalMap));
+      leaveBulkEditing();
+    },
+  });
+
   // Pre-reveal state: show count + Reveal button. We never auto-fetch
   // on mount so a member just navigating between tabs doesn't trigger
   // an audit-log entry; the reveal must be intentional.
@@ -489,25 +503,27 @@ export function EnvTab({
         </p>
       )}
 
-      <div className="flex items-center justify-end gap-3">
-        {hasUnsavedWork && (
-          <span className="text-caption text-muted-foreground">
-            {t(($) => $.tab_body.common.unsaved_changes)}
-          </span>
-        )}
-        <Button
-          onClick={handleSave}
-          disabled={!dirty || saving || bulkError !== null}
-          size="sm"
-        >
-          {saving ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Save className="h-3.5 w-3.5" />
+      {managed ? null : (
+        <div className="flex items-center justify-end gap-3">
+          {hasUnsavedWork && (
+            <span className="text-caption text-muted-foreground">
+              {t(($) => $.tab_body.common.unsaved_changes)}
+            </span>
           )}
-          {t(($) => $.tab_body.common.save)}
-        </Button>
-      </div>
+          <Button
+            onClick={handleSave}
+            disabled={!dirty || saving || bulkError !== null}
+            size="sm"
+          >
+            {saving ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Save className="h-3.5 w-3.5" />
+            )}
+            {t(($) => $.tab_body.common.save)}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
