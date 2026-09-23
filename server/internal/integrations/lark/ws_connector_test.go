@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -485,12 +486,13 @@ func TestWSConnectorDecoderErrorAcksAndContinues(t *testing.T) {
 	<-done
 }
 
-// TestWSConnectorLogsDroppedEventType covers #8496: a connection that is up
-// but only receiving event types we do not handle looked exactly like a
-// healthy one, because the drop path wrote neither a log line nor a DB row.
-// The event type is logged so "connected but deaf" is visible. Heartbeats
-// carry no event type and stay silent, so the log does not fill with noise.
-func TestWSConnectorLogsDroppedEventType(t *testing.T) {
+// TestWSConnectorLogsDroppedEventTypeOncePerType covers #8496: an app can
+// subscribe to event types we do not handle, and that path writes neither a
+// log line nor a DB row, so the socket leaves no trace of what it receives.
+// The type is named once per connection — a busy chat delivers reactions and
+// membership churn continuously, and one line per frame would be unbounded.
+// Heartbeats carry no event type and stay silent.
+func TestWSConnectorLogsDroppedEventTypeOncePerType(t *testing.T) {
 	t.Parallel()
 	conn := newFakeWSConn()
 	logs := &syncBuffer{}
@@ -508,17 +510,26 @@ func TestWSConnectorLogsDroppedEventType(t *testing.T) {
 		})
 	}()
 
-	pushDataFrame(conn, []byte(`{"schema":"2.0","header":{"event_type":"im.chat.access_event_v1","event_id":"e1"}}`), "m1")
+	reaction := `{"schema":"2.0","header":{"event_type":"im.message.reaction.created_v1","event_id":"e%d"}}`
+	pushDataFrame(conn, []byte(fmt.Sprintf(reaction, 1)), "m1")
 	waitForWrites(t, conn, 1)
-	if got := logs.String(); !strings.Contains(got, "im.chat.access_event_v1") {
+	if got := logs.String(); !strings.Contains(got, "im.message.reaction.created_v1") {
 		t.Fatalf("dropped event type not logged; log was:\n%s", got)
 	}
 
-	// A heartbeat-shaped frame carries no event type: ACKed, not logged.
-	pushDataFrame(conn, []byte(`{}`), "m2")
-	waitForWrites(t, conn, 2)
-	if got := strings.Count(logs.String(), "dropped unhandled event"); got != 1 {
-		t.Errorf("dropped-event log lines = %d, want 1 (heartbeats must stay silent); log was:\n%s", got, logs.String())
+	// Same type again, plus a heartbeat: both ACKed, neither logged.
+	pushDataFrame(conn, []byte(fmt.Sprintf(reaction, 2)), "m2")
+	pushDataFrame(conn, []byte(`{}`), "m3")
+	waitForWrites(t, conn, 3)
+	if got := strings.Count(logs.String(), "dropping unhandled event type"); got != 1 {
+		t.Errorf("log lines after a repeat + a heartbeat = %d, want 1; log was:\n%s", got, logs.String())
+	}
+
+	// A type we have not reported yet is worth one line of its own.
+	pushDataFrame(conn, []byte(`{"schema":"2.0","header":{"event_type":"im.chat.access_event_v1","event_id":"e4"}}`), "m4")
+	waitForWrites(t, conn, 4)
+	if got := strings.Count(logs.String(), "dropping unhandled event type"); got != 2 {
+		t.Errorf("log lines after a second event type = %d, want 2; log was:\n%s", got, logs.String())
 	}
 
 	cancel()

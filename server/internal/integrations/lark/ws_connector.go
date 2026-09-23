@@ -254,6 +254,13 @@ func (c *WSLongConnConnector) Run(ctx context.Context, inst Installation, emit E
 	// an abandoned event.
 	assembler := newChunkAssembler(c.cfg.ChunkTTL, c.cfg.Now)
 
+	// Event types this session has already reported dropping. An app can
+	// subscribe to events we do not handle (reactions, membership churn)
+	// and a busy chat delivers them continuously, so the log reports each
+	// type once per connection rather than once per frame. Read-loop-local:
+	// no lock, and a reconnect re-reports.
+	reportedDrops := make(map[string]struct{})
+
 	// Ping loop: app-layer binary ping frames at the server's PingInterval.
 	pingDone := make(chan struct{})
 	go c.pingLoop(runCtx, conn, &writeMu, endpoint.ServiceID, pingInterval, log, pingDone)
@@ -375,13 +382,19 @@ func (c *WSLongConnConnector) Run(ctx context.Context, inst Installation, emit E
 			// stops sending it; the decoder owns the "what we handle"
 			// policy.
 			//
-			// Report the event type when the payload carries one
-			// (#8496): a socket that is up but only ever receives
-			// events we decline is indistinguishable from a healthy
-			// one otherwise, since this path writes no audit row.
-			// Heartbeats peek as "" and stay silent.
+			// Name the event type once per connection (#8496). This
+			// path writes no audit row either, so an app delivering
+			// only event types we decline otherwise leaves no trace
+			// at all. It says what IS arriving, not that anything is
+			// missing: an app whose events go to a request URL
+			// instead of this socket produces no frames, so it
+			// produces no line here. Heartbeats peek as "" and stay
+			// silent.
 			if eventType := PeekEventType(payload); eventType != "" {
-				log.Info("lark ws connector: dropped unhandled event", "event_type", eventType)
+				if _, reported := reportedDrops[eventType]; !reported {
+					reportedDrops[eventType] = struct{}{}
+					log.Info("lark ws connector: dropping unhandled event type", "event_type", eventType)
+				}
 			}
 			if werr := c.writeFrame(&writeMu, conn, NewAckFrame(frame, true)); werr != nil {
 				log.Warn("lark ws connector: ack-after-drop write failed", "err", werr.Error())
