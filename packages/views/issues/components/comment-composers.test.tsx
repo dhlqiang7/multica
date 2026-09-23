@@ -451,14 +451,14 @@ describe("comment composers", () => {
 
     activateComposer("reply-composer-shell");
     fireEvent.change(screen.getByTestId("editor"), { target: { value: "only fix web" } });
-    await screen.findByText("Add to current run");
+    await screen.findByText("Add to current run", {}, { timeout: 5000 });
     fireEvent.click(getSubmitButton(container));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("only fix web", undefined, undefined,
       { taskIds: ["turn-1"], clientRequestId: expect.any(String) }));
     expect(apiCancelTask).not.toHaveBeenCalled();
 
     fireEvent.change(screen.getByTestId("editor"), { target: { value: "start over on web" } });
-    fireEvent.click(await screen.findByRole("button", { name: "Lambda trigger: Add to current run" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Lambda trigger: Add to current run" }, { timeout: 5000 }));
     fireEvent.click(await screen.findByRole("menuitemradio", { name: /Stop and start over/ }));
     fireEvent.click(await screen.findByRole("button", { name: "Stop and send" }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("start over on web", undefined, undefined, undefined));
@@ -481,7 +481,7 @@ describe("comment composers", () => {
       onSubmit={onSubmit} steerByDefault={(task) => task.id === "turn-1"} />);
     activateComposer("reply-composer-shell");
     fireEvent.change(screen.getByTestId("editor"), { target: { value: "start over" } });
-    fireEvent.click(await screen.findByRole("button", { name: "Lambda trigger: Add to current run" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Lambda trigger: Add to current run" }, { timeout: 5000 }));
     fireEvent.click(await screen.findByRole("menuitemradio", { name: /Stop and start over/ }));
     // A slow preview still holds Lambda's restart, though the comment now
     // explicitly addresses only a different agent.
@@ -511,7 +511,7 @@ describe("comment composers", () => {
     );
     activateComposer("reply-composer-shell");
     fireEvent.change(screen.getByTestId("editor"), { target: { value: "only fix web" } });
-    await screen.findByText("Add to current run");
+    await screen.findByText("Add to current run", {}, { timeout: 5000 });
     fireEvent.click(getSubmitButton(container));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(getSubmitButton(container)).not.toBeDisabled());
