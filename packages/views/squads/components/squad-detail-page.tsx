@@ -13,9 +13,25 @@ import { useTimeAgo } from "../../i18n";
 import { agentListOptions, memberListOptions, squadMemberStatusOptions, workspaceKeys } from "@multica/core/workspace/queries";
 import { useNavigation } from "../../navigation";
 import { AppLink } from "../../navigation";
-import { BreadcrumbHeader } from "../../layout/breadcrumb-header";
-import { PageHeader } from "../../layout/page-header";
-import { Users, Plus, Trash2, ArrowUpRight, Crown, Loader2, Pencil, FileText, Save } from "lucide-react";
+import { PAGE_GUTTER, PAGE_RAIL } from "../../layout/page-header";
+import {
+  DETAIL_CARD,
+  DetailStatusPill,
+  DetailSubline,
+  DetailViewTabs,
+  EntityDetailHeader,
+} from "../../layout/detail-header";
+import { cn } from "@multica/ui/lib/utils";
+import { useWorkspacePresenceMap } from "@multica/core/agents";
+import { useModalStore } from "@multica/core/modals";
+import { SquadStatusLabel, squadStatusFromRoster } from "./squad-status";
+import { Users, Plus, Trash2, ArrowUpRight, Crown, Loader2, Pencil, Save, MoreHorizontal } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@multica/ui/components/ui/dropdown-menu";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
@@ -100,6 +116,11 @@ export function SquadDetailPage() {
 
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: wsMembers = [] } = useQuery(memberListOptions(wsId));
+  const { byAgent: presenceMap } = useWorkspacePresenceMap(wsId);
+  const agentsById = useMemo(
+    () => new Map(agents.map((agent: Agent) => [agent.id, agent])),
+    [agents],
+  );
 
   const currentUser = useAuthStore((s) => s.user);
   const myRole = useMemo(() => {
@@ -199,58 +220,138 @@ export function SquadDetailPage() {
     .toUpperCase()
     .slice(0, 2);
 
+  const status = memberStatusResp
+    ? squadStatusFromRoster(
+        squad.leader_id,
+        memberStatusResp.members,
+        agentsById,
+        presenceMap,
+      )
+    : null;
+
   return (
     <div className="flex flex-1 min-h-0 flex-col">
-      <BreadcrumbHeader
-        segments={[{ href: p.squads(), label: t(($) => $.page.title) }]}
-        leaf={
-          <>
-            <SquadHeaderAvatar squad={squad} initials={initials} />
-            <h1 className="truncate text-body font-medium text-foreground">{squad.name}</h1>
-          </>
+      <EntityDetailHeader
+        parent={{ href: p.squads(), label: t(($) => $.page.title) }}
+        crumb={squad.name}
+        media={
+          canManage ? (
+            <AvatarUploadControl
+              variant="squad"
+              value={squad.avatar_url ?? null}
+              name={squad.name}
+              size={56}
+              onUploaded={(url) => updateSquadMut.mutateAsync({ avatar_url: url })}
+            />
+          ) : (
+            <SquadStaticAvatar squad={squad} initials={initials} />
+          )
+        }
+        title={
+          canManage ? (
+            <SquadNameEditor
+              value={squad.name}
+              onSave={async (next) => {
+                await updateSquadMut.mutateAsync({ name: next.trim() });
+              }}
+            />
+          ) : (
+            squad.name
+          )
+        }
+        status={
+          status ? (
+            <DetailStatusPill>
+              <SquadStatusLabel detail={status} />
+            </DetailStatusPill>
+          ) : null
+        }
+        description={
+          canManage ? (
+            <div className="mt-1.5">
+              <SquadDescriptionEditor
+                value={squad.description ?? ""}
+                onSave={async (next) => {
+                  await updateSquadMut.mutateAsync({ description: next });
+                }}
+              />
+            </div>
+          ) : squad.description ? (
+            <DetailSubline>{squad.description}</DetailSubline>
+          ) : null
         }
         actions={
-          canManage ? (
-            <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setConfirmArchive(true)}>
-              <Trash2 className="size-3.5 mr-1" />
-              {t(($) => $.inspector.archive_button)}
+          <>
+            {canManage && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowAddMember(true)}
+              >
+                <UserPlus className="size-3.5" aria-hidden="true" />
+                {t(($) => $.members_tab.add_member_button)}
+              </Button>
+            )}
+            <Button
+              size="sm"
+              onClick={() =>
+                useModalStore
+                  .getState()
+                  .open("quick-create-issue", { squad_id: squad.id })
+              }
+            >
+              <Plus className="size-3.5" aria-hidden="true" />
+              {t(($) => $.detail.assign_work)}
             </Button>
-          ) : null
+            {canManage && (
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={<Button variant="ghost" size="icon-sm" />}
+                  aria-label={t(($) => $.detail.more_actions_aria)}
+                >
+                  <MoreHorizontal
+                    className="size-4 text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-auto">
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onClick={() => setConfirmArchive(true)}
+                  >
+                    <Trash2 className="size-3.5" aria-hidden="true" />
+                    {t(($) => $.inspector.archive_button)}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </>
         }
       />
 
-      {/* Two-column grid mirrors agent-detail-page: left inspector (identity +
-          properties + leader), right pane with tabs (Members | Instructions).
-          Mobile collapses to stacked single column. */}
-      <div className="flex flex-1 min-h-0 flex-col gap-3 overflow-y-auto p-3 md:grid md:grid-cols-[280px_minmax(0,1fr)] md:gap-4 md:overflow-hidden md:p-6 lg:grid-cols-[320px_minmax(0,1fr)]">
-        <SquadDetailInspector
-          squad={squad}
-          memberCount={members.length}
-          leaderName={getEntityName("agent", squad.leader_id)}
-          creatorName={getEntityName("member", squad.creator_id)}
-          canManage={canManage}
-          onUploadAvatar={(url) => updateSquadMut.mutateAsync({ avatar_url: url })}
-          onRename={async (next) => { await updateSquadMut.mutateAsync({ name: next.trim() }); }}
-          onUpdateDescription={async (next) => { await updateSquadMut.mutateAsync({ description: next }); }}
-        />
-
-        <SquadOverviewPane
-          squad={squad}
-          members={members}
-          memberStatusById={memberStatusById}
-          canManage={canManage}
-          isLeader={isLeader}
-          isArchived={isArchived}
-          getEntityName={getEntityName}
-          onAddMemberClick={() => setShowAddMember(true)}
-          createAgentHref={canManage ? `${p.newAgent()}?squad=${encodeURIComponent(squadId)}` : undefined}
-          onSetLeader={(id) => setLeaderMut.mutate(id)}
-          onRemoveMember={(m) => removeMemberMut.mutate(m)}
-          onUpdateRole={async (m, role) => { await updateRoleMut.mutateAsync({ member: m, role }); }}
-          onSaveInstructions={async (next) => { await updateSquadMut.mutateAsync({ instructions: next }); toast.success(t(($) => $.toasts.instructions_saved)); }}
-          setLeaderPending={setLeaderMut.isPending}
-        />
-      </div>
+      <SquadOverviewPane
+        squad={squad}
+        members={members}
+        memberStatusById={memberStatusById}
+        canManage={canManage}
+        isLeader={isLeader}
+        isArchived={isArchived}
+        getEntityName={getEntityName}
+        createAgentHref={canManage ? `${p.newAgent()}?squad=${encodeURIComponent(squadId)}` : undefined}
+        onSetLeader={(id) => setLeaderMut.mutate(id)}
+        onRemoveMember={(m) => removeMemberMut.mutate(m)}
+        onUpdateRole={async (m, role) => { await updateRoleMut.mutateAsync({ member: m, role }); }}
+        onSaveInstructions={async (next) => { await updateSquadMut.mutateAsync({ instructions: next }); toast.success(t(($) => $.toasts.instructions_saved)); }}
+        setLeaderPending={setLeaderMut.isPending}
+        rail={
+          <SquadDetailsCard
+            squad={squad}
+            memberCount={members.length}
+            leaderName={getEntityName("agent", squad.leader_id)}
+            creatorName={getEntityName("member", squad.creator_id)}
+          />
+        }
+      />
 
       {showAddMember && (
         <AddMemberDialog
@@ -294,55 +395,30 @@ export function SquadDetailPage() {
   );
 }
 
-// Initial-load skeleton — mirrors the two-column layout of the loaded page
-// (left inspector + right tabs panel) so the swap to real content doesn't
-// shift layout. Column widths match the md:/lg: breakpoints used below.
+// Initial-load skeleton — mirrors the loaded page (header, tabs, main
+// column + rail) so the swap to real content doesn't shift layout.
 function SquadDetailSkeleton() {
   return (
     <div className="flex flex-1 min-h-0 flex-col">
-      <PageHeader>
-        <Skeleton className="h-5 w-48" />
-      </PageHeader>
-      <div className="flex flex-1 min-h-0 flex-col gap-3 overflow-y-auto p-3 md:grid md:grid-cols-[280px_minmax(0,1fr)] md:gap-4 md:overflow-hidden md:p-6 lg:grid-cols-[320px_minmax(0,1fr)]">
-        <div className="flex flex-col gap-4 rounded-lg border p-5">
-          <Skeleton className="h-16 w-16 rounded-full" />
-          <Skeleton className="h-5 w-40" />
-          <Skeleton className="h-3 w-full" />
-          <div className="space-y-2">
-            <Skeleton className="h-3 w-3/4" />
-            <Skeleton className="h-3 w-2/3" />
-            <Skeleton className="h-3 w-1/2" />
+      <div className={cn(PAGE_RAIL, PAGE_GUTTER, "pb-4 pt-3")}>
+        <Skeleton className="h-3 w-32" />
+        <div className="mt-4 flex items-start gap-4">
+          <Skeleton className="size-14 rounded-full" />
+          <div className="flex-1 space-y-3">
+            <Skeleton className="h-7 w-56" />
+            <Skeleton className="h-4 w-full max-w-lg" />
           </div>
-        </div>
-        <div className="flex flex-col gap-4 rounded-lg border p-6">
-          <div className="flex items-center gap-4">
-            <Skeleton className="h-4 w-20" />
-            <Skeleton className="h-4 w-24" />
-          </div>
-          <Skeleton className="h-4 w-full" />
-          <Skeleton className="h-4 w-5/6" />
-          <Skeleton className="h-4 w-4/6" />
         </div>
       </div>
+      <div className={cn(PAGE_RAIL, PAGE_GUTTER, "grid gap-6 border-t py-6 xl:grid-cols-[minmax(0,1fr)_320px]")}>
+        <div className="space-y-2">
+          <Skeleton className="h-16 w-full" />
+          <Skeleton className="h-16 w-full" />
+          <Skeleton className="h-16 w-full" />
+        </div>
+        <Skeleton className="h-48 w-full" />
+      </div>
     </div>
-  );
-}
-
-// Compact 16px avatar shown next to the name in the page header. Falls back
-// to the Users icon when no custom avatar is set so the squad still has a
-// recognisable glyph in the breadcrumb strip.
-function SquadHeaderAvatar({ squad, initials }: { squad: Squad; initials: string }) {
-  if (!squad.avatar_url) {
-    return <Users className="h-4 w-4 text-muted-foreground" />;
-  }
-  return (
-    <ActorAvatarBase
-      name={squad.name}
-      initials={initials}
-      avatarUrl={resolvePublicFileUrl(squad.avatar_url)}
-      size="sm"
-      className="shrink-0"
-    />
   );
 }
 
@@ -351,7 +427,7 @@ function SquadHeaderAvatar({ squad, initials }: { squad: Squad; initials: string
 // affordance.
 function SquadStaticAvatar({ squad, initials }: { squad: Squad; initials: string }) {
   return (
-    <div className="h-16 w-16 shrink-0 overflow-hidden rounded-full bg-muted">
+    <div className="size-14 shrink-0 overflow-hidden rounded-full bg-muted">
       {squad.avatar_url ? (
         <ActorAvatarBase
           name={squad.name}
@@ -393,10 +469,10 @@ function SquadNameEditor({
         <button
           type="button"
           {...triggerProps}
-          className="group -mx-1 inline-flex items-center gap-1.5 self-start rounded-xs px-1 text-left text-title font-semibold leading-tight transition-colors hover:bg-accent/50"
+          className="group -mx-1 inline-flex items-center gap-1.5 self-start rounded-xs px-1 text-left transition-colors hover:bg-accent/50"
         >
           <span>{value}</span>
-          <Pencil className="h-3.5 w-3.5 shrink-0 text-transparent transition-colors group-hover:text-muted-foreground" />
+          <Pencil className="size-4 shrink-0 text-transparent transition-colors group-hover:text-muted-foreground" />
         </button>
       )}
     </InlineEditPopover>
@@ -708,112 +784,49 @@ function RoleEditor({ value, onSave }: { value: string; onSave: (next: string) =
   );
 }
 
-// ---------------------------------------------------------------------------
-// SquadDetailInspector — left 320px column, mirrors AgentDetailInspector.
-// Holds identity (avatar / name / description) + leader / member count /
-// timestamps. All inline-editable.
-// ---------------------------------------------------------------------------
-function SquadDetailInspector({
+// Rail card beside the members / instructions view: the squad's facts.
+function SquadDetailsCard({
   squad,
   memberCount,
   leaderName,
   creatorName,
-  canManage,
-  onUploadAvatar,
-  onRename,
-  onUpdateDescription,
 }: {
   squad: Squad;
   memberCount: number;
   leaderName: string;
   creatorName: string;
-  // When false the identity block renders as static text (no avatar upload,
-  // no rename/description popovers) — the viewer can read the squad but not
-  // edit it. Mirrors the agent inspector's `canEdit` read-only treatment.
-  canManage: boolean;
-  onUploadAvatar: (url: string) => Promise<unknown>;
-  onRename: (next: string) => Promise<void>;
-  onUpdateDescription: (next: string) => Promise<void>;
 }) {
   const { t } = useT("squads");
   const timeAgo = useTimeAgo();
-  const initials = squad.name
-    .split(" ")
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
-
   return (
-    <aside className="flex w-full flex-col rounded-lg border bg-background md:h-full md:min-h-0 md:overflow-y-auto">
-      {/* Identity */}
-      <div className="flex flex-col gap-3 border-b px-5 pb-5 pt-5">
-        {canManage ? (
-          <>
-            <AvatarUploadControl
-              variant="squad"
-              value={squad.avatar_url ?? null}
-              name={squad.name}
-              size={64}
-              onUploaded={onUploadAvatar}
-            />
-            <div className="flex flex-col gap-1">
-              <SquadNameEditor value={squad.name} onSave={onRename} />
-              <SquadDescriptionEditor
-                value={squad.description ?? ""}
-                onSave={onUpdateDescription}
-              />
-            </div>
-          </>
-        ) : (
-          <>
-            <SquadStaticAvatar squad={squad} initials={initials} />
-            <div className="flex flex-col gap-1">
-              <span className="text-title font-semibold leading-tight">{squad.name}</span>
-              {squad.description ? (
-                <span className="text-caption leading-relaxed text-muted-foreground">
-                  {squad.description}
-                </span>
-              ) : (
-                <span className="text-caption italic leading-relaxed text-muted-foreground">
-                  {t(($) => $.description_dialog.placeholder_empty)}
-                </span>
-              )}
-            </div>
-          </>
-        )}
+    <section className={DETAIL_CARD}>
+      <h2 className="text-body font-medium">
+        {t(($) => $.inspector.details_section)}
+      </h2>
+      <div className="-mx-2 mt-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+        <InspectorRow label={t(($) => $.details.leader)}>
+          <span className="flex min-w-0 items-center gap-1.5">
+            <ActorAvatar actorType="agent" actorId={squad.leader_id} size="xs" />
+            <span className="truncate">{leaderName}</span>
+          </span>
+        </InspectorRow>
+        <InspectorRow label={t(($) => $.details.members)}>
+          <span className="text-muted-foreground tabular-nums">{memberCount}</span>
+        </InspectorRow>
+        <InspectorRow label={t(($) => $.details.created_by)}>
+          <span className="flex min-w-0 items-center gap-1.5">
+            <ActorAvatar actorType="member" actorId={squad.creator_id} size="xs" />
+            <span className="truncate">{creatorName}</span>
+          </span>
+        </InspectorRow>
+        <InspectorRow label={t(($) => $.details.created)}>
+          <span className="text-muted-foreground">{timeAgo(squad.created_at)}</span>
+        </InspectorRow>
+        <InspectorRow label={t(($) => $.details.updated)}>
+          <span className="text-muted-foreground">{timeAgo(squad.updated_at)}</span>
+        </InspectorRow>
       </div>
-
-      {/* Details — read-only */}
-      <div className="border-b px-5 py-4">
-        <div className="mb-1 -mx-2 px-2 text-micro font-medium uppercase tracking-wider text-muted-foreground">
-          {t(($) => $.inspector.details_section)}
-        </div>
-        <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
-          <InspectorRow label={t(($) => $.details.leader)}>
-            <span className="flex min-w-0 items-center gap-1.5">
-              <ActorAvatar actorType="agent" actorId={squad.leader_id} size="xs" />
-              <span className="truncate">{leaderName}</span>
-            </span>
-          </InspectorRow>
-          <InspectorRow label={t(($) => $.details.members)}>
-            <span className="text-muted-foreground tabular-nums">{memberCount}</span>
-          </InspectorRow>
-          <InspectorRow label={t(($) => $.details.created_by)}>
-            <span className="flex min-w-0 items-center gap-1.5">
-              <ActorAvatar actorType="member" actorId={squad.creator_id} size="xs" />
-              <span className="truncate">{creatorName}</span>
-            </span>
-          </InspectorRow>
-          <InspectorRow label={t(($) => $.details.created)}>
-            <span className="text-muted-foreground">{timeAgo(squad.created_at)}</span>
-          </InspectorRow>
-          <InspectorRow label={t(($) => $.details.updated)}>
-            <span className="text-muted-foreground">{timeAgo(squad.updated_at)}</span>
-          </InspectorRow>
-        </div>
-      </div>
-    </aside>
+    </section>
   );
 }
 
@@ -844,7 +857,7 @@ function SquadDescriptionEditor({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="group -mx-1 inline-flex items-start gap-1.5 self-start rounded-xs px-1 text-left text-caption leading-relaxed transition-colors hover:bg-accent/50"
+        className="group -mx-1 inline-flex items-start gap-1.5 self-start rounded-xs px-1 text-left text-body leading-relaxed transition-colors hover:bg-accent/50"
       >
         {value ? (
           <span className="text-muted-foreground">{value}</span>
@@ -938,10 +951,7 @@ function SquadDescriptionEditorBody({
 // ---------------------------------------------------------------------------
 type SquadDetailTab = "members" | "instructions";
 
-const squadDetailTabs: { id: SquadDetailTab; icon: typeof FileText }[] = [
-  { id: "members", icon: Users },
-  { id: "instructions", icon: FileText },
-];
+const squadDetailTabs: SquadDetailTab[] = ["members", "instructions"];
 
 function SquadOverviewPane({
   squad,
@@ -951,13 +961,13 @@ function SquadOverviewPane({
   isLeader,
   isArchived,
   getEntityName,
-  onAddMemberClick,
   createAgentHref,
   onSetLeader,
   onRemoveMember,
   onUpdateRole,
   onSaveInstructions,
   setLeaderPending,
+  rail,
 }: {
   squad: Squad;
   members: SquadMember[];
@@ -969,7 +979,6 @@ function SquadOverviewPane({
   isLeader: (m: SquadMember) => boolean;
   isArchived: (m: SquadMember) => boolean;
   getEntityName: (type: string, id: string) => string;
-  onAddMemberClick: () => void;
   // Optional — only passed when the current user can manage the squad
   // (workspace owner/admin or the creator). Hidden otherwise so viewers
   // don't see a button they can't action.
@@ -979,6 +988,7 @@ function SquadOverviewPane({
   onUpdateRole: (m: SquadMember, role: string) => Promise<void>;
   onSaveInstructions: (next: string) => Promise<void>;
   setLeaderPending: boolean;
+  rail: ReactNode;
 }) {
   const { t } = useT("squads");
   const [activeTab, setActiveTab] = useState<SquadDetailTab>("members");
@@ -1000,54 +1010,53 @@ function SquadOverviewPane({
   };
 
   return (
-    <div className="flex min-h-[60vh] flex-col overflow-hidden rounded-lg border bg-background md:h-full md:min-h-0">
-      <div className="flex shrink-0 items-center gap-0 overflow-x-auto border-b px-2 md:px-4">
-        {squadDetailTabs.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            onClick={() => requestTabChange(tab.id)}
-            className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2.5 text-caption font-medium transition-colors ${
-              activeTab === tab.id
-                ? "border-foreground text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            <tab.icon className="h-3.5 w-3.5" />
-            {t(($) => $.detail_tabs[tab.id])}
-          </button>
-        ))}
-      </div>
+    <div className="flex min-h-0 flex-1 flex-col">
+      <DetailViewTabs
+        views={squadDetailTabs.map((id) => ({
+          id,
+          label: t(($) => $.detail_tabs[id]),
+        }))}
+        value={activeTab}
+        onChange={requestTabChange}
+        ariaLabel={t(($) => $.detail.tabs_aria)}
+      />
 
-      <div className="flex-1 min-h-0 overflow-y-auto">
-        {activeTab === "members" && (
-          <div className="flex h-full flex-col p-4 md:p-6">
-            <SquadMembersTab
-              members={members}
-              memberStatusById={memberStatusById}
-              canManage={canManage}
-              isLeader={isLeader}
-              isArchived={isArchived}
-              getEntityName={getEntityName}
-              onAddMemberClick={onAddMemberClick}
-              createAgentHref={createAgentHref}
-              onSetLeader={onSetLeader}
-              onRemoveMember={onRemoveMember}
-              onUpdateRole={onUpdateRole}
-              setLeaderPending={setLeaderPending}
-            />
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div
+          className={cn(
+            PAGE_RAIL,
+            PAGE_GUTTER,
+            "grid gap-6 py-4 sm:py-6 xl:grid-cols-[minmax(0,1fr)_320px]",
+          )}
+        >
+          <div className="min-w-0">
+            {activeTab === "members" ? (
+              <SquadMembersTab
+                members={members}
+                memberStatusById={memberStatusById}
+                canManage={canManage}
+                isLeader={isLeader}
+                isArchived={isArchived}
+                getEntityName={getEntityName}
+                createAgentHref={createAgentHref}
+                onSetLeader={onSetLeader}
+                onRemoveMember={onRemoveMember}
+                onUpdateRole={onUpdateRole}
+                setLeaderPending={setLeaderPending}
+              />
+            ) : (
+              <SquadInstructionsTab
+                squad={squad}
+                canManage={canManage}
+                onSave={onSaveInstructions}
+                onDirtyChange={setActiveDirty}
+              />
+            )}
           </div>
-        )}
-        {activeTab === "instructions" && (
-          <div className="flex h-full flex-col p-4 md:p-6">
-            <SquadInstructionsTab
-              squad={squad}
-              canManage={canManage}
-              onSave={onSaveInstructions}
-              onDirtyChange={setActiveDirty}
-            />
-          </div>
-        )}
+          <aside className="flex flex-col gap-4 self-start xl:sticky xl:top-6">
+            {rail}
+          </aside>
+        </div>
       </div>
 
       {pendingTab !== null && (
@@ -1094,7 +1103,6 @@ function SquadMembersTab({
   isLeader,
   isArchived,
   getEntityName,
-  onAddMemberClick,
   createAgentHref,
   onSetLeader,
   onRemoveMember,
@@ -1109,7 +1117,6 @@ function SquadMembersTab({
   isLeader: (m: SquadMember) => boolean;
   isArchived: (m: SquadMember) => boolean;
   getEntityName: (type: string, id: string) => string;
-  onAddMemberClick: () => void;
   // Hidden for viewers who can't manage — see SquadOverviewPane.
   createAgentHref?: string;
   onSetLeader: (agentId: string) => void;
@@ -1142,10 +1149,6 @@ function SquadMembersTab({
                 {t(($) => $.members_tab.create_agent_button)}
               </Button>
             )}
-            <Button size="sm" variant="outline" onClick={onAddMemberClick}>
-              <Plus className="size-3.5 mr-1.5" />
-              {t(($) => $.members_tab.add_member_button)}
-            </Button>
           </div>
         )}
       </div>
@@ -1359,7 +1362,7 @@ function SquadInstructionsTab({
           way to present it read-only (see editor/content-editor.tsx). */}
       <div
         aria-disabled={!canManage}
-        className={`flex-1 min-h-0 overflow-y-auto rounded-md border bg-background px-4 py-3 transition-colors ${
+        className={`min-h-[420px] flex-1 overflow-y-auto rounded-md border bg-background px-4 py-3 transition-colors ${
           canManage ? "focus-within:border-input" : "pointer-events-none"
         }`}
       >

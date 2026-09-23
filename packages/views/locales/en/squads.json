@@ -144,5 +144,29 @@
     "filter_active_count_one": "{{count}} filter",
     "filter_active_count_other": "{{count}} filters",
     "clear_filters": "Clear filters"
+  },
+  "list": {
+    "status_column": "Status",
+    "status_aria": "Filter squads by status",
+    "status": {
+      "all": "All",
+      "attention": "Needs attention",
+      "working": "Working",
+      "idle": "Idle"
+    },
+    "now": {
+      "leader_unavailable": "Leader unavailable",
+      "members_need_runtime_one": "{{count}} member needs a runtime",
+      "members_need_runtime_other": "{{count}} members need a runtime",
+      "members_offline_one": "{{count}} member offline with work queued",
+      "members_offline_other": "{{count}} members offline with work queued",
+      "working_one": "{{count}} member working",
+      "working_other": "{{count}} members working"
+    }
+  },
+  "detail": {
+    "assign_work": "Assign work",
+    "more_actions_aria": "More actions",
+    "tabs_aria": "Squad sections"
   }
 }

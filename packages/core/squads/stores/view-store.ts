@@ -19,7 +19,9 @@ export type SquadsScope = "mine" | "all";
 
 export const SQUAD_SCOPES: SquadsScope[] = ["mine", "all"];
 
-export type SquadSortField = "name" | "members" | "created";
+// "status" (the default) puts squads that need a person first, then working
+// ones — squads are few, so the list sorts by status instead of grouping.
+export type SquadSortField = "status" | "name" | "members" | "created";
 
 export type SquadSortDirection = "asc" | "desc";
 
@@ -28,6 +30,7 @@ export const SQUAD_SORT_DEFAULT_DIRECTION: Record<
   SquadSortField,
   SquadSortDirection
 > = {
+  status: "asc",
   name: "asc",
   members: "desc",
   created: "desc",
@@ -77,8 +80,8 @@ export interface SquadsViewState {
 
 const DEFAULTS = {
   scope: "mine" as SquadsScope,
-  sortField: "name" as SquadSortField,
-  sortDirection: SQUAD_SORT_DEFAULT_DIRECTION.name,
+  sortField: "status" as SquadSortField,
+  sortDirection: SQUAD_SORT_DEFAULT_DIRECTION.status,
   hiddenColumns: SQUAD_DEFAULT_HIDDEN_COLUMNS,
   filters: EMPTY_SQUAD_FILTERS,
 };
@@ -137,6 +140,21 @@ export const useSquadsViewStore = create<SquadsViewState>()(
         hiddenColumns: state.hiddenColumns,
         filters: state.filters,
       }),
+      // v1 (MUL-7661): status became the default sort. A saved sort from
+      // before it existed was almost always the old default, so it restarts
+      // on status rather than pinning the list to name order.
+      version: 1,
+      migrate: (persisted, version) => {
+        const p = (persisted ?? {}) as Partial<SquadsViewState>;
+        if (version < 1) {
+          return {
+            ...p,
+            sortField: DEFAULTS.sortField,
+            sortDirection: DEFAULTS.sortDirection,
+          };
+        }
+        return p;
+      },
       // On rehydrate, if the new workspace has no persisted value, reset to
       // the defaults instead of leaking the previous workspace's state.
       // Deep-merge filters so a pre-filters payload backfills defaults.

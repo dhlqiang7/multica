@@ -140,5 +140,26 @@
     "filter_label": "필터",
     "filter_active_count_other": "필터 {{count}}개",
     "clear_filters": "필터 지우기"
+  },
+  "list": {
+    "status_column": "상태",
+    "status_aria": "상태로 스쿼드 필터링",
+    "status": {
+      "all": "전체",
+      "attention": "조치 필요",
+      "working": "작업 중",
+      "idle": "대기 중"
+    },
+    "now": {
+      "leader_unavailable": "리더 사용 불가",
+      "members_need_runtime_other": "멤버 {{count}}명에게 런타임 필요",
+      "members_offline_other": "멤버 {{count}}명 오프라인, 대기 중인 실행 있음",
+      "working_other": "{{count}}명 작업 중"
+    }
+  },
+  "detail": {
+    "assign_work": "작업 할당",
+    "more_actions_aria": "더 보기",
+    "tabs_aria": "스쿼드 섹션"
   }
 }

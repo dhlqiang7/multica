@@ -140,5 +140,26 @@
     "filter_label": "フィルター",
     "filter_active_count_other": "{{count}} 件のフィルター",
     "clear_filters": "フィルターをクリア"
+  },
+  "list": {
+    "status_column": "ステータス",
+    "status_aria": "ステータスでスクワッドを絞り込む",
+    "status": {
+      "all": "すべて",
+      "attention": "要対応",
+      "working": "作業中",
+      "idle": "待機中"
+    },
+    "now": {
+      "leader_unavailable": "リーダーが利用不可",
+      "members_need_runtime_other": "{{count}} 人のメンバーにランタイムが必要",
+      "members_offline_other": "{{count}} 人のメンバーがオフライン（実行待ちあり）",
+      "working_other": "{{count}} 人が作業中"
+    }
+  },
+  "detail": {
+    "assign_work": "作業を割り当てる",
+    "more_actions_aria": "その他の操作",
+    "tabs_aria": "スクワッドのセクション"
   }
 }

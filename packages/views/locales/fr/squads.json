@@ -144,5 +144,29 @@
     "filter_active_count_one": "{{count}} filtre",
     "filter_active_count_other": "{{count}} filtres",
     "clear_filters": "Effacer les filtres"
+  },
+  "list": {
+    "status_column": "Statut",
+    "status_aria": "Filtrer les squads par statut",
+    "status": {
+      "all": "Tous",
+      "attention": "À traiter",
+      "working": "En cours",
+      "idle": "Inactifs"
+    },
+    "now": {
+      "leader_unavailable": "Chef indisponible",
+      "members_need_runtime_one": "{{count}} membre sans runtime",
+      "members_need_runtime_other": "{{count}} membres sans runtime",
+      "members_offline_one": "{{count}} membre hors ligne, travail en file",
+      "members_offline_other": "{{count}} membres hors ligne, travail en file",
+      "working_one": "{{count}} membre au travail",
+      "working_other": "{{count}} membres au travail"
+    }
+  },
+  "detail": {
+    "assign_work": "Assigner du travail",
+    "more_actions_aria": "Plus d’actions",
+    "tabs_aria": "Sections du squad"
   }
 }

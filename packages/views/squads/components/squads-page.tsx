@@ -14,15 +14,27 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import {
   agentListOptions,
   memberListOptions,
   squadListOptions,
+  squadMemberStatusOptions,
   workspaceKeys,
 } from "@multica/core/workspace/queries";
+import { useWorkspacePresenceMap } from "@multica/core/agents";
+import {
+  SQUAD_LIST_STATUS_ORDER,
+  type SquadListStatus,
+  type SquadListStatusDetail,
+} from "@multica/core/squads";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { useAuthStore } from "@multica/core/auth";
 import { api } from "@multica/core/api";
@@ -36,7 +48,12 @@ import {
   type SquadsScope,
   type SquadSortField,
 } from "@multica/core/squads/stores";
-import type { Agent, MemberWithUser, Squad } from "@multica/core/types";
+import type {
+  Agent,
+  MemberWithUser,
+  Squad,
+  SquadMemberStatusListResponse,
+} from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Dialog,
@@ -91,18 +108,21 @@ import {
 } from "../../layout/collection-page";
 import { useLocale, useT } from "../../i18n";
 import { PAGE_TOOLBAR } from "../../layout/page-header";
+import { ScopeToggle, StatusSummaryTabs } from "../../layout/status-summary";
+import { SquadStatusLabel, squadStatusFromRoster } from "./squad-status";
 
 // Column template — the simplest member of the ListGrid family (squads are
 // the fewest entity, 1-5 rows): subgrid template + var tracks + two-zone
 // responsiveness + single scroll container, but NO virtualization, checkbox,
 // or batch. Identity two-line rows (avatar + name + description, 64px) like
-// the agents list. Name + leader are the core set (<@2xl); members / creator
-// / created are @2xl. The kebab track collapses when the viewer can't manage
-// any squad (workspace admin only).
+// the agents list. Name + status are the core set (<@2xl); members / leader
+// / creator / created are @2xl. The kebab track collapses when the viewer
+// can't manage any squad (workspace admin only).
 const GRID_COLS =
-  "grid-cols-[0.75rem_minmax(120px,1fr)_var(--sqc-leader)_var(--sqc-kebab)_0.75rem] " +
-  "@2xl:grid-cols-[0.75rem_minmax(200px,1fr)_var(--sqc-leader)_var(--sqc-members)_var(--sqc-creator)_var(--sqc-created)_var(--sqc-kebab)_0.75rem]";
+  "grid-cols-[0.75rem_minmax(120px,1fr)_var(--sqc-status-mobile)_var(--sqc-kebab)_0.75rem] " +
+  "@2xl:grid-cols-[0.75rem_minmax(200px,1fr)_var(--sqc-status)_var(--sqc-members)_var(--sqc-leader)_var(--sqc-creator)_var(--sqc-created)_var(--sqc-kebab)_0.75rem]";
 
+const STATUS_WIDTH = 220;
 const LEADER_WIDTH = 160;
 const COLUMN_WIDTHS: Record<SquadColumnKey, number> = {
   members: 120,
@@ -110,10 +130,10 @@ const COLUMN_WIDTHS: Record<SquadColumnKey, number> = {
   created: 104,
 };
 
-// Fixed tracks (edges 12+12, name min 200, leader 160) plus the 7 gap-x-3
-// gaps between the wide template's 8 tracks (zero-width tracks still carry
-// gaps).
-const FIXED_TRACKS_WIDTH = 224 + LEADER_WIDTH + 7 * 12;
+// Fixed tracks (edges 12+12, name min 200, status, leader) plus the 8
+// gap-x-3 gaps between the wide template's 9 tracks (zero-width tracks
+// still carry gaps).
+const FIXED_TRACKS_WIDTH = 224 + STATUS_WIDTH + LEADER_WIDTH + 8 * 12;
 
 function columnTrackVars(
   isVisible: (key: SquadColumnKey) => boolean,
@@ -129,6 +149,8 @@ function columnTrackVars(
     ) +
     (showActions ? 28 : 0);
   return {
+    "--sqc-status-mobile": "136px",
+    "--sqc-status": `${STATUS_WIDTH}px`,
     "--sqc-leader": `${LEADER_WIDTH}px`,
     "--sqc-members": width("members"),
     "--sqc-creator": width("creator"),
@@ -198,11 +220,26 @@ function LeaderCell({
   leader: Agent | undefined;
 }) {
   return (
-    <ListGridCell className="gap-1.5">
+    <ListGridCell className="hidden gap-1.5 @2xl:flex">
       <ActorAvatar actorType="agent" actorId={leaderId} size="sm" />
       <span className="min-w-0 truncate text-caption text-muted-foreground">
         {leader?.name ?? leaderId.slice(0, 8)}
       </span>
+    </ListGridCell>
+  );
+}
+
+function StatusCell({ detail }: { detail: SquadListStatusDetail | null }) {
+  if (!detail) {
+    return (
+      <ListGridCell>
+        <span className="text-caption text-faint-foreground">—</span>
+      </ListGridCell>
+    );
+  }
+  return (
+    <ListGridCell className="gap-2">
+      <SquadStatusLabel detail={detail} />
     </ListGridCell>
   );
 }
@@ -395,7 +432,12 @@ function SquadListHeader({
       <ListGridHeaderCell sorted={sorted("name")} onSort={() => onSort("name")}>
         {t(($) => $.page.table.name)}
       </ListGridHeaderCell>
-      <ListGridHeaderCell>{t(($) => $.page.table.leader)}</ListGridHeaderCell>
+      <ListGridHeaderCell
+        sorted={sorted("status")}
+        onSort={() => onSort("status")}
+      >
+        {t(($) => $.list.status_column)}
+      </ListGridHeaderCell>
       {isColVisible("members") ? (
         <ListGridHeaderCell
           className="hidden @2xl:flex"
@@ -407,6 +449,9 @@ function SquadListHeader({
       ) : (
         <ListGridHeaderCell className="hidden px-0 @2xl:flex" />
       )}
+      <ListGridHeaderCell className="hidden @2xl:flex">
+        {t(($) => $.page.table.leader)}
+      </ListGridHeaderCell>
       {isColVisible("creator") ? (
         <ListGridHeaderCell className="hidden @2xl:flex">
           {t(($) => $.page.table.creator)}
@@ -432,7 +477,7 @@ function SquadListHeader({
 }
 
 const COLUMN_KEYS: SquadColumnKey[] = ["members", "creator", "created"];
-const SORT_FIELDS: SquadSortField[] = ["name", "members", "created"];
+const SORT_FIELDS: SquadSortField[] = ["status", "name", "members", "created"];
 
 interface ActorOption {
   id: string;
@@ -440,7 +485,22 @@ interface ActorOption {
   count: number;
 }
 
+function combineMemberStatuses(
+  results: readonly { data?: SquadMemberStatusListResponse; isPending: boolean }[],
+) {
+  return {
+    rosters: results.map((result) => result.data),
+    pending: results.some((result) => result.isPending),
+  };
+}
+
+type SquadStatusTab = "all" | SquadListStatus;
+const STATUS_TABS: SquadStatusTab[] = ["all", ...SQUAD_LIST_STATUS_ORDER];
+
 function SquadListToolbar({
+  statusTab,
+  onStatusTabChange,
+  statusCounts,
   scope,
   onScopeChange,
   scopeCounts,
@@ -458,6 +518,9 @@ function SquadListToolbar({
   hiddenColumns,
   onToggleColumn,
 }: {
+  statusTab: SquadStatusTab;
+  onStatusTabChange: (tab: SquadStatusTab) => void;
+  statusCounts: Record<SquadStatusTab, number>;
   scope: SquadsScope;
   onScopeChange: (scope: SquadsScope) => void;
   scopeCounts: Record<SquadsScope, number>;
@@ -488,6 +551,7 @@ function SquadListToolbar({
     all: t(($) => $.scope.all),
   };
   const SORT_LABELS: Record<SquadSortField, string> = {
+    status: t(($) => $.list.status_column),
     name: t(($) => $.page.table.name),
     members: t(($) => $.page.table.members),
     created: t(($) => $.page.table.created),
@@ -502,56 +566,20 @@ function SquadListToolbar({
   return (
     <div className={PAGE_TOOLBAR}>
       <div className="flex min-w-0 items-center gap-2">
-        <div className="hidden shrink-0 items-center gap-1 md:flex">
-          {SQUAD_SCOPES.map((s) => (
-            <Button
-              key={s}
-              variant="outline"
-              size="sm"
-              className={
-                scope === s
-                  ? "gap-1.5 bg-accent text-accent-foreground hover:bg-accent/80"
-                  : "gap-1.5 text-muted-foreground"
-              }
-              onClick={() => onScopeChange(s)}
-            >
-              {SCOPE_LABELS[s]}
-              <span className="tabular-nums text-caption text-muted-foreground">
-                {scopeCounts[s]}
-              </span>
-            </Button>
-          ))}
-        </div>
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <Button
-                variant="outline"
-                size="sm"
-                className="shrink-0 gap-1 text-muted-foreground md:hidden"
-              >
-                <span className="truncate">{SCOPE_LABELS[scope]}</span>
-                <ChevronDown className="size-3 text-muted-foreground" />
-              </Button>
-            }
-          />
-          <DropdownMenuContent align="start" className="w-auto">
-            <DropdownMenuRadioGroup
-              value={scope}
-              onValueChange={(value) => onScopeChange(value as SquadsScope)}
-            >
-              {SQUAD_SCOPES.map((s) => (
-                <DropdownMenuRadioItem key={s} value={s}>
-                  {SCOPE_LABELS[s]}
-                  <span className="ml-2 tabular-nums text-caption text-muted-foreground">
-                    {scopeCounts[s]}
-                  </span>
-                </DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
+        <StatusSummaryTabs
+          items={STATUS_TABS.map((key) => ({
+            key,
+            label:
+              key === "all"
+                ? t(($) => $.list.status.all)
+                : t(($) => $.list.status[key]),
+            count: statusCounts[key],
+            tone: key === "all" ? undefined : key,
+          }))}
+          value={statusTab}
+          onChange={onStatusTabChange}
+          ariaLabel={t(($) => $.list.status_aria)}
+        />
         {hasActiveFilters && (
           <span
             title={t(($) => $.toolbar.result_count_title)}
@@ -563,6 +591,15 @@ function SquadListToolbar({
       </div>
 
       <div className="flex shrink-0 items-center gap-1">
+      <ScopeToggle
+        options={SQUAD_SCOPES.map((key) => ({
+          key,
+          label: SCOPE_LABELS[key],
+          count: scopeCounts[key],
+        }))}
+        value={scope}
+        onChange={onScopeChange}
+      />
       {/* Filter */}
       <DropdownMenu>
         <DropdownMenuTrigger
@@ -785,6 +822,16 @@ export function SquadsPage() {
   });
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
+  const { byAgent: presenceMap, loading: presenceLoading } =
+    useWorkspacePresenceMap(wsId);
+  // Each squad's full roster (the list payload previews only three), with
+  // live status. Squads are few, and these are the same queries the detail
+  // page reads, so opening a squad from here is warm.
+  const memberStatuses = useQueries({
+    queries: squads.map((squad) => squadMemberStatusOptions(wsId, squad.id)),
+    combine: combineMemberStatuses,
+  });
+  const [statusTab, setStatusTab] = useState<SquadStatusTab>("all");
 
   const agentsById = useMemo(() => {
     const m = new Map<string, Agent>();
@@ -868,22 +915,71 @@ export function SquadsPage() {
     return [...m.values()];
   }, [scopeRows, membersById]);
 
-  const rows = useMemo<Squad[]>(() => {
-    const inScope = scopeRows.filter((s) => {
-      if (filters.leaders.length > 0 && !filters.leaders.includes(s.leader_id)) {
-        return false;
-      }
-      if (
-        filters.creators.length > 0 &&
-        !filters.creators.includes(s.creator_id)
-      ) {
-        return false;
-      }
-      return true;
+  const statusBySquad = useMemo(() => {
+    const out = new Map<string, SquadListStatusDetail>();
+    squads.forEach((squad, index) => {
+      const roster = memberStatuses.rosters[index]?.members;
+      if (!roster) return;
+      out.set(
+        squad.id,
+        squadStatusFromRoster(squad.leader_id, roster, agentsById, presenceMap),
+      );
     });
+    return out;
+  }, [squads, agentsById, presenceMap, memberStatuses.rosters]);
+  const statusesReady = !presenceLoading && !memberStatuses.pending;
+
+  const filteredRows = useMemo<Squad[]>(
+    () =>
+      scopeRows.filter((s) => {
+        if (
+          filters.leaders.length > 0 &&
+          !filters.leaders.includes(s.leader_id)
+        ) {
+          return false;
+        }
+        if (
+          filters.creators.length > 0 &&
+          !filters.creators.includes(s.creator_id)
+        ) {
+          return false;
+        }
+        return true;
+      }),
+    [scopeRows, filters],
+  );
+
+  const statusCounts = useMemo(() => {
+    const counts: Record<SquadStatusTab, number> = {
+      all: filteredRows.length,
+      attention: 0,
+      working: 0,
+      idle: 0,
+    };
+    for (const squad of filteredRows) {
+      const detail = statusBySquad.get(squad.id);
+      if (detail) counts[detail.status] += 1;
+    }
+    return counts;
+  }, [filteredRows, statusBySquad]);
+
+  const rows = useMemo<Squad[]>(() => {
+    const inScope = filteredRows.filter((s) => {
+      if (statusTab === "all") return true;
+      return statusBySquad.get(s.id)?.status === statusTab;
+    });
+    const statusRank = (squad: Squad) => {
+      const status = statusBySquad.get(squad.id)?.status ?? "idle";
+      return SQUAD_LIST_STATUS_ORDER.indexOf(status);
+    };
     const dir = sortDirection === "asc" ? 1 : -1;
     const sorted = [...inScope];
     sorted.sort((a, b) => {
+      if (sortField === "status") {
+        return (
+          (statusRank(a) - statusRank(b)) * dir || a.name.localeCompare(b.name)
+        );
+      }
       if (sortField === "members") {
         const av = a.member_count ?? a.member_preview?.length ?? 0;
         const bv = b.member_count ?? b.member_preview?.length ?? 0;
@@ -897,7 +993,7 @@ export function SquadsPage() {
       return a.name.localeCompare(b.name) * dir;
     });
     return sorted;
-  }, [scopeRows, filters, sortField, sortDirection]);
+  }, [filteredRows, statusTab, statusBySquad, sortField, sortDirection]);
 
   // Reserve the row-actions (kebab) track when the current user can manage at
   // least one visible squad. Workspace admins manage all squads; a regular
@@ -924,7 +1020,7 @@ export function SquadsPage() {
         }
       />
 
-      {isLoading ? (
+      {isLoading || (squads.length > 0 && !statusesReady) ? (
         <LoadingSkeleton />
       ) : squads.length === 0 ? (
         <CollectionPageState
@@ -943,6 +1039,9 @@ export function SquadsPage() {
       ) : (
         <>
           <SquadListToolbar
+            statusTab={statusTab}
+            onStatusTabChange={setStatusTab}
+            statusCounts={statusCounts}
             scope={scope}
             onScopeChange={setScope}
             scopeCounts={scopeCounts}
@@ -951,7 +1050,7 @@ export function SquadsPage() {
             onClearFilters={clearFilters}
             leaderOptions={leaderOptions}
             creatorOptions={creatorOptions}
-            visibleCount={rows.length}
+            visibleCount={filteredRows.length}
             totalCount={scopeRows.length}
             sortField={sortField}
             sortDirection={sortDirection}
@@ -986,15 +1085,16 @@ export function SquadsPage() {
                     {...rowLink(p.squadDetail(squad.id), squad.name)}
                   >
                     <NameCell squad={squad} />
-                    <LeaderCell
-                      leaderId={squad.leader_id}
-                      leader={agentsById.get(squad.leader_id)}
-                    />
+                    <StatusCell detail={statusBySquad.get(squad.id) ?? null} />
                     {isColVisible("members") ? (
                       <MembersCell squad={squad} />
                     ) : (
                       <ListGridCell className="hidden px-0 @2xl:flex" />
                     )}
+                    <LeaderCell
+                      leaderId={squad.leader_id}
+                      leader={agentsById.get(squad.leader_id)}
+                    />
                     {isColVisible("creator") ? (
                       <ListGridCell className="hidden gap-1.5 @2xl:flex">
                         <ActorAvatar
@@ -1054,6 +1154,9 @@ function LoadingSkeleton() {
           <ListGridHeaderCell className="hidden @2xl:flex">
             <Skeleton className="h-3 w-12" />
           </ListGridHeaderCell>
+          <ListGridHeaderCell className="hidden @2xl:flex">
+            <Skeleton className="h-3 w-12" />
+          </ListGridHeaderCell>
           <ListGridHeaderCell className="hidden px-0 @2xl:flex" />
           <ListGridHeaderCell className="hidden px-0 @2xl:flex" />
           <span aria-hidden="true" />
@@ -1067,12 +1170,15 @@ function LoadingSkeleton() {
                 <Skeleton className="h-3 w-48 max-w-full" />
               </div>
             </ListGridCell>
-            <ListGridCell className="gap-1.5">
-              <Skeleton className="size-5 rounded-full" />
-              <Skeleton className="h-3 w-16" />
+            <ListGridCell>
+              <Skeleton className="h-3 w-24" />
             </ListGridCell>
             <ListGridCell className="hidden @2xl:flex">
               <Skeleton className="h-5 w-16" />
+            </ListGridCell>
+            <ListGridCell className="hidden gap-1.5 @2xl:flex">
+              <Skeleton className="size-5 rounded-full" />
+              <Skeleton className="h-3 w-16" />
             </ListGridCell>
             <ListGridCell className="hidden px-0 @2xl:flex" />
             <ListGridCell className="hidden px-0 @2xl:flex" />
