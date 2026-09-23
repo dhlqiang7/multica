@@ -315,7 +315,6 @@ export function createZhDict(allowSignup: boolean): LandingDict {
         ],
         fixes: [
           "Codex 的新模型一发布就出现在选择器里。",
-          "不支持追加指令的任务不再显示这个入口。",
           "命令行登录连不上服务器时会明确告知，不再一直等。",
           "受邀成员在限制注册的自托管环境里也能完成注册。",
           "启动没有确认的任务会被重新拉起，不会卡住。",

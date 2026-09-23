@@ -315,7 +315,6 @@ export function createEnDict(allowSignup: boolean): LandingDict {
         ],
         fixes: [
           "New Codex models show up in the picker as soon as they are out.",
-          "A task that cannot take extra instructions no longer offers the option.",
           "A command line sign-in that cannot reach the server says so, instead of waiting forever.",
           "An invited member can finish signing up on a self-hosted server that restricts signups.",
           "A task whose start goes unconfirmed is picked up again instead of stalling.",
