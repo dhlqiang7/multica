@@ -1,4 +1,5 @@
 import type { AgentTask, TimelineEntry } from "@multica/core/types";
+import { isDeletedComment } from "@multica/core/issues/comment-deletion";
 
 export interface CommentRun {
   task: AgentTask;
@@ -33,7 +34,7 @@ function isObsoleteCommentRun(task: AgentTask): boolean {
     && !task.dispatched_at && !task.started_at && !task.delivered_comment_ids?.length;
 }
 
-/** Place each run after its latest covered input; associate replies by task identity. */
+/** Anchor each run on its latest covered input; associate replies by task identity. */
 export function buildCommentRunView(
   tasks: readonly AgentTask[],
   timeline: readonly TimelineEntry[],
@@ -111,12 +112,13 @@ export function buildCommentRunView(
       anchorId = source.trigger_comment_id && ids.includes(source.trigger_comment_id)
         ? source.trigger_comment_id
         : latestCandidateId() ?? ids.find((id) => !!id);
-      // A same-thread batch belongs after its latest covered input, so the
-      // timeline reads "these comments → this run". Before claim, a newly
-      // coalesced trigger moves the queued block down. After claim, `ids` comes
-      // from delivered_comment_ids and freezes the running block at the actual
-      // delivery boundary. Wait for missing comments instead of guessing their
-      // thread; historical batches spanning several threads retain their trigger.
+      // A same-thread batch answers its latest covered input: the comment its
+      // reply hangs under and quotes when the two are apart (MUL-7628). Before
+      // claim, a newly coalesced trigger moves the anchor down. After claim,
+      // `ids` comes from delivered_comment_ids and freezes the anchor at the
+      // actual delivery boundary. Wait for missing comments instead of guessing
+      // their thread; historical batches spanning several threads retain their
+      // trigger.
       const root = candidates[0] && threadRoot(candidates[0].id);
       if (root && candidates.length === ids.filter(Boolean).length
         && candidates.every((entry) => threadRoot(entry.id) === root)) {
@@ -194,11 +196,14 @@ export function buildCommentRunView(
 }
 
 /**
- * Where a standalone run block sits in the timeline.
+ * Where a run block sits among comments — in the top-level timeline, or among
+ * one thread's replies.
  *
  * Once a run publishes a reply, the reply's own time owns the slot (MUL-7211).
  * This keeps the card's timestamp in chronological order even after a long
- * queue wait or execution. A run that ended without a reply sorts when it ended.
+ * queue wait or execution, and in a thread it lets two agents asked in a row
+ * read in the order they replied (MUL-7628). A run that ended without a reply
+ * sorts when it ended.
  *
  * Until then, an active run keeps its enqueue-time slot (MUL-7632). Parking it
  * at the live end would insert every later comment above an already visible
@@ -208,7 +213,7 @@ function publishedReply(run: CommentRun, entryById: ReadonlyMap<string, Timeline
   return run.hasReply && run.commentId ? entryById.get(run.commentId) : undefined;
 }
 
-function standaloneRunSortTime(run: CommentRun, entryById: ReadonlyMap<string, TimelineEntry>): number {
+function runSortTime(run: CommentRun, entryById: ReadonlyMap<string, TimelineEntry>): number {
   const reply = publishedReply(run, entryById);
   if (reply) return Date.parse(reply.created_at);
   if (isActiveCommentRun(run.task)) return Date.parse(run.task.created_at);
@@ -216,19 +221,20 @@ function standaloneRunSortTime(run: CommentRun, entryById: ReadonlyMap<string, T
 }
 
 /**
- * Merge standalone runs into the top-level timeline in reading order.
+ * Merge runs into a list of comments in reading order: standalone runs into
+ * the top-level timeline, or a thread's runs into its replies.
  *
- * A run that published a reply REPLACES that comment's own top-level slot —
- * the block renders the comment card, so leaving both would double it.
+ * A run that published a reply REPLACES that comment's own slot — the block
+ * renders the comment, so leaving both would double it.
  */
 export function orderTimelineWithRuns(
-  topLevel: readonly TimelineEntry[],
-  standaloneRuns: readonly CommentRun[],
+  entries: readonly TimelineEntry[],
+  runs: readonly CommentRun[],
   entryById: ReadonlyMap<string, TimelineEntry>,
 ): (TimelineEntry | CommentRun)[] {
-  const slotted = new Set(standaloneRuns.filter((run) => run.hasReply).map((run) => run.commentId));
+  const slotted = new Set(runs.filter((run) => run.hasReply).map((run) => run.commentId));
   const sortTime = (item: TimelineEntry | CommentRun): number =>
-    "task" in item ? standaloneRunSortTime(item, entryById) : Date.parse(item.created_at);
+    "task" in item ? runSortTime(item, entryById) : Date.parse(item.created_at);
   // Ties are ordinary, not exotic: the API serializes timestamps to whole
   // seconds (util.TimestampToString), so a reply and the comment next to it
   // routinely share one. Break them on the row that OWNS the slot — the reply
@@ -237,10 +243,71 @@ export function orderTimelineWithRuns(
   // invariant sortTimelineEntriesAsc holds for the flat cache.
   const slotRow = (item: TimelineEntry | CommentRun): { created_at: string; id: string } =>
     "task" in item ? publishedReply(item, entryById) ?? item.task : item;
-  return [...topLevel.filter((entry) => !slotted.has(entry.id)), ...standaloneRuns].sort((a, b) => {
+  return [...entries.filter((entry) => !slotted.has(entry.id)), ...runs].sort((a, b) => {
     const left = sortTime(a), right = sortTime(b);
     if (left !== right) return left < right ? -1 : 1;
     const leftRow = slotRow(a), rightRow = slotRow(b);
     return leftRow.created_at.localeCompare(rightRow.created_at) || leftRow.id.localeCompare(rightRow.id);
+  });
+}
+
+/** A run's slot in a thread. */
+export interface ThreadRunSlot {
+  run: CommentRun;
+  /** The reply the slot ends with, when the run published one. */
+  reply?: TimelineEntry;
+  /** Everything else the run posted in the thread, in posting order. */
+  outputs: TimelineEntry[];
+  /** The input the run answers, when it is not the row directly above. */
+  replyTo?: TimelineEntry;
+}
+
+/**
+ * A thread's replies and runs in reading order. A run that replied, or ended
+ * without replying, sits at that time like any comment (MUL-7211), so two
+ * agents asked in a row read in the order they answered (MUL-7628). A run
+ * still working stays right after the input it answers — the latest one it
+ * covers — the way an active standalone run keeps its enqueue slot (MUL-7632).
+ *
+ * The run's other comments in the thread lead its slot in posting order;
+ * sorted apart, progress posted before the reply would read after it
+ * (MUL-7548). A run whose reply is the root heads the thread instead.
+ */
+export function orderThreadWithRuns(
+  root: TimelineEntry,
+  replies: readonly TimelineEntry[],
+  runs: readonly CommentRun[],
+): (TimelineEntry | ThreadRunSlot)[] {
+  const entryById = new Map([root, ...replies].map((entry) => [entry.id, entry]));
+  const threadRuns = runs.filter((run) => run.anchorCommentId && !(run.hasReply && run.commentId === root.id));
+  const working = new Set(threadRuns.filter((run) => !run.hasReply && isActiveCommentRun(run.task)));
+  const outputs = new Map(threadRuns.map((run) => [run.task.id, !run.hasReply ? [] : replies.filter((reply) =>
+    reply.actor_type === "agent" && reply.source_task_id === run.task.id && reply.id !== run.commentId)]));
+  const slotted = new Set([...outputs.values()].flat().map((reply) => reply.id));
+  const rows = orderTimelineWithRuns(replies.filter((reply) => !slotted.has(reply.id)),
+    threadRuns.filter((run) => !working.has(run)), entryById);
+  // `runs` arrive in enqueue order: each working run goes after the row that
+  // shows its input (none for the root) and after earlier runs on that input.
+  const shows = (item: TimelineEntry | CommentRun, id?: string) => "task" in item
+    ? item.commentId === id || !!outputs.get(item.task.id)?.some((output) => output.id === id)
+    : item.id === id;
+  for (const run of working) {
+    let index = rows.findIndex((item) => shows(item, run.anchorCommentId)) + 1;
+    while (working.has(rows[index] as CommentRun) && (rows[index] as CommentRun).anchorCommentId === run.anchorCommentId) index += 1;
+    rows.splice(index, 0, run);
+  }
+  // The comment rendered directly above the next row. A tombstone renders
+  // nothing, and a run without a visible reply renders its activity block.
+  let above: string | undefined = root.id;
+  return rows.map((item) => {
+    if (!("task" in item)) {
+      if (!isDeletedComment(item)) above = item.id;
+      return item;
+    }
+    const reply = publishedReply(item, entryById);
+    const anchor = item.anchorCommentId ? entryById.get(item.anchorCommentId) : undefined;
+    const replyTo = anchor && anchor.id !== above && anchor.id !== reply?.id && !isDeletedComment(anchor) ? anchor : undefined;
+    above = reply && !isDeletedComment(reply) ? reply.id : undefined;
+    return { run: item, reply, outputs: outputs.get(item.task.id) ?? [], replyTo };
   });
 }

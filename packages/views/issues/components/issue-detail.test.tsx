@@ -1410,7 +1410,7 @@ describe("IssueDetail (shared)", () => {
     expect(within(replyBlock as HTMLElement).getByRole("button", { name: "Open full log" })).toBe(headerLog);
   });
 
-  it("replaces each queued run in place without moving replies behind later requests", async () => {
+  it("keeps each queued run after its request and moves it in place to its reply's time", async () => {
     const root = mockTimeline[0]!;
     const second = { ...root, id: "request-two", parent_id: root.id, content: "Second request", created_at: "2026-01-16T00:00:02Z" };
     const third = { ...root, id: "request-three", parent_id: root.id, content: "Third request", created_at: "2026-01-16T00:00:04Z" };
@@ -1429,6 +1429,10 @@ describe("IssueDetail (shared)", () => {
     </I18nProvider>);
     await waitFor(() => expect(container.querySelectorAll('[data-run-slot-id]')).toHaveLength(3));
     const slots = tasks.map((task) => container.querySelector(`[data-run-slot-id="${task.id}"]`)!);
+    const [secondRow, thirdRow] = [second, third].map((request) => container.querySelector(`#comment-${request.id}`)!);
+    expect(secondRow!.previousElementSibling).toBe(slots[0]);
+    expect(secondRow!.nextElementSibling).toBe(slots[1]);
+    expect(thirdRow!.nextElementSibling).toBe(slots[2]);
     fireEvent.click(within(slots[0] as HTMLElement).getByRole("button", { name: /View activity/ }));
     await within(slots[0] as HTMLElement).findByText("No activity recorded yet.");
     for (const index of [0, 1]) {
@@ -1450,8 +1454,11 @@ describe("IssueDetail (shared)", () => {
     }
     expect(within(slots[0] as HTMLElement).getByRole("button", { name: "Open full log" })).toBeInTheDocument();
     expect(within(slots[0] as HTMLElement).queryByRole("button", { name: /View activity/ })).not.toBeInTheDocument();
-    expect(slots[0]!.nextElementSibling?.id).toBe("comment-request-two");
-    expect(slots[1]!.nextElementSibling?.id).toBe("comment-request-three");
+    // Answers land at their own time, after the requests; the queued run
+    // stays with its request.
+    expect(thirdRow!.nextElementSibling).toBe(slots[2]);
+    expect(slots[2]!.nextElementSibling).toBe(slots[0]);
+    expect(slots[0]!.nextElementSibling).toBe(slots[1]);
     expect(container.querySelector(`[data-run-slot-id="${tasks[2]!.id}"]`)).toBe(slots[2]);
     expect(within(slots[2] as HTMLElement).getByText("Waiting for an available agent.")).toBeInTheDocument();
   });
@@ -1470,6 +1477,42 @@ describe("IssueDetail (shared)", () => {
     await screen.findByText(answer.content);
     await waitFor(() => expect(container.querySelectorAll(`[data-run-id="${second.id}"]`)).toHaveLength(1));
     expect(container.querySelector(`#comment-${root.id}`)?.querySelector(`[data-run-id="${second.id}"]`)).not.toBeNull();
+  });
+
+  // MUL-7628: Elon was asked first but replied last; his review used to render
+  // under the request, above the rest of the thread.
+  it("orders thread replies by send time and quotes the request a late reply answers", async () => {
+    const root = mockTimeline[0]!;
+    const request = (id: string, content: string, created_at: string): TimelineEntry =>
+      ({ ...root, id, parent_id: root.id, content, created_at, updated_at: created_at });
+    const askElon = request("ask-elon", "Review the code", "2026-01-16T00:15:32Z");
+    const askSteve = request("ask-steve", "CI is failing", "2026-01-16T00:15:41Z");
+    const run = (id: string, trigger: TimelineEntry): AgentTask => ({
+      id, agent_id: "agent-1", runtime_id: "runtime-1", issue_id: "issue-1", status: "completed", priority: 0,
+      created_at: trigger.created_at, started_at: trigger.created_at, dispatched_at: trigger.created_at,
+      completed_at: "2026-01-16T00:40:00Z", result: null, error: null,
+      trigger_comment_id: trigger.id, delivered_comment_ids: [trigger.id],
+    });
+    const elon = run("ba2e8d1c-7f9b-4e2a-9c1d-123456789ab0", askElon);
+    const steve = run("ba2e8d1c-7f9b-4e2a-9c1d-123456789ab1", askSteve);
+    const answer = (id: string, task: AgentTask, content: string, created_at: string): TimelineEntry =>
+      ({ ...mockTimeline[1]!, id, parent_id: root.id, source_task_id: task.id, content, created_at, updated_at: created_at });
+    mockApiObj.listTimeline.mockResolvedValue([root, askElon, askSteve,
+      answer("steve-fixed", steve, "Fixed the CI failure", "2026-01-16T00:23:41Z"),
+      answer("elon-review", elon, "Review complete", "2026-01-16T00:32:29Z"),
+      request("follow-up", "Fix it, then ask for another review", "2026-01-16T00:35:05Z")]);
+    mockApiObj.listTasksByIssue.mockResolvedValue([elon, steve]);
+    const { container } = renderIssueDetail();
+
+    await screen.findByText("Review complete");
+    const order = ["ask-elon", "ask-steve", "steve-fixed", "elon-review", "follow-up"].map((id) => `comment-${id}`);
+    expect(Array.from(container.querySelectorAll("[id]"), (element) => element.id).filter((id) => order.includes(id)))
+      .toEqual(order);
+    const review = container.querySelector("#comment-elon-review") as HTMLElement;
+    const quote = within(review).getByRole("button", { name: "Replying to Test User: Review the code" });
+    expect(within(container.querySelector("#comment-steve-fixed") as HTMLElement).queryByText(/Replying to/)).toBeNull();
+    fireEvent.click(quote);
+    expect(container.querySelector("#comment-ask-elon")?.className).toContain(highlightedCommentBackgroundClass);
   });
 
   it.each(["failed", "cancelled"] as const)("keeps a %s run outside the user reply that triggered it", async (status) => {
