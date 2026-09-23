@@ -28,6 +28,21 @@ WHERE i.id = $1
   AND i.workspace_id = $2
   AND i.status = $3::text
   AND i.status <> 'done'
+  AND EXISTS (
+      SELECT 1 FROM issue_pull_request ipr WHERE ipr.issue_id = i.id
+      UNION ALL
+      SELECT 1 FROM issue_vcs_pull_request ipr WHERE ipr.issue_id = i.id
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM issue_pull_request ipr
+      JOIN github_pull_request pr ON pr.id = ipr.pull_request_id
+      WHERE ipr.issue_id = i.id AND pr.state <> 'merged'
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM issue_vcs_pull_request ipr
+      JOIN vcs_pull_request pr ON pr.id = ipr.pull_request_id
+      WHERE ipr.issue_id = i.id AND pr.state <> 'merged'
+  )
 RETURNING i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.duplicate_of_issue_id
 `
 
@@ -37,9 +52,10 @@ type CompleteIssueFromPullRequestsParams struct {
 	ExpectedStatus string      `json:"expected_status"`
 }
 
-// Conditional status write for PR auto-complete: only lands if the issue is
-// still in the status the decision was made against, so two merges racing on
-// the same issue produce one transition, not two. Repositions like
+// Conditional status write for PR auto-complete. It lands only if the issue is
+// still in the status the decision saw (two merges racing complete it once) and
+// the linked PRs are still all merged when the write runs: a PR linked between
+// the decision and this statement keeps the issue open. Repositions like
 // UpdateIssueStatus does.
 func (q *Queries) CompleteIssueFromPullRequests(ctx context.Context, arg CompleteIssueFromPullRequestsParams) (Issue, error) {
 	row := q.db.QueryRow(ctx, completeIssueFromPullRequests, arg.ID, arg.WorkspaceID, arg.ExpectedStatus)

@@ -56,9 +56,10 @@ WHERE ipr.issue_id = $1
 ORDER BY pr_number;
 
 -- name: CompleteIssueFromPullRequests :one
--- Conditional status write for PR auto-complete: only lands if the issue is
--- still in the status the decision was made against, so two merges racing on
--- the same issue produce one transition, not two. Repositions like
+-- Conditional status write for PR auto-complete. It lands only if the issue is
+-- still in the status the decision saw (two merges racing complete it once) and
+-- the linked PRs are still all merged when the write runs: a PR linked between
+-- the decision and this statement keeps the issue open. Repositions like
 -- UpdateIssueStatus does.
 UPDATE issue AS i SET
     status = 'done',
@@ -76,4 +77,19 @@ WHERE i.id = $1
   AND i.workspace_id = $2
   AND i.status = sqlc.arg('expected_status')::text
   AND i.status <> 'done'
+  AND EXISTS (
+      SELECT 1 FROM issue_pull_request ipr WHERE ipr.issue_id = i.id
+      UNION ALL
+      SELECT 1 FROM issue_vcs_pull_request ipr WHERE ipr.issue_id = i.id
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM issue_pull_request ipr
+      JOIN github_pull_request pr ON pr.id = ipr.pull_request_id
+      WHERE ipr.issue_id = i.id AND pr.state <> 'merged'
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM issue_vcs_pull_request ipr
+      JOIN vcs_pull_request pr ON pr.id = ipr.pull_request_id
+      WHERE ipr.issue_id = i.id AND pr.state <> 'merged'
+  )
 RETURNING i.*;

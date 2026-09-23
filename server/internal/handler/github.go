@@ -1553,6 +1553,12 @@ func (h *Handler) mirrorPullRequestForWorkspace(ctx context.Context, wsID pgtype
 		Deletions:           p.PullRequest.Deletions,
 		ChangedFiles:        p.PullRequest.ChangedFiles,
 	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		// A stale redelivery: the stored row is newer, and the newer event
+		// already linked and published. Acting on this one would roll links
+		// and merge detection back.
+		return
+	}
 	if err != nil {
 		slog.Warn("github: upsert pr failed", "err", err)
 		return

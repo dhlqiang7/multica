@@ -89,6 +89,10 @@ SELECT * FROM github_pending_installation WHERE installation_id = $1
 --      mergeability, and silently clobbering a known clean/dirty would lose
 --      information that GitHub only re-computes lazily.
 -- INSERT path always writes the incoming value (NULL acceptable for a new row).
+--
+-- GitHub may deliver events out of order. An event older than the stored row
+-- (pr_updated_at) updates nothing and returns no row, so a late "opened" can't
+-- roll a merged PR back to open — the same guard UpsertVCSPullRequest has.
 INSERT INTO github_pull_request (
     workspace_id, installation_id, repo_owner, repo_name, pr_number,
     title, state, html_url, branch, author_login, author_avatar_url,
@@ -123,6 +127,7 @@ ON CONFLICT (workspace_id, repo_owner, repo_name, pr_number) DO UPDATE SET
     deletions     = EXCLUDED.deletions,
     changed_files = EXCLUDED.changed_files,
     updated_at = now()
+WHERE EXCLUDED.pr_updated_at >= github_pull_request.pr_updated_at
 RETURNING *;
 
 -- name: GetGitHubPullRequest :one
