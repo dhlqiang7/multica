@@ -21,7 +21,6 @@ const mocks = vi.hoisted(() => ({
     sortDirection: "asc" as string,
     hiddenColumns: [] as string[],
     filters: {
-      usage: [] as string[],
       origins: [] as string[],
       agents: [] as string[],
       creators: [] as string[],

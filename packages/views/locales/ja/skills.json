@@ -44,7 +44,8 @@
       "fallback": "スキル一覧の取得中に問題が発生しました。",
       "retry": "再試行"
     },
-    "supporting_data_warning": "一部のワークスペースデータを読み込めませんでした。作成者の表示、ランタイム名、編集権限が不完全に見える場合があります。"
+    "supporting_data_warning": "一部のワークスペースデータを読み込めませんでした。作成者の表示、ランタイム名、編集権限が不完全に見える場合があります。",
+    "status_aria": "使用状況でスキルを絞り込む"
   },
   "table": {
     "name": "名前",
@@ -103,7 +104,6 @@
     "filter_label": "フィルター",
     "filter_active_count_other": "{{count}} 件のフィルター",
     "clear_filters": "フィルターを解除",
-    "section_usage": "使用状況",
     "section_labels": "ラベル",
     "filter_search_placeholder": "フィルター...",
     "no_labels": "まだラベルがありません",
@@ -228,6 +228,11 @@
       "mode_preview": "プレビュー",
       "mode_edit": "編集",
       "mode_raw": "プレーンテキスト"
+    },
+    "more_actions_aria": "その他の操作",
+    "rail": {
+      "toggle_aria": "{{name}} でこのスキルを使う",
+      "toggle_failed": "エージェントを更新できませんでした"
     }
   },
   "create": {

@@ -36,9 +36,9 @@ export type SkillOriginType =
   | "skills_sh"
   | "github";
 
-/** Multi-select filter state. Empty array per dimension = inactive. */
+/** Multi-select filter state. Empty array per dimension = inactive. Usage
+ *  (in use / unused) is the list's status tabs, not a filter here. */
 export interface SkillListFilters {
-  usage: ("used" | "unused")[];
   origins: SkillOriginType[];
   agents: string[];
   creators: string[];
@@ -46,7 +46,6 @@ export interface SkillListFilters {
 }
 
 export const EMPTY_SKILL_FILTERS: SkillListFilters = {
-  usage: [],
   origins: [],
   agents: [],
   creators: [],
@@ -63,7 +62,10 @@ export type SkillColumnKey =
   | "created";
 
 /** Source and created are opt-in: hidden until the user enables them. */
-export const DEFAULT_HIDDEN_COLUMNS: SkillColumnKey[] = ["source", "created"];
+/** Source is on by default — where a skill came from decides whether it can
+ *  be refreshed and who maintains it. Creator and creation date are one
+ *  toggle away. */
+export const DEFAULT_HIDDEN_COLUMNS: SkillColumnKey[] = ["creator", "created"];
 
 export interface SkillsViewState {
   sortField: SkillSortField;
@@ -138,6 +140,14 @@ export const useSkillsViewStore = create<SkillsViewState>()(
         hiddenColumns: state.hiddenColumns,
         filters: state.filters,
       }),
+      // v1 (MUL-7661): source became a default column and usage moved to
+      // the status tabs, so column choices restart from the new defaults.
+      version: 1,
+      migrate: (persisted, version) => {
+        const p = (persisted ?? {}) as Partial<SkillsViewState>;
+        if (version < 1) return { ...p, hiddenColumns: DEFAULT_HIDDEN_COLUMNS };
+        return p;
+      },
       // On rehydrate, if the new workspace has no persisted value, reset to
       // the defaults instead of leaving the previous workspace's in-memory
       // view state in place (same rationale as the agents view store).
@@ -147,10 +157,16 @@ export const useSkillsViewStore = create<SkillsViewState>()(
         // Deep-merge filters so a payload persisted before a new filter
         // dimension existed still gets that key's default instead of
         // dropping it to undefined (which crashes `.length` reads).
+        const filters = { ...EMPTY_SKILL_FILTERS, ...(p.filters ?? {}) };
         return {
           ...current,
           ...p,
-          filters: { ...EMPTY_SKILL_FILTERS, ...(p.filters ?? {}) },
+          filters: {
+            origins: filters.origins,
+            agents: filters.agents,
+            creators: filters.creators,
+            labels: filters.labels,
+          },
         };
       },
     },

@@ -48,7 +48,10 @@ describe("useSkillsViewStore", () => {
     localStorage.setItem(
       "multica_skills_view:acme",
       JSON.stringify({
-        state: { filters: { usage: ["used"], origins: [], agents: [], creators: [] } },
+        state: {
+          hiddenColumns: ["source", "created"],
+          filters: { usage: ["used"], origins: ["github"], agents: [], creators: [] },
+        },
         version: 0,
       }),
     );
@@ -57,8 +60,12 @@ describe("useSkillsViewStore", () => {
     await flush();
     await flush();
 
-    const filters = useSkillsViewStore.getState().filters;
+    const { filters, hiddenColumns } = useSkillsViewStore.getState();
     expect(filters.labels).toEqual([]);
-    expect(filters.usage).toEqual(["used"]);
+    expect(filters.origins).toEqual(["github"]);
+    // Usage became the status tabs (MUL-7661); a saved usage filter would
+    // otherwise narrow the list with no control left to clear it.
+    expect(filters).not.toHaveProperty("usage");
+    expect(hiddenColumns).toEqual(["creator", "created"]);
   });
 });

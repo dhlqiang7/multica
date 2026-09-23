@@ -9,7 +9,6 @@ import {
   Filter,
   HardDrive,
   Pencil,
-  Search,
   X,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
@@ -29,7 +28,6 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
-import { Input } from "@multica/ui/components/ui/input";
 import {
   Popover,
   PopoverContent,
@@ -54,6 +52,7 @@ import { LabelChip } from "../../labels/label-chip";
 import { useT } from "../../i18n";
 import type { SkillRow } from "./skill-list-filter";
 import { PAGE_TOOLBAR } from "../../layout/page-header";
+import { StatusSummaryTabs } from "../../layout/status-summary";
 
 export type OriginType = SkillOriginType;
 
@@ -71,7 +70,6 @@ export function countActiveFilterDimensions(
   filters: SkillListFilters,
 ): number {
   let count = 0;
-  if (filters.usage.length > 0) count++;
   if (filters.origins.length > 0) count++;
   if (filters.agents.length > 0) count++;
   if (filters.creators.length > 0) count++;
@@ -93,9 +91,16 @@ function originIcon(type: OriginType) {
   return <Download className="size-3.5" />;
 }
 
+/** Status tabs above the list. Skills have no run state, so the tabs
+ *  split them by use instead. */
+export type SkillStatusTab = "all" | "used" | "unused" | "mine";
+
+const STATUS_TABS: SkillStatusTab[] = ["all", "used", "unused", "mine"];
+
 export function SkillListToolbar({
-  search,
-  onSearchChange,
+  statusTab,
+  onStatusTabChange,
+  statusCounts,
   filters,
   onToggleFilter,
   onClearFilters,
@@ -106,10 +111,10 @@ export function SkillListToolbar({
   hiddenColumns,
   onToggleColumn,
   allRows,
-  visibleCount,
 }: {
-  search: string;
-  onSearchChange: (v: string) => void;
+  statusTab: SkillStatusTab;
+  onStatusTabChange: (tab: SkillStatusTab) => void;
+  statusCounts: Record<SkillStatusTab, number>;
   filters: SkillListFilters;
   onToggleFilter: (key: keyof SkillListFilters, value: string) => void;
   onClearFilters: () => void;
@@ -121,8 +126,6 @@ export function SkillListToolbar({
   onToggleColumn: (key: SkillColumnKey) => void;
   /** Unfiltered rows — option lists and counts derive from the full set. */
   allRows: SkillRow[];
-  /** Rows surviving search + filters — shown as "n / total" when narrowed. */
-  visibleCount: number;
 }) {
   const { t } = useT("skills");
   const [labelSearch, setLabelSearch] = useState("");
@@ -134,9 +137,6 @@ export function SkillListToolbar({
 
   // Option lists with counts, derived from the unfiltered rows so toggling
   // one dimension doesn't make the others' options vanish.
-  const usedCount = allRows.filter((r) => r.agents.length > 0).length;
-  const unusedCount = allRows.length - usedCount;
-
   const originCounts = new Map<OriginType, number>();
   const agentOptions = new Map<string, { agent: Agent; count: number }>();
   const creatorOptions = new Map<
@@ -196,30 +196,17 @@ export function SkillListToolbar({
 
   return (
     <div className={PAGE_TOOLBAR}>
-      {/* Left: name search + result count. The count only appears while
-          search/filters narrow the list — in the idle state it would just
-          duplicate the total already shown in the page header. Below md the
-          search (and its count) disappear entirely, following the issues
-          header's small-screen treatment. */}
       <div className="flex min-w-0 items-center gap-2">
-        <div className="relative hidden md:block">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(e) => onSearchChange(e.target.value)}
-            aria-label={t(($) => $.page.search_placeholder)}
-            placeholder={t(($) => $.page.search_placeholder)}
-            className="h-8 w-64 pl-8 text-body"
-          />
-        </div>
-        {(hasActiveFilters || search.trim().length > 0) && (
-          <span
-            title={t(($) => $.toolbar.result_count_title)}
-            className="hidden shrink-0 text-caption tabular-nums text-muted-foreground md:inline"
-          >
-            {visibleCount} / {allRows.length}
-          </span>
-        )}
+        <StatusSummaryTabs
+          items={STATUS_TABS.map((key) => ({
+            key,
+            label: t(($) => $.page.scopes[key].label),
+            count: statusCounts[key],
+          }))}
+          value={statusTab}
+          onChange={onStatusTabChange}
+          ariaLabel={t(($) => $.page.status_aria)}
+        />
       </div>
 
       <div className="flex shrink-0 items-center gap-1">
@@ -273,36 +260,6 @@ export function SkillListToolbar({
             }
           />
           <DropdownMenuContent align="end" className="w-auto">
-            {/* Usage */}
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <span className="flex-1">
-                  {t(($) => $.toolbar.section_usage)}
-                </span>
-                {filters.usage.length > 0 && (
-                  <span className="text-caption font-medium text-primary">
-                    {filters.usage.length}
-                  </span>
-                )}
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="w-auto min-w-44">
-                {(["used", "unused"] as const).map((value) => (
-                  <DropdownMenuCheckboxItem
-                    key={value}
-                    checked={filters.usage.includes(value)}
-                    onCheckedChange={() => onToggleFilter("usage", value)}
-                    className={FILTER_ITEM_CLASS}
-                  >
-                    <HoverCheck checked={filters.usage.includes(value)} />
-                    {value === "used"
-                      ? t(($) => $.page.scopes.used.label)
-                      : t(($) => $.page.scopes.unused.label)}
-                    {countBadge(value === "used" ? usedCount : unusedCount)}
-                  </DropdownMenuCheckboxItem>
-                ))}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-
             {/* Source */}
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>

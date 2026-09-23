@@ -46,7 +46,6 @@ function makeRow(
 }
 
 const EMPTY_FILTERS: SkillListFilters = {
-  usage: [],
   origins: [],
   agents: [],
   creators: [],
@@ -93,7 +92,7 @@ describe("rowMatchesFilters — labels dimension", () => {
     expect(rowMatchesFilters(neither, filters, "")).toBe(false);
   });
 
-  it("labels + usage filter: both must pass (AND)", () => {
+  it("labels + agents filter: both must pass (AND)", () => {
     const used = makeRow(
       { labels: [makeLabel("lab-1")] },
       { agents: [{ id: "agent-1" } as Agent] },
@@ -102,7 +101,7 @@ describe("rowMatchesFilters — labels dimension", () => {
     const filters: SkillListFilters = {
       ...noFilters,
       labels: ["lab-1"],
-      usage: ["used"],
+      agents: ["agent-1"],
     };
     expect(rowMatchesFilters(used, filters, "")).toBe(true);
     expect(rowMatchesFilters(unused, filters, "")).toBe(false);

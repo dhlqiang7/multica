@@ -44,7 +44,8 @@
       "fallback": "Something went wrong fetching the skill list.",
       "retry": "Try again"
     },
-    "supporting_data_warning": "Some workspace data failed to load. Creator attribution, runtime names, or edit permissions may appear incomplete."
+    "supporting_data_warning": "Some workspace data failed to load. Creator attribution, runtime names, or edit permissions may appear incomplete.",
+    "status_aria": "Filter skills by use"
   },
   "table": {
     "name": "Name",
@@ -111,7 +112,6 @@
     "filter_active_count_one": "{{count}} filter",
     "filter_active_count_other": "{{count}} filters",
     "clear_filters": "Clear filters",
-    "section_usage": "Usage",
     "section_labels": "Labels",
     "filter_search_placeholder": "Filter...",
     "no_labels": "No labels yet",
@@ -243,6 +243,11 @@
       "mode_preview": "Preview",
       "mode_edit": "Edit",
       "mode_raw": "Plain text"
+    },
+    "more_actions_aria": "More actions",
+    "rail": {
+      "toggle_aria": "Use this skill in {{name}}",
+      "toggle_failed": "Couldn't update the agent"
     }
   },
   "create": {

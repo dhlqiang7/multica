@@ -23,10 +23,6 @@ export function rowMatchesFilters(
 ): boolean {
   const q = query.trim().toLowerCase();
   if (q && !row.skill.name.toLowerCase().includes(q)) return false;
-  if (filters.usage.length > 0) {
-    const usage = row.agents.length > 0 ? "used" : "unused";
-    if (!filters.usage.includes(usage)) return false;
-  }
   if (
     filters.origins.length > 0 &&
     !filters.origins.includes(row.originType)

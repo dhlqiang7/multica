@@ -44,7 +44,8 @@
       "fallback": "스킬 목록을 가져오는 중 문제가 발생했습니다.",
       "retry": "다시 시도"
     },
-    "supporting_data_warning": "일부 워크스페이스 데이터를 불러오지 못했습니다. 생성자 표시, 런타임 이름, 수정 권한이 불완전하게 보일 수 있습니다."
+    "supporting_data_warning": "일부 워크스페이스 데이터를 불러오지 못했습니다. 생성자 표시, 런타임 이름, 수정 권한이 불완전하게 보일 수 있습니다.",
+    "status_aria": "사용 여부로 스킬 필터링"
   },
   "table": {
     "name": "이름",
@@ -103,7 +104,6 @@
     "filter_label": "필터",
     "filter_active_count_other": "필터 {{count}}개",
     "clear_filters": "필터 해제",
-    "section_usage": "사용 상태",
     "section_labels": "라벨",
     "filter_search_placeholder": "필터...",
     "no_labels": "아직 라벨이 없습니다",
@@ -228,6 +228,11 @@
       "mode_preview": "미리보기",
       "mode_edit": "편집",
       "mode_raw": "일반 텍스트"
+    },
+    "more_actions_aria": "더 보기",
+    "rail": {
+      "toggle_aria": "{{name}}에서 이 스킬 사용",
+      "toggle_failed": "에이전트를 업데이트하지 못했습니다"
     }
   },
   "create": {

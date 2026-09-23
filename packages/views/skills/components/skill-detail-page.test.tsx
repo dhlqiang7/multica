@@ -44,7 +44,15 @@ vi.mock("@multica/core/workspace/queries", () => ({
     queryKey: ["members", wsId],
     queryFn: () => Promise.resolve(membersRef.current),
   }),
-  selectSkillAssignments: () => new Map(),
+  selectSkillAssignments: (agents: Array<{ id: string; skills?: Array<{ id: string }> }>) => {
+    const map = new Map<string, unknown[]>();
+    for (const agent of agents ?? []) {
+      for (const skill of agent.skills ?? []) {
+        map.set(skill.id, [...(map.get(skill.id) ?? []), agent]);
+      }
+    }
+    return map;
+  },
   workspaceKeys: {
     skills: (wsId: string) => ["skills", wsId],
     agents: (wsId: string) => ["agents", wsId],
@@ -79,8 +87,9 @@ vi.mock("@multica/core/permissions", () => ({
 vi.mock("@multica/core/workspace/avatar-url", () => ({
   resolvePublicFileUrl: (v: string | null) => v,
 }));
+const setAgentSkillEnabled = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 vi.mock("@multica/core/api", () => ({
-  api: { updateSkill: vi.fn(), deleteSkill: vi.fn() },
+  api: { updateSkill: vi.fn(), deleteSkill: vi.fn(), setAgentSkillEnabled },
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("../hooks/use-can-edit-skill", () => ({
@@ -170,32 +179,47 @@ beforeEach(() => {
   canEditRef.current = true;
 });
 
-describe("SkillDetailPage tabs", () => {
-  it("opens on Overview and exposes exactly two tabs", async () => {
+describe("SkillDetailPage layout", () => {
+  it("opens straight on the files with SKILL.md selected, no tabs", async () => {
     renderPage();
-    const tabs = await screen.findAllByRole("tab", { name: /Overview|Files/ });
-    expect(tabs.map((t) => t.textContent)).toEqual(["Overview", "Files 2"]);
-    // A Settings tab would only hold a delete button and a read-only
-    // sentence — the skill update payload has no settings-shaped fields.
-    expect(screen.queryByRole("tab", { name: "Settings" })).toBeNull();
-    expect(
-      screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected"),
-    ).toBe("true");
+    const skillMd = await screen.findByRole("tab", { name: "SKILL.md" });
+    expect(skillMd.getAttribute("aria-selected")).toBe("true");
+    // Overview and Files used to be two tabs; the files are the page now and
+    // the fields that lived on Overview sit in the rail beside them.
+    expect(screen.queryByRole("tab", { name: "Overview" })).toBeNull();
+    expect(screen.getByLabelText("Description")).toBeTruthy();
+    expect(screen.getByLabelText("Name")).toBeTruthy();
+  });
+});
+
+describe("SkillDetailPage used-by switches", () => {
+  const agentWith = (id: string, owner: string, enabled?: boolean) => ({
+    id,
+    name: `Agent ${id}`,
+    avatar_url: null,
+    owner_id: owner,
+    archived_at: null,
+    skills: [{ id: "skill-1", name: "aiforui-animations", description: "", enabled }],
   });
 
-  it("mirrors the active tab into ?view= so the pane survives a reload", async () => {
-    const { replace } = renderPage();
-    fireEvent.click(await screen.findByRole("tab", { name: "Files 2" }));
-    expect(replace).toHaveBeenCalledWith("/acme/skills/skill-1?view=files");
+  it("pauses the skill for an agent the viewer manages", async () => {
+    agentsRef.current = [agentWith("a1", "user-1")];
+    renderPage();
+    const toggle = await screen.findByRole("switch", {
+      name: "Use this skill in Agent a1",
+    });
+    fireEvent.click(toggle);
+    expect(setAgentSkillEnabled).toHaveBeenCalledWith("a1", "skill-1", false);
   });
 
-  it("restores the Files tab from ?view=files", async () => {
-    renderPage(new URLSearchParams("view=files"));
-    expect(
-      (await screen.findByRole("tab", { name: "Files 2" })).getAttribute(
-        "aria-selected",
-      ),
-    ).toBe("true");
+  it("shows other people's agents without letting the viewer flip them", async () => {
+    agentsRef.current = [agentWith("a2", "someone-else", false)];
+    renderPage();
+    const toggle = await screen.findByRole("switch", {
+      name: "Use this skill in Agent a2",
+    });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(toggle.hasAttribute("disabled") || toggle.getAttribute("data-disabled") !== null).toBe(true);
   });
 });
 
@@ -287,7 +311,7 @@ describe("SkillDetailPage edit action (MUL-5654)", () => {
 describe("SkillDetailPage save pill", () => {
   it("is absent while clean and floats in with a change summary once dirty", async () => {
     renderPage();
-    await screen.findByRole("tab", { name: "Overview" });
+    await screen.findByLabelText("Description");
     expect(screen.queryByRole("button", { name: /Save changes/ })).toBeNull();
 
     fireEvent.change(screen.getByLabelText("Description"), {
@@ -358,7 +382,7 @@ describe("SkillDetailPage draft baseline (MUL-5645)", () => {
   it("opens clean when the description carries a trailing newline", async () => {
     skillRef.current = { ...baseSkill, description: `${LONG_DESCRIPTION}\n` };
     renderPage();
-    await screen.findAllByRole("tab", { name: /Overview|Files/ });
+    await screen.findByLabelText("Description");
     expect(screen.queryByText(/^Changed:/)).toBeNull();
   });
 
@@ -375,7 +399,7 @@ describe("SkillDetailPage draft baseline (MUL-5645)", () => {
 
   it("pulls a remote edit in silently while the draft is untouched", async () => {
     const { queryClient } = renderPage();
-    await screen.findAllByRole("tab", { name: /Overview|Files/ });
+    await screen.findByLabelText("Description");
 
     await remoteUpdate(queryClient, { description: "Rewritten by the agent" });
 
@@ -388,7 +412,7 @@ describe("SkillDetailPage draft baseline (MUL-5645)", () => {
 
   it("pulls a remote SKILL.md edit in silently too", async () => {
     const { queryClient } = renderPage(new URLSearchParams("view=files"));
-    await screen.findAllByRole("tab", { name: /Overview|Files/ });
+    await screen.findByLabelText("Description");
 
     await remoteUpdate(queryClient, {
       content: `${baseSkill.content}\n## Added remotely\n`,
@@ -484,22 +508,19 @@ describe("SkillDetailPage rail", () => {
   it("keeps the read-only capability banner on the shared rail", async () => {
     canEditRef.current = false;
     renderPage();
-    await screen.findAllByRole("tab", { name: /Overview|Files/ });
-
-    const banner = document.body.querySelector(
-      `.${RAIL_SENTINEL}.${GUTTER_SENTINEL}.pt-3`,
-    );
-    expect(banner).toBeTruthy();
+    const banner = await screen.findByTestId("capability-banner");
+    expect(banner.parentElement?.className).toContain(RAIL_SENTINEL);
+    expect(banner.parentElement?.className).toContain(GUTTER_SENTINEL);
   });
 
-  it("puts the identity strip and the tab row on that same rail", async () => {
+  it("puts the header and the file browser on that same rail", async () => {
     renderPage();
-    await screen.findAllByRole("tab", { name: /Overview|Files/ });
+    await screen.findByLabelText("Description");
 
     const railed = document.body.querySelectorAll(
       `.${RAIL_SENTINEL}.${GUTTER_SENTINEL}`,
     );
-    // Identity strip, tab row and the Overview panel at minimum.
-    expect(railed.length).toBeGreaterThanOrEqual(3);
+    // Header band and the file browser grid at minimum.
+    expect(railed.length).toBeGreaterThanOrEqual(2);
   });
 });

@@ -9,6 +9,7 @@ import {
   Lock,
   Pencil,
   Plus,
+  Search,
 } from "lucide-react";
 import { SkillIcon } from "../lib/skill-icon";
 import type {
@@ -33,6 +34,7 @@ import { runtimeDisplayLabel, runtimeListOptions } from "@multica/core/runtimes"
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { Button } from "@multica/ui/components/ui/button";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
+import { Input } from "@multica/ui/components/ui/input";
 import {
   LIST_GRID_BOTTOM_CLEARANCE,
   ListGrid,
@@ -70,7 +72,7 @@ import {
   type SkillColumnKey,
   type SkillSortField,
 } from "@multica/core/skills/stores";
-import { SkillListToolbar } from "./skill-list-toolbar";
+import { SkillListToolbar, type SkillStatusTab } from "./skill-list-toolbar";
 import {
   SkillBatchToolbar,
   SkillRowActions,
@@ -110,9 +112,10 @@ const GRID_COLS =
   "grid-cols-[0.75rem_1rem_minmax(120px,1fr)_var(--lgc-usedby)_1.75rem_0.75rem] " +
   "@2xl:grid-cols-[0.75rem_1rem_minmax(200px,1fr)_var(--lgc-usedby)_var(--lgc-source)_var(--lgc-creator)_var(--lgc-updated)_var(--lgc-created)_1.75rem_0.75rem]";
 
-// h-12 rows. The virtualizer's fixed-size contract: every row renders at
-// exactly this height, which is what lets it skip per-row measurement.
-const ROW_HEIGHT = 48;
+// Two-line rows (name + the description an agent matches on). The
+// virtualizer's fixed-size contract: every row renders at exactly this
+// height, which is what lets it skip per-row measurement.
+const ROW_HEIGHT = 60;
 
 // Single source for hideable column widths: track vars and the grid's
 // min-width derive from the same numbers.
@@ -164,9 +167,13 @@ export { rowMatchesFilters, type SkillRow } from "./skill-list-filter";
 function PageHeaderBar({
   totalCount,
   onCreate,
+  search,
+  onSearchChange,
 }: {
   totalCount: number;
   onCreate: () => void;
+  search?: string;
+  onSearchChange?: (value: string) => void;
 }) {
   const { t, i18n } = useT("skills");
   return (
@@ -180,11 +187,25 @@ function PageHeaderBar({
         label: t(($) => $.page.learn_more),
       }}
       actions={
-        <CollectionPageHeaderAction
-          icon={Plus}
-          label={t(($) => $.page.new_skill)}
-          onClick={onCreate}
-        />
+        <>
+          {onSearchChange ? (
+            <div className="relative hidden md:block">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(e) => onSearchChange(e.target.value)}
+                aria-label={t(($) => $.page.search_placeholder)}
+                placeholder={t(($) => $.page.search_placeholder)}
+                className="h-8 w-56 pl-8 text-body"
+              />
+            </div>
+          ) : null}
+          <CollectionPageHeaderAction
+            icon={Plus}
+            label={t(($) => $.page.new_skill)}
+            onClick={onCreate}
+          />
+        </>
       }
     />
   );
@@ -234,20 +255,32 @@ function NameCell({ row }: { row: SkillRow }) {
   const { t } = useT("skills");
   const { skill, canEdit } = row;
   return (
-    <ListGridCell className="gap-1.5">
-      <span className="min-w-0 truncate text-body font-medium">
-        {skill.name}
+    <ListGridCell className="gap-3">
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-surface-border bg-surface text-muted-foreground">
+        <SkillIcon aria-hidden="true" className="size-4" />
       </span>
-      {!canEdit && (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Lock className="h-3 w-3 shrink-0 text-faint-foreground" />
-            }
-          />
-          <TooltipContent>{t(($) => $.table.lock_tooltip)}</TooltipContent>
-        </Tooltip>
-      )}
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="min-w-0 truncate font-mono text-body font-medium">
+            {skill.name}
+          </span>
+          {!canEdit && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Lock className="h-3 w-3 shrink-0 text-faint-foreground" />
+                }
+              />
+              <TooltipContent>{t(($) => $.table.lock_tooltip)}</TooltipContent>
+            </Tooltip>
+          )}
+        </div>
+        {skill.description ? (
+          <div className="mt-0.5 truncate text-caption text-muted-foreground">
+            {skill.description}
+          </div>
+        ) : null}
+      </div>
     </ListGridCell>
   );
 }
@@ -535,13 +568,13 @@ function LoadingSkeleton() {
         <ListGridHeaderCell>
           <Skeleton className="h-3 w-14" />
         </ListGridHeaderCell>
-        {/* Source and created are hidden by default — keep their tracks
+        {/* Creator and created are hidden by default — keep their tracks
             mapped with empty placeholders so the skeleton matches the
             default layout. */}
-        <ListGridHeaderCell className="hidden px-0 @2xl:flex" />
         <ListGridHeaderCell className="hidden @2xl:flex">
           <Skeleton className="h-3 w-10" />
         </ListGridHeaderCell>
+        <ListGridHeaderCell className="hidden px-0 @2xl:flex" />
         <ListGridHeaderCell className="hidden @2xl:flex">
           <Skeleton className="h-3 w-12" />
         </ListGridHeaderCell>
@@ -549,19 +582,22 @@ function LoadingSkeleton() {
         <span aria-hidden="true" />
       </ListGridHeader>
       {Array.from({ length: 5 }).map((_, i) => (
-        <ListGridRow key={i} className="hover:bg-transparent">
+        <ListGridRow key={i} className="h-[60px] hover:bg-transparent">
           <span aria-hidden="true" />
-          <ListGridCell>
-            <Skeleton className="h-3.5 w-40 max-w-full" />
+          <ListGridCell className="gap-3">
+            <Skeleton className="size-8 rounded-lg" />
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <Skeleton className="h-3.5 w-40 max-w-full" />
+              <Skeleton className="h-3 w-56 max-w-full" />
+            </div>
           </ListGridCell>
           <ListGridCell>
             <Skeleton className="h-5 w-14" />
           </ListGridCell>
-          <ListGridCell className="hidden px-0 @2xl:flex" />
-          <ListGridCell className="hidden gap-1.5 @2xl:flex">
-            <Skeleton className="size-5 rounded-full" />
-            <Skeleton className="h-3 w-12" />
+          <ListGridCell className="hidden @2xl:flex">
+            <Skeleton className="h-3 w-24" />
           </ListGridCell>
+          <ListGridCell className="hidden px-0 @2xl:flex" />
           <ListGridCell className="hidden @2xl:flex">
             <Skeleton className="h-3 w-10" />
           </ListGridCell>
@@ -607,6 +643,7 @@ export default function SkillsPage() {
     new Set(),
   );
   const [search, setSearch] = useState("");
+  const [statusTab, setStatusTab] = useState<SkillStatusTab>("all");
 
   // Persisted view preferences (per workspace, per user/device). Header sort
   // buttons and the toolbar's display panel mutate the SAME store, so both
@@ -681,10 +718,38 @@ export default function SkillsPage() {
     });
   }, [skills, assignments, membersById, runtimesById, currentUserId, myRole]);
 
-  // Visible rows: name search + filters, then sort.
+  // Search + filters first; the status tab counts describe what they left.
+  const filteredRows = useMemo(
+    () => allRows.filter((row) => rowMatchesFilters(row, filters, search)),
+    [allRows, filters, search],
+  );
+  const statusCounts = useMemo(() => {
+    const counts: Record<SkillStatusTab, number> = {
+      all: filteredRows.length,
+      used: 0,
+      unused: 0,
+      mine: 0,
+    };
+    for (const row of filteredRows) {
+      if (row.agents.length > 0) counts.used += 1;
+      else counts.unused += 1;
+      if (currentUserId && row.skill.created_by === currentUserId) {
+        counts.mine += 1;
+      }
+    }
+    return counts;
+  }, [filteredRows, currentUserId]);
+
+  // Visible rows: the status tab, then sort.
   const rows = useMemo<SkillRow[]>(() => {
-    const filtered = allRows.filter((row) =>
-      rowMatchesFilters(row, filters, search),
+    const filtered = filteredRows.filter((row) =>
+      statusTab === "all"
+        ? true
+        : statusTab === "used"
+          ? row.agents.length > 0
+          : statusTab === "unused"
+            ? row.agents.length === 0
+            : !!currentUserId && row.skill.created_by === currentUserId,
     );
 
     const dir = sortDirection === "asc" ? 1 : -1;
@@ -709,7 +774,7 @@ export default function SkillsPage() {
       );
     });
     return filtered;
-  }, [allRows, search, filters, sortField, sortDirection]);
+  }, [filteredRows, statusTab, currentUserId, sortField, sortDirection]);
 
   // Row virtualization — Linear-style: the virtualizer only does the math
   // (visible index range + offsets); the DOM stays ours. Offsets become
@@ -793,6 +858,8 @@ export default function SkillsPage() {
       <PageHeaderBar
         totalCount={totalCount}
         onCreate={() => setCreateOpen(true)}
+        search={search}
+        onSearchChange={showEmpty ? undefined : setSearch}
       />
 
       {supportingQueryDown && (
@@ -816,8 +883,9 @@ export default function SkillsPage() {
       ) : (
         <>
           <SkillListToolbar
-            search={search}
-            onSearchChange={setSearch}
+            statusTab={statusTab}
+            onStatusTabChange={setStatusTab}
+            statusCounts={statusCounts}
             filters={filters}
             onToggleFilter={toggleFilter}
             onClearFilters={clearFilters}
@@ -828,7 +896,6 @@ export default function SkillsPage() {
             hiddenColumns={hiddenColumns}
             onToggleColumn={toggleColumn}
             allRows={allRows}
-            visibleCount={rows.length}
           />
           <div
             ref={listScrollRef}
@@ -865,7 +932,7 @@ export default function SkillsPage() {
                 return (
               <ListGridRow
                 key={row.skill.id}
-                className={`cursor-pointer ${
+                className={`h-[60px] cursor-pointer ${
                   selectedIds.has(row.skill.id) ? "bg-accent/30" : ""
                 }`}
                 {...rowLink(paths.skillDetail(row.skill.id), row.skill.name)}

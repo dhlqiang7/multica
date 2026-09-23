@@ -44,7 +44,8 @@
       "fallback": "Une erreur est survenue lors de la récupération de la liste des skills.",
       "retry": "Réessayer"
     },
-    "supporting_data_warning": "Certaines données de l'espace de travail n'ont pas pu être chargées. L'attribution des créateurs, les noms de runtimes ou les droits de modification peuvent apparaître incomplets."
+    "supporting_data_warning": "Certaines données de l'espace de travail n'ont pas pu être chargées. L'attribution des créateurs, les noms de runtimes ou les droits de modification peuvent apparaître incomplets.",
+    "status_aria": "Filtrer les skills par utilisation"
   },
   "table": {
     "name": "Nom",
@@ -111,7 +112,6 @@
     "filter_active_count_one": "{{count}} filtre",
     "filter_active_count_other": "{{count}} filtres",
     "clear_filters": "Effacer les filtres",
-    "section_usage": "Utilisation",
     "section_labels": "Étiquettes",
     "filter_search_placeholder": "Filtrer...",
     "no_labels": "Aucune étiquette pour l'instant",
@@ -243,6 +243,11 @@
       "mode_preview": "Aperçu",
       "mode_edit": "Modifier",
       "mode_raw": "Texte brut"
+    },
+    "more_actions_aria": "Plus d’actions",
+    "rail": {
+      "toggle_aria": "Utiliser ce skill dans {{name}}",
+      "toggle_failed": "Impossible de mettre à jour l’agent"
     }
   },
   "create": {
