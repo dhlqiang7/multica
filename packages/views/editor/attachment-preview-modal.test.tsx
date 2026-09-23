@@ -1010,6 +1010,18 @@ describe("AttachmentPreviewModal — image zoom", () => {
     expect(currentScale()).toBeCloseTo(0.5 * 1.2, 5);
   });
 
+  // The focus placed on open is for the keyboard controls; drawn as a ring it
+  // framed the whole full-window stage. It stays marked (CSS drops the ring)
+  // until focus leaves, so a reader tabbing back in still sees one.
+  it("keeps the focus ring off for the focus it places itself", () => {
+    stubNaturalSize({ width: 1600, height: 800 });
+    renderImagePreview();
+
+    expect(zoomCanvas()).toHaveAttribute("data-autofocused");
+    fireEvent.blur(zoomCanvas());
+    expect(zoomCanvas()).not.toHaveAttribute("data-autofocused");
+  });
+
   it("re-fits on reopen instead of restoring the previous zoom", async () => {
     stubNaturalSize({ width: 1600, height: 800 });
     const att = imageAttachment();
