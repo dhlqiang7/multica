@@ -16,14 +16,13 @@ import (
 const (
 	defaultTaskSupplementPollInterval  = 5 * time.Second
 	defaultTaskSupplementReadyInterval = 50 * time.Millisecond
-	taskSupplementInjectTimeout        = 8 * time.Second
 	taskSupplementAckTimeout           = 5 * time.Second
 )
 
 // taskSupplementSignals routes best-effort WebSocket hints to one exact
 // in-flight task. A one-slot channel coalesces duplicate hints. Creating the
 // slot before provider launch preserves a hint sent after the server marks the
-// task running but before Codex reports turn/started.
+// task running but before the provider confirms an active turn.
 type taskSupplementSignals struct {
 	mu     sync.Mutex
 	byTask map[string]chan struct{}
@@ -156,7 +155,7 @@ func taskSupplementFailureReason(ctx context.Context, err error) string {
 }
 
 // runTaskSupplementLoop serially claims and acknowledges durable additions for
-// one negotiated run. It performs no HTTP request until Codex confirms a live
+// one negotiated run. It performs no HTTP request until the provider confirms a live
 // turn, wakes immediately on a content-free WebSocket hint, and otherwise uses
 // the same five-second cadence as task cancellation polling.
 func (d *Daemon) runTaskSupplementLoop(ctx, parentCtx context.Context, session *agent.Session, taskID string, wakeup <-chan struct{}, taskLog *slog.Logger) {
@@ -197,10 +196,11 @@ func (d *Daemon) runTaskSupplementLoop(ctx, parentCtx context.Context, session *
 			continue
 		}
 
-		injectCtx, cancelInject := context.WithTimeout(ctx, taskSupplementInjectTimeout)
-		injectErr := session.Supplement(injectCtx, formatTaskSupplementInstruction(supplement.AuthorName, supplement.Content))
-		reason := taskSupplementFailureReason(injectCtx, injectErr)
-		cancelInject()
+		// The adapter owns transport deadlines. Hook-based providers wait for a
+		// safe boundary, which can follow a long-running tool; run cancellation
+		// still aborts that wait and prevents late delivery.
+		injectErr := session.Supplement(ctx, formatTaskSupplementInstruction(supplement.AuthorName, supplement.Content))
+		reason := taskSupplementFailureReason(ctx, injectErr)
 		if injectErr != nil {
 			// Raw provider/Go diagnostics remain local. Workspace-visible state is
 			// restricted to the stable reason code sent below.

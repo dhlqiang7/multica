@@ -1944,6 +1944,8 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 }
 
 func supplementCodexTurn(ctx context.Context, c *codexClient, instruction string) error {
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
 	threadID := c.getThreadID()
 	turnID := c.activeTurnID()
 	if threadID == "" || turnID == "" {

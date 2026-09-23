@@ -168,9 +168,11 @@ func TestTaskSupplementLoopUsesStableFailureReason(t *testing.T) {
 
 type supplementGateBackend struct {
 	supplementCalls atomic.Int32
+	enabled         bool
 }
 
-func (b *supplementGateBackend) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
+func (b *supplementGateBackend) Execute(_ context.Context, _ string, opts agent.ExecOptions) (*agent.Session, error) {
+	b.enabled = opts.EnableTaskSupplement
 	messages := make(chan agent.Message)
 	close(messages)
 	results := make(chan agent.Result, 1)
@@ -201,6 +203,20 @@ func TestExecuteAndDrainUnnegotiatedMakesNoSupplementRequest(t *testing.T) {
 	}
 	if got := backend.supplementCalls.Load(); got != 0 {
 		t.Fatalf("supplement calls = %d, want 0", got)
+	}
+	if backend.enabled {
+		t.Fatal("unnegotiated run enabled provider hooks")
+	}
+}
+
+func TestExecuteAndDrainNegotiatedEnablesProviderHooks(t *testing.T) {
+	d := taskSupplementTestDaemon(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) })
+	backend := &supplementGateBackend{}
+	if _, _, err := d.executeAndDrain(t.Context(), backend, "original", agent.ExecOptions{}, d.logger, "task-negotiated", "", new(atomic.Int32), true); err != nil {
+		t.Fatal(err)
+	}
+	if !backend.enabled {
+		t.Fatal("negotiated run did not enable provider hooks")
 	}
 }
 

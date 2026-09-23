@@ -8382,7 +8382,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// "start task failed: <…>" string and the same failure_reason
 	// taxonomy as before — see MUL-2946 for the classifier contract.
 	var taskCapabilities []string
-	if provider == "codex" && task.IssueID != "" {
+	if (provider == "codex" || provider == "claude") && task.IssueID != "" {
 		taskCapabilities = append(taskCapabilities, protocol.DaemonCapabilityTaskSupplementV1)
 	}
 	taskSupplementNegotiated, err := d.client.StartTask(prepareCtx, task.ID, taskCapabilities...)
@@ -9297,6 +9297,8 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 	agentCtx, agentCancel := context.WithCancel(ctx)
 	defer agentCancel()
 
+	negotiatedSupplements := len(taskSupplementNegotiated) > 0 && taskSupplementNegotiated[0]
+	opts.EnableTaskSupplement = negotiatedSupplements
 	session, err := backend.Execute(agentCtx, prompt, opts)
 	if err != nil {
 		// One provider-agnostic boundary for launches: every backend's
@@ -9322,7 +9324,6 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 	// stops, while old-daemon/new-server never negotiated support.
 	supplementCtx, cancelSupplements := context.WithCancel(agentCtx)
 	supplementsDone := make(chan struct{})
-	negotiatedSupplements := len(taskSupplementNegotiated) > 0 && taskSupplementNegotiated[0]
 	if negotiatedSupplements && session.Supplement != nil && session.SupplementReady != nil {
 		wakeup, unsubscribe := d.taskSupplementWakeup(taskID)
 		go func() {
