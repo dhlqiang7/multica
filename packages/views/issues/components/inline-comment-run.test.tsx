@@ -139,6 +139,52 @@ describe("InlineCommentRun", () => {
     expect(input).toHaveValue("preserve this draft");
   });
 
+  it.each([false, true])("settles a sent draft after the run remounts (edited: %s)", async (edited) => {
+    vi.mocked(api.listTaskMessages).mockResolvedValue([]);
+    const comment = {
+      id: "supplement-comment", issue_id: "issue", author_type: "member" as const, author_id: "user",
+      content: "Create a rollback note.", type: "comment" as const, parent_id: null, reactions: [], attachments: [],
+      created_at: "2026-09-07T00:00:10Z", updated_at: "2026-09-07T00:00:10Z",
+      resolved_at: null, resolved_by_type: null, resolved_by_id: null,
+      supplement_task_id: id, supplement_status: "pending" as const,
+    };
+    let resolveRequest!: (value: typeof comment) => void;
+    const request = new Promise<typeof comment>((resolve) => { resolveRequest = resolve; });
+    vi.mocked(api.createTaskSupplement).mockReturnValue(request);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const current = task({ supplement_capability: "task-supplement-v1", can_supplement: true });
+    const view = (commentId: string) => <QueryClientProvider client={client}>
+      <PlacedInlineCommentRun key={commentId} run={{ task: current, commentId, hasReply: false }} />
+    </QueryClientProvider>;
+    const rendered = renderWithI18n(view("comment"));
+    fireEvent.click(screen.getByRole("button", { name: "Add message" }));
+    const input = screen.getByPlaceholderText("Add guidance for this running turn");
+    fireEvent.change(input, { target: { value: comment.content } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(api.createTaskSupplement).toHaveBeenCalledWith(
+      "issue", id, comment.content, expect.any(String),
+    ));
+
+    // A realtime comment can re-anchor the run before the send response arrives.
+    rendered.rerender(view(comment.id));
+    const remountedInput = screen.getByPlaceholderText("Add guidance for this running turn");
+    expect(remountedInput).not.toBe(input);
+    expect(remountedInput).toHaveValue(comment.content);
+    if (edited) fireEvent.change(remountedInput, { target: { value: "A newer unsent draft." } });
+
+    await act(async () => resolveRequest(comment));
+    await waitFor(() => expect(client.getMutationCache().getAll()[0]?.state.status).toBe("success"));
+    if (edited) {
+      expect(screen.getByPlaceholderText("Add guidance for this running turn")).toHaveValue("A newer unsent draft.");
+    } else {
+      expect(screen.queryByPlaceholderText("Add guidance for this running turn")).not.toBeInTheDocument();
+      expect(useTaskSupplementDraftStore.getState().drafts[id]).toBeUndefined();
+      fireEvent.click(screen.getByRole("button", { name: "Add message" }));
+      expect(screen.getByPlaceholderText("Add guidance for this running turn")).toHaveValue("");
+    }
+    client.clear();
+  });
+
   it("keeps the task draft through reply placement changes and a full remount", () => {
     vi.mocked(api.listTaskMessages).mockResolvedValue([]);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });

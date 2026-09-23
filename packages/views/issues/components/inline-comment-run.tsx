@@ -155,9 +155,6 @@ export function InlineCommentRun({ run, className, viewState, showIdentity = fal
     const clientRequestId = supplementDraft?.clientRequestId ?? crypto.randomUUID();
     useTaskSupplementDraftStore.getState().setRequestId(task.id, clientRequestId);
     supplement.mutate({ taskId: task.id, content, clientRequestId }, {
-      onSuccess: () => {
-        useTaskSupplementDraftStore.getState().clear(task.id);
-      },
       onError: (error) => {
         const code = dispatchReasonCode(error);
         if (code === "task_supplement_turn_ended") {

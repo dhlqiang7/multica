@@ -37,7 +37,7 @@ import {
 } from "./delete-cache";
 import { useWorkspaceId } from "../hooks";
 import { useRecentContextStore } from "../chat/recent-context-store";
-import { useRecentIssuesStore } from "./stores";
+import { useRecentIssuesStore, useTaskSupplementDraftStore } from "./stores";
 import type { InboxItem, Issue, IssueReaction } from "../types";
 import type {
   CreateCommentSubIssueManualRequest,
@@ -1206,7 +1206,13 @@ export function useCreateTaskSupplement(issueId: string) {
       content: string;
       clientRequestId: string;
     }) => api.createTaskSupplement(issueId, taskId, content, clientRequestId),
-    onSuccess: (comment) => {
+    onSuccess: (comment, { taskId, clientRequestId }) => {
+      // Re-anchoring the run can unmount its composer before this response.
+      // Clear the submitted draft here, without discarding any newer edits.
+      const drafts = useTaskSupplementDraftStore.getState();
+      if (drafts.drafts[taskId]?.clientRequestId === clientRequestId) {
+        drafts.clear(taskId);
+      }
       const entry: TimelineEntry = {
         type: "comment",
         id: comment.id,
