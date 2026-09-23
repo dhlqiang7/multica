@@ -1,12 +1,13 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Check, CornerDownRight, Loader2, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { taskMessagesOptions } from "@multica/core/chat/queries";
 import { useCreateComment, useRetryTaskSupplement } from "@multica/core/issues/mutations";
-import { issueTasksOptions } from "@multica/core/issues/queries";
+import { api } from "@multica/core/api";
+import { issueKeys, issueTasksOptions } from "@multica/core/issues/queries";
 import { commentSupplementReceipts, isSupplementInFlight } from "@multica/core/issues/run-steering";
 import type { AgentTask, CommentSupplementReceipt, TimelineEntry } from "@multica/core/types";
 import { useActorName } from "@multica/core/workspace/hooks";
@@ -106,6 +107,31 @@ function SteerReceipt({ issueId, entry, receipt }: {
   );
   const terminal = !!task && TERMINAL.has(task.status);
   const inFlight = isSupplementInFlight(receipt);
+  const queryClient = useQueryClient();
+  const [resending, setResending] = useState(false);
+  // Only this receipt's agent missed the message: the same text as a new
+  // comment must not reach anyone it already served, or who chose to skip it.
+  const resendToAgent = async () => {
+    const content = entry.content ?? "";
+    const parentId = entry.parent_id ?? undefined;
+    const agentId = receipt.agent_id || task?.agent_id;
+    setResending(true);
+    try {
+      const preview = await queryClient.fetchQuery({
+        queryKey: [...issueKeys.commentTriggerPreview(issueId), parentId ?? "", "", `resend:${entry.id}`],
+        queryFn: () => api.previewCommentTriggers(issueId, content, parentId),
+        staleTime: 0,
+      });
+      if (!agentId || !preview.agents.some((agent) => agent.id === agentId)) throw new Error("recipient unavailable");
+      const others = preview.agents.filter((agent) => agent.id !== agentId).map((agent) => agent.id);
+      await resend.mutateAsync({ content, parentId, suppressAgentIds: others.length > 0 ? others : undefined });
+      setResent(true);
+    } catch {
+      toast.error(t(($) => $.inline_run.steer_resend_failed));
+    } finally {
+      setResending(false);
+    }
+  };
 
   if (inFlight && !terminal) {
     return (
@@ -157,12 +183,9 @@ function SteerReceipt({ issueId, entry, receipt }: {
         </Button>
       )}
       {!resent && (
-        <Button type="button" size="xs" variant="outline" className="text-foreground" disabled={resend.isPending}
-          onClick={() => resend.mutate({ content: entry.content ?? "", parentId: entry.parent_id ?? undefined }, {
-            onSuccess: () => setResent(true),
-            onError: () => toast.error(t(($) => $.inline_run.steer_resend_failed)),
-          })}>
-          {resend.isPending ? <Loader2 className="size-3 motion-safe:animate-spin" /> : <CornerDownRight className="size-3" />}
+        <Button type="button" size="xs" variant="outline" className="text-foreground" disabled={resending || resend.isPending}
+          onClick={() => void resendToAgent()}>
+          {resending || resend.isPending ? <Loader2 className="size-3 motion-safe:animate-spin" /> : <CornerDownRight className="size-3" />}
           {t(($) => $.inline_run.steer_resend)}
         </Button>
       )}

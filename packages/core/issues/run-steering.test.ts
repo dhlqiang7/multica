@@ -81,6 +81,6 @@ describe("recipient actions", () => {
       { agentId: "c", action: "restart", state: { kind: "running", task: task({ id: "turn-c" }), steerable: false } },
       { agentId: "d", action: "after_run", state: busy },
     ]);
-    expect(routing).toEqual({ steerAgentIds: ["a"], suppressAgentIds: ["b"], restartTaskIds: ["turn-c"] });
+    expect(routing).toEqual({ steerTaskIds: [steerable.task.id], suppressAgentIds: ["b"], restartTaskIds: ["turn-c"] });
   });
 });

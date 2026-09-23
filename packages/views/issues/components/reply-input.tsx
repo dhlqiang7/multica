@@ -9,6 +9,7 @@ import { SubmitButton } from "@multica/ui/components/common/submit-button";
 import { Button } from "@multica/ui/components/ui/button";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { contentReferencesAttachment, type AgentTask } from "@multica/core/types";
+import type { CommentSteerRequest } from "@multica/core/issues/run-steering";
 import { formatShortcut, useShortcut } from "@multica/core/shortcuts";
 import { useCommentDraftStore, type CommentDraftKey } from "@multica/core/issues/stores";
 import { cn } from "@multica/ui/lib/utils";
@@ -19,6 +20,7 @@ import { useCommentTriggerPreview } from "../hooks/use-comment-trigger-preview";
 import { useRecipientActions } from "../hooks/use-recipient-actions";
 import { RecipientNotices } from "./recipient-notices";
 import { useStopRunsBeforeSend } from "./use-stop-runs-before-send";
+import { useSteerRequest } from "./use-steer-request";
 import { useCommentUploads } from "./use-comment-uploads";
 import { useQuickActionMenu } from "../hooks/use-quick-action-menu";
 
@@ -34,7 +36,7 @@ interface ReplyInputProps {
   avatarId: string;
   /** Resolves true on success, false on failure — the reply box keeps its text
    *  (locked + spinning) until then, clearing only on success. */
-  onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[], steerAgentIds?: string[]) => Promise<string | boolean>;
+  onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[], steer?: CommentSteerRequest) => Promise<string | boolean>;
   /** Called after the server accepts the reply and the composer is cleared. */
   onAccepted?: (commentId: string) => void;
   size?: "sm" | "default";
@@ -115,6 +117,7 @@ function ReplyInput({
     resetKey: `${issueId}:${parentId}`,
   });
   const stopRunsBeforeSend = useStopRunsBeforeSend(issueId);
+  const steerRequest = useSteerRequest();
 
   // Readonly-first: static shell until intent; an unsent draft mounts the
   // real editor immediately (see CommentInput). This is also what keeps the
@@ -179,7 +182,10 @@ function ReplyInput({
     afterAccepted: () => (editorScrubbedRef.current ? "refocus" : "none"),
     onSubmit: async (content) => {
       editorScrubbedRef.current = false;
-      const { suppressAgentIds, steerAgentIds, restartTaskIds } = routing;
+      const { suppressAgentIds, steerTaskIds } = routing;
+      // A preview still catching up with an edited @mention can name a
+      // recipient this comment no longer addresses: never stop a run on it.
+      const restartTaskIds = triggerPreview.isCurrent ? routing.restartTaskIds : [];
       if (!(await stopRunsBeforeSend(restartTaskIds))) return false;
       if (draftKey) {
         // Flush pending debounce before snapshotting — see CommentInput.
@@ -197,7 +203,7 @@ function ReplyInput({
         content,
         activeIds.length > 0 ? activeIds : undefined,
         suppressAgentIds.length > 0 ? suppressAgentIds : undefined,
-        steerAgentIds.length > 0 ? steerAgentIds : undefined,
+        steerRequest.request(content, steerTaskIds),
       ).then((commentId) => {
         acceptedCommentIdRef.current = typeof commentId === "string" ? commentId : null;
         return !!commentId;
@@ -221,6 +227,7 @@ function ReplyInput({
       setContent("");
       setIsEmpty(true);
       resetRecipients();
+      steerRequest.settle();
       editorScrubbedRef.current = true;
       if (acceptedCommentIdRef.current) onAccepted?.(acceptedCommentIdRef.current);
     },

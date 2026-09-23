@@ -288,6 +288,9 @@ beforeEach(() => {
   apiListWorkspaces.mockReset();
   apiListQuickActions.mockReset();
   apiRenderQuickAction.mockReset();
+  apiPreviewCommentTriggers.mockReset();
+  apiListTasksByIssue.mockReset();
+  apiCancelTask.mockReset();
   insertMarkdownSpy.mockReset();
   insertPlaceholderSpy.mockReset();
   insertMarkdownBehavior.succeed = true;
@@ -450,7 +453,8 @@ describe("comment composers", () => {
     fireEvent.change(screen.getByTestId("editor"), { target: { value: "only fix web" } });
     await screen.findByText("Add to current run");
     fireEvent.click(getSubmitButton(container));
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("only fix web", undefined, undefined, ["agent-1"]));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("only fix web", undefined, undefined,
+      { taskIds: ["turn-1"], clientRequestId: expect.any(String) }));
     expect(apiCancelTask).not.toHaveBeenCalled();
 
     fireEvent.change(screen.getByTestId("editor"), { target: { value: "start over on web" } });
@@ -460,6 +464,68 @@ describe("comment composers", () => {
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("start over on web", undefined, undefined, undefined));
     expect(apiCancelTask).toHaveBeenCalledWith("issue-1", "turn-1");
     expect(apiCancelTask.mock.invocationCallOrder[0]!).toBeLessThan(onSubmit.mock.invocationCallOrder[1]!);
+  });
+
+  it("never stops the previous recipient after the mentions change under a stale preview", async () => {
+    const turn = {
+      id: "turn-1", agent_id: "agent-1", issue_id: "issue-1", status: "running", priority: 0,
+      created_at: "2026-09-23T00:00:00Z", dispatched_at: null, started_at: "2026-09-23T00:00:01Z",
+      completed_at: null, result: null, error: null,
+      supplement_capability: "task-supplement-v1", can_supplement: true,
+    };
+    apiListTasksByIssue.mockResolvedValue([turn]);
+    apiPreviewCommentTriggers.mockResolvedValue({ agents: [{ id: "agent-1", name: "Lambda", source: "thread_parent", reason: "" }] });
+    apiCancelTask.mockResolvedValue({ ...turn, status: "cancelled" });
+    const onSubmit = vi.fn().mockResolvedValue("reply-new");
+    renderWithProviders(<ReplyInput issueId="issue-1" parentId="comment-1" avatarType="member" avatarId="user-1"
+      onSubmit={onSubmit} steerByDefault={(task) => task.id === "turn-1"} />);
+    activateComposer("reply-composer-shell");
+    fireEvent.change(screen.getByTestId("editor"), { target: { value: "start over" } });
+    fireEvent.click(await screen.findByRole("button", { name: "Lambda trigger: Add to current run" }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: /Stop and start over/ }));
+    // A slow preview still holds Lambda's restart, though the comment now
+    // explicitly addresses only a different agent.
+    apiPreviewCommentTriggers.mockImplementation(() => new Promise(() => {}));
+    fireEvent.change(screen.getByTestId("editor"), {
+      target: { value: "[@Orion](mention://agent/11111111-1111-4111-8111-111111111111) review desktop" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Stop and send" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(apiCancelTask).not.toHaveBeenCalled();
+  });
+
+  it("keeps one steering request id across retries of the same text", async () => {
+    const turn = {
+      id: "turn-1", agent_id: "agent-1", issue_id: "issue-1", status: "running", priority: 0,
+      created_at: "2026-09-23T00:00:00Z", dispatched_at: null, started_at: "2026-09-23T00:00:01Z",
+      completed_at: null, result: null, error: null,
+      supplement_capability: "task-supplement-v1", can_supplement: true,
+    };
+    apiListTasksByIssue.mockResolvedValue([turn]);
+    apiPreviewCommentTriggers.mockResolvedValue({ agents: [{ id: "agent-1", name: "Lambda", source: "thread_parent", reason: "" }] });
+    // The first attempt's response is lost; the draft stays for a retry.
+    const onSubmit = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockResolvedValue("reply-new");
+    const { container } = renderWithProviders(
+      <ReplyInput issueId="issue-1" parentId="comment-1" avatarType="member" avatarId="user-1"
+        onSubmit={onSubmit} steerByDefault={(task) => task.id === "turn-1"} />,
+    );
+    activateComposer("reply-composer-shell");
+    fireEvent.change(screen.getByTestId("editor"), { target: { value: "only fix web" } });
+    await screen.findByText("Add to current run");
+    fireEvent.click(getSubmitButton(container));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(getSubmitButton(container)).not.toBeDisabled());
+    fireEvent.click(getSubmitButton(container));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
+    const [first, retry] = onSubmit.mock.calls.map((call) => call[3]);
+    expect(retry.clientRequestId).toBe(first.clientRequestId);
+
+    // Edited text is a different send.
+    fireEvent.change(screen.getByTestId("editor"), { target: { value: "only fix web, and add a test" } });
+    await waitFor(() => expect(getSubmitButton(container)).not.toBeDisabled());
+    fireEvent.click(getSubmitButton(container));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(3));
+    expect(onSubmit.mock.calls[2]![3].clientRequestId).not.toBe(first.clientRequestId);
   });
 
   it("keeps reply submission wired after removing expand", async () => {

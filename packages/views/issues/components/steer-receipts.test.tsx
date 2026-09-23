@@ -10,7 +10,12 @@ import { SteerBadge, SteerReceipts } from "./steer-receipts";
 
 vi.mock("@multica/core/api", () => ({ api: {
   retryTaskSupplement: vi.fn(), createComment: vi.fn(), listTasksByIssue: vi.fn(), listTaskMessages: vi.fn(),
+  previewCommentTriggers: vi.fn(),
 } }));
+
+function recipients(...ids: string[]) {
+  return { agents: ids.map((id) => ({ id, name: id, source: "mention_agent", reason: "" })) };
+}
 vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "workspace" }));
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({ getActorName: (_type: string, id: string) => (id === "orion" ? "Orion" : "Lambda") }),
@@ -85,6 +90,7 @@ describe("SteerReceipts", () => {
 
   it("settles a pending receipt when its run ends first and offers a new run instead", async () => {
     vi.mocked(api.createComment).mockResolvedValue({ id: "resent" } as Comment);
+    vi.mocked(api.previewCommentTriggers).mockResolvedValue(recipients("lambda"));
     const client = render(<SteerReceipts issueId="issue" entry={entry({
       supplement_task_id: turn, supplement_status: "pending",
     })} />);
@@ -97,6 +103,22 @@ describe("SteerReceipts", () => {
       "issue", "Only fix web.", undefined, "thread", undefined, undefined, undefined,
     ));
     await waitFor(() => expect(screen.queryByRole("button", { name: "Send as a new run" })).not.toBeInTheDocument());
+  });
+
+  it("resends a failed receipt only to its own agent", async () => {
+    vi.mocked(api.createComment).mockResolvedValue({ id: "resent" } as Comment);
+    vi.mocked(api.previewCommentTriggers).mockResolvedValue(recipients("lambda", "orion"));
+    render(<SteerReceipts issueId="issue" entry={entry({
+      content: "[@Lambda](mention://agent/lambda) fix web; [@Orion](mention://agent/orion) check desktop",
+      supplements: [
+        { task_id: turn, agent_id: "lambda", status: "failed", failure_reason: "turn_ended" },
+        { task_id: "other-turn", agent_id: "orion", status: "delivered" },
+      ],
+    })} />, [task({ status: "completed" }), task({ id: "other-turn", agent_id: "orion", status: "completed" })]);
+    fireEvent.click(screen.getByRole("button", { name: "Send as a new run" }));
+    await waitFor(() => expect(api.createComment).toHaveBeenCalled());
+    const suppressed = vi.mocked(api.createComment).mock.calls[0]![5];
+    expect(suppressed).toEqual(["orion"]);
   });
 
   it("retries a stable delivery failure into the same running turn", async () => {

@@ -7,6 +7,7 @@ import { FileUploadButton } from "@multica/ui/components/common/file-upload-butt
 import { SubmitButton } from "@multica/ui/components/common/submit-button";
 import { Button } from "@multica/ui/components/ui/button";
 import { contentReferencesAttachment, type AgentTask } from "@multica/core/types";
+import type { CommentSteerRequest } from "@multica/core/issues/run-steering";
 import { formatShortcut, useShortcut } from "@multica/core/shortcuts";
 import { useCommentDraftStore } from "@multica/core/issues/stores";
 import { composeAnnotatedReply, hasReplyIntent } from "@multica/core/drafts/reply-annotation";
@@ -17,6 +18,7 @@ import { useCommentTriggerPreview } from "../hooks/use-comment-trigger-preview";
 import { useRecipientActions } from "../hooks/use-recipient-actions";
 import { RecipientNotices } from "./recipient-notices";
 import { useStopRunsBeforeSend } from "./use-stop-runs-before-send";
+import { useSteerRequest } from "./use-steer-request";
 import { useCommentUploads } from "./use-comment-uploads";
 import { useQuickActionMenu } from "../hooks/use-quick-action-menu";
 import { useStickyComposer } from "../hooks/use-sticky-composer";
@@ -26,7 +28,7 @@ interface CommentInputProps {
   /** Resolves true on success, false on failure. The composer keeps the text
    *  (editor locked + button spinning) until this settles, then clears only on
    *  success — a failed send must not silently discard the user's draft. */
-  onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[], steerAgentIds?: string[]) => Promise<string | boolean>;
+  onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[], steer?: CommentSteerRequest) => Promise<string | boolean>;
   /** Called after the server accepts the comment and the composer is cleared. */
   onAccepted?: (commentId: string) => void;
   onEditAnnotation?: (id: string) => boolean;
@@ -86,6 +88,7 @@ function CommentInput({ issueId, onSubmit, onAccepted, onEditAnnotation }: Comme
     resetKey: issueId,
   });
   const stopRunsBeforeSend = useStopRunsBeforeSend(issueId);
+  const steerRequest = useSteerRequest();
 
   // Readonly-first: the composer renders as a same-looking static shell until
   // the user shows intent (click / keyboard / file drop). An unsent draft is
@@ -170,7 +173,10 @@ function CommentInput({ issueId, onSubmit, onAccepted, onEditAnnotation }: Comme
     afterAccepted: () => (editorScrubbedRef.current ? "blur" : "none"),
     onSubmit: async (content) => {
       editorScrubbedRef.current = false;
-      const { suppressAgentIds, steerAgentIds, restartTaskIds } = routing;
+      const { suppressAgentIds, steerTaskIds } = routing;
+      // A preview still catching up with an edited @mention can name a
+      // recipient this comment no longer addresses: never stop a run on it.
+      const restartTaskIds = triggerPreview.isCurrent ? routing.restartTaskIds : [];
       if (!(await stopRunsBeforeSend(restartTaskIds))) return false;
       // Flush the editor's pending debounce before snapshotting — a late flush
       // of pre-submit typing must not read as an edit made during the request.
@@ -188,7 +194,7 @@ function CommentInput({ issueId, onSubmit, onAccepted, onEditAnnotation }: Comme
         content,
         activeIds.length > 0 ? activeIds : undefined,
         suppressAgentIds.length > 0 ? suppressAgentIds : undefined,
-        steerAgentIds.length > 0 ? steerAgentIds : undefined,
+        steerRequest.request(content, steerTaskIds),
       ).then((commentId) => {
         acceptedCommentIdRef.current = typeof commentId === "string" ? commentId : null;
         return !!commentId;
@@ -211,6 +217,7 @@ function CommentInput({ issueId, onSubmit, onAccepted, onEditAnnotation }: Comme
       setContent("");
       setIsEmpty(true);
       resetRecipients();
+      steerRequest.settle();
       editorScrubbedRef.current = true;
       if (acceptedCommentIdRef.current) onAccepted?.(acceptedCommentIdRef.current);
     },

@@ -105,9 +105,19 @@ export function resolveRecipientAction(
   return actions.find((action) => action !== "steer")!;
 }
 
+/**
+ * A steering send: the turns it goes into, and the logical request that lets
+ * a retry after a lost response return the original comment.
+ */
+export interface CommentSteerRequest {
+  taskIds: string[];
+  clientRequestId: string;
+}
+
 export interface RecipientRouting {
   suppressAgentIds: string[];
-  steerAgentIds: string[];
+  /** The exact running turns chosen: a turn that ends first is never swapped for another. */
+  steerTaskIds: string[];
   /** Turns to stop before the comment is posted, so it starts a fresh run. */
   restartTaskIds: string[];
 }
@@ -115,10 +125,10 @@ export interface RecipientRouting {
 export function recipientRouting(
   recipients: readonly { agentId: string; action: RecipientAction; state: AgentRunState }[],
 ): RecipientRouting {
-  const routing: RecipientRouting = { suppressAgentIds: [], steerAgentIds: [], restartTaskIds: [] };
+  const routing: RecipientRouting = { suppressAgentIds: [], steerTaskIds: [], restartTaskIds: [] };
   for (const { agentId, action, state } of recipients) {
     if (action === "skip") routing.suppressAgentIds.push(agentId);
-    else if (action === "steer") routing.steerAgentIds.push(agentId);
+    else if (action === "steer" && state.kind === "running") routing.steerTaskIds.push(state.task.id);
     else if (action === "restart" && state.kind !== "idle") routing.restartTaskIds.push(state.task.id);
   }
   return routing;
