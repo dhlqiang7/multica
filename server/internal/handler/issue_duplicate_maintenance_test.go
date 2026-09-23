@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -125,5 +126,104 @@ func TestDeletingOriginalClearsDuplicateMarks(t *testing.T) {
 	status, pointer, _ := duplicateState(t, duplicate)
 	if status != "cancelled" || pointer != nil {
 		t.Fatalf("after deleting the original: (status, duplicate_of) = (%q, %v), want (cancelled, nil)", status, pointer)
+	}
+}
+
+// An ordinary update that waits behind a transaction which cleared the mark
+// must not write the mark back. UpdateIssue computes its next values in a CTE,
+// so without the row lock there it resumes with the values it read before the
+// wait — an unrelated priority or status edit would restore a mark the other
+// transaction had just removed.
+func TestConcurrentWriteDoesNotRestoreClearedMark(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	t.Run("cleared by deleting the original", func(t *testing.T) {
+		concurrentWriteAfterPointerCleared(t, true)
+	})
+	t.Run("cleared by reopening", func(t *testing.T) {
+		concurrentWriteAfterPointerCleared(t, false)
+	})
+}
+
+func concurrentWriteAfterPointerCleared(t *testing.T, deleteOriginal bool) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	original := dbfx.Issue(t, "maint-race-original")
+	duplicate := seedDuplicate(t, "maint-race-duplicate", original)
+
+	// Hold the clearing transaction open so the update below has to wait for
+	// the row lock. That makes the interleaving deterministic instead of racy.
+	tx, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.Background())
+	q := testHandler.Queries.WithTx(tx)
+
+	body := map[string]any{"priority": "high"}
+	if deleteOriginal {
+		if _, err := q.LockIssueForDelete(ctx, db.LockIssueForDeleteParams{
+			ID: parseUUID(original), WorkspaceID: parseUUID(testWorkspaceID),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := q.ClearIssueDuplicatesOf(ctx, db.ClearIssueDuplicatesOfParams{
+			WorkspaceID: parseUUID(testWorkspaceID), IssueID: parseUUID(original),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := q.DeleteIssue(ctx, db.DeleteIssueParams{
+			ID: parseUUID(original), WorkspaceID: parseUUID(testWorkspaceID),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		if _, err := q.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
+			ID: parseUUID(duplicate), WorkspaceID: parseUUID(testWorkspaceID), Status: "todo",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		body = map[string]any{"status": "cancelled"}
+	}
+
+	done := make(chan *testutil.Response, 1)
+	go func() {
+		done <- testutil.Call(t, testHandler.UpdateIssue, updateIssueRequest(duplicate, body))
+	}()
+
+	waited := false
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+		var blocked bool
+		if err := testPool.QueryRow(ctx, `SELECT EXISTS (
+			SELECT 1 FROM pg_stat_activity
+			WHERE datname = current_database()
+			  AND wait_event_type = 'Lock'
+			  AND query LIKE '-- name: UpdateIssue :one%')`).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			waited = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case response := <-done:
+		response.Want(http.StatusOK)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if !waited {
+		t.Fatal("the update never waited on the row lock, so the interleaving under test did not happen")
+	}
+
+	if status, pointer, _ := duplicateState(t, duplicate); pointer != nil {
+		t.Fatalf("a concurrent write restored the cleared mark: status=%s pointer=%s", status, *pointer)
 	}
 }
