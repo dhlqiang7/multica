@@ -1096,18 +1096,15 @@ function CommentCardImpl({
     && (!run.anchorCommentId || run.anchorCommentId === commentId || replyFolded))
     .map((run) => <PlacedInlineCommentRun key={run.task.id} run={run} presentation={presentation} viewState={run.commentId === entry.id ? runViewState : undefined} />);
 
-  // A run slot: what the run posted before its reply, then the reply, or the
-  // run's activity until it has one.
+  // A run slot renders the run's latest comment, or its activity until it
+  // posts one.
   const renderThreadRow = (row: TimelineEntry | ThreadRunSlot) => "run" in row ? (
-    <Fragment key={row.run.task.id}>
-      {row.outputs.map(renderReply)}
-      <AgentRunComment run={row.run} entering={enteringRunIds?.has(row.run.task.id)}
-        replyTo={row.replyTo && <ReplyToQuote entry={row.replyTo} onJump={onJumpToComment} />}
-        commentProps={row.reply ? {
-          issueId, entry: row.reply, replies: [], currentUserId, canModerate, onReply, onEdit, onDelete,
-          onToggleReaction, onCreateSubIssue, onResolveToggle, onCopyLink, highlightedCommentId, enteringRunIds,
-        } : undefined} />
-    </Fragment>
+    <AgentRunComment key={row.run.task.id} run={row.run} entering={enteringRunIds?.has(row.run.task.id)}
+      replyTo={row.replyTo && <ReplyToQuote entry={row.replyTo} onJump={onJumpToComment} />}
+      commentProps={row.reply ? {
+        issueId, entry: row.reply, replies: [], currentUserId, canModerate, onReply, onEdit, onDelete,
+        onToggleReaction, onCreateSubIssue, onResolveToggle, onCopyLink, highlightedCommentId, enteringRunIds,
+      } : undefined} />
   ) : renderReply(row);
 
   const renderReply = (reply: TimelineEntry) => (

@@ -254,24 +254,21 @@ export function orderTimelineWithRuns(
 /** A run's slot in a thread. */
 export interface ThreadRunSlot {
   run: CommentRun;
-  /** The reply the slot ends with, when the run published one. */
+  /** The run's latest comment, which the slot renders once it exists. */
   reply?: TimelineEntry;
-  /** Everything else the run posted in the thread, in posting order. */
-  outputs: TimelineEntry[];
-  /** The input the run answers, when it is not the row directly above. */
+  /** The input the run answers, when other rows separate the two. */
   replyTo?: TimelineEntry;
 }
 
 /**
- * A thread's replies and runs in reading order. A run that replied, or ended
- * without replying, sits at that time like any comment (MUL-7211), so two
- * agents asked in a row read in the order they answered (MUL-7628). A run
- * still working stays right after the input it answers — the latest one it
- * covers — the way an active standalone run keeps its enqueue slot (MUL-7632).
- *
- * The run's other comments in the thread lead its slot in posting order;
- * sorted apart, progress posted before the reply would read after it
- * (MUL-7548). A run whose reply is the root heads the thread instead.
+ * A thread's replies and runs in reading order. Every posted comment sits at
+ * its own time, a run's included (MUL-7211): two agents asked in a row read
+ * in the order they answered, and a run's progress reads before a comment
+ * written after it (MUL-7628). A run's slot is its latest comment. A run
+ * still working with nothing posted stays right after the input it answers
+ * — the latest one it covers — the way an active standalone run keeps its
+ * enqueue slot (MUL-7632). A run whose reply is the root heads the thread
+ * instead.
  */
 export function orderThreadWithRuns(
   root: TimelineEntry,
@@ -281,33 +278,33 @@ export function orderThreadWithRuns(
   const entryById = new Map([root, ...replies].map((entry) => [entry.id, entry]));
   const threadRuns = runs.filter((run) => run.anchorCommentId && !(run.hasReply && run.commentId === root.id));
   const working = new Set(threadRuns.filter((run) => !run.hasReply && isActiveCommentRun(run.task)));
-  const outputs = new Map(threadRuns.map((run) => [run.task.id, !run.hasReply ? [] : replies.filter((reply) =>
-    reply.actor_type === "agent" && reply.source_task_id === run.task.id && reply.id !== run.commentId)]));
-  const slotted = new Set([...outputs.values()].flat().map((reply) => reply.id));
-  const rows = orderTimelineWithRuns(replies.filter((reply) => !slotted.has(reply.id)),
-    threadRuns.filter((run) => !working.has(run)), entryById);
+  const rows = orderTimelineWithRuns(replies, threadRuns.filter((run) => !working.has(run)), entryById);
   // `runs` arrive in enqueue order: each working run goes after the row that
   // shows its input (none for the root) and after earlier runs on that input.
-  const shows = (item: TimelineEntry | CommentRun, id?: string) => "task" in item
-    ? item.commentId === id || !!outputs.get(item.task.id)?.some((output) => output.id === id)
-    : item.id === id;
   for (const run of working) {
-    let index = rows.findIndex((item) => shows(item, run.anchorCommentId)) + 1;
+    let index = rows.findIndex((item) => ("task" in item ? publishedReply(item, entryById)?.id : item.id) === run.anchorCommentId) + 1;
     while (working.has(rows[index] as CommentRun) && (rows[index] as CommentRun).anchorCommentId === run.anchorCommentId) index += 1;
     rows.splice(index, 0, run);
   }
-  // The comment rendered directly above the next row. A tombstone renders
-  // nothing, and a run without a visible reply renders its activity block.
-  let above: string | undefined = root.id;
-  return rows.map((item) => {
-    if (!("task" in item)) {
-      if (!isDeletedComment(item)) above = item.id;
-      return item;
+  // The comment directly above a run, past the run's own earlier comments. A
+  // tombstone renders nothing; a run without a visible reply renders its
+  // activity block, which no input can be.
+  const commentAbove = (index: number, run: CommentRun): string | undefined => {
+    for (const item of rows.slice(0, index).reverse()) {
+      if ("task" in item) {
+        const reply = publishedReply(item, entryById);
+        return reply && !isDeletedComment(reply) ? reply.id : undefined;
+      }
+      if (!isDeletedComment(item) && item.source_task_id !== run.task.id) return item.id;
     }
+    return root.id;
+  };
+  return rows.map((item, index) => {
+    if (!("task" in item)) return item;
     const reply = publishedReply(item, entryById);
     const anchor = item.anchorCommentId ? entryById.get(item.anchorCommentId) : undefined;
-    const replyTo = anchor && anchor.id !== above && anchor.id !== reply?.id && !isDeletedComment(anchor) ? anchor : undefined;
-    above = reply && !isDeletedComment(reply) ? reply.id : undefined;
-    return { run: item, reply, outputs: outputs.get(item.task.id) ?? [], replyTo };
+    const replyTo = anchor && anchor.id !== reply?.id && !isDeletedComment(anchor)
+      && anchor.id !== commentAbove(index, item) ? anchor : undefined;
+    return { run: item, reply, replyTo };
   });
 }

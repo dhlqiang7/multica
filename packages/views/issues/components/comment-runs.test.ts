@@ -405,7 +405,7 @@ describe("orderTimelineWithRuns", () => {
 describe("orderThreadWithRuns", () => {
   const at = (time: string) => `2026-09-23T${time}Z`;
   // Build the thread the way IssueDetail does, then label each row: a reply
-  // by id, a run slot by what it renders (its outputs, then its reply or its
+  // by id, a run slot by what it renders (its latest comment or its
   // activity), followed by the input it quotes.
   const thread = (tasks: AgentTask[], timeline: TimelineEntry[]) => {
     const view = buildCommentRunView(tasks, timeline);
@@ -416,8 +416,7 @@ describe("orderThreadWithRuns", () => {
     const root = view.timeline.find((entry) => !entry.parent_id)!;
     return orderThreadWithRuns(root, collectThreadReplies(root.id, byParent), view.runs.get(root.id) ?? [])
       .map((row) => !("run" in row) ? row.id
-        : [...row.outputs.map((output) => output.id), row.reply?.id ?? `run:${row.run.task.id}`].join(" + ")
-          + (row.replyTo ? ` ↩ ${row.replyTo.id}` : ""));
+        : (row.reply?.id ?? `run:${row.run.task.id}`) + (row.replyTo ? ` ↩ ${row.replyTo.id}` : ""));
   };
   const answer = (id: string, run: AgentTask, created_at: string, parent_id?: string) =>
     comment(id, { actor_type: "agent", source_task_id: run.id, created_at, parent_id });
@@ -478,12 +477,16 @@ describe("orderThreadWithRuns", () => {
       .toEqual(["ask", "run:first", "run:second ↩ ask", "later"]);
   });
 
-  it("keeps everything one run posted together, in posting order, at its reply's time", () => {
+  // MUL-7548 kept one run's comments together at its latest one; each now
+  // reads at its own time, so a comment written in between stays between.
+  it("places each comment a run posts at its own time", () => {
     const root = comment("root", { created_at: at("10:00:00") });
     const run = asked("run", root);
-    const timeline = [root, answer("progress", run, at("10:01:00"), root.id),
-      comment("aside", { parent_id: root.id, created_at: at("10:02:00") }), answer("final", run, at("10:03:00"), root.id)];
-    expect(thread([run], timeline)).toEqual(["aside", "progress + final ↩ root"]);
+    const progress = answer("progress", run, at("10:01:00"));
+    const final = answer("final", run, at("10:03:00"));
+    expect(thread([run], [root, progress, final])).toEqual(["progress", "final"]);
+    const aside = comment("aside", { parent_id: root.id, created_at: at("10:02:00") });
+    expect(thread([run], [root, progress, aside, final])).toEqual(["progress", "aside", "final ↩ root"]);
   });
 
   it("settles a run that ended without replying at the time it ended", () => {

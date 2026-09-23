@@ -3099,6 +3099,8 @@ describe("IssueDetail (shared)", () => {
   // MUL-7548 regression: a comment-triggered run that posts several comments
   // used to render its latest one first — the run slot after the trigger held
   // only the latest, and the earlier ones followed it (or stayed top-level).
+  // Each comment reads at its own time, so a reply written between two of the
+  // run's comments stays between them (MUL-7628).
   it.each([
     { placement: "top-level", parentId: null },
     { placement: "in the trigger's thread", parentId: "confirm" },
@@ -3114,6 +3116,11 @@ describe("IssueDetail (shared)", () => {
         created_at: "2026-01-17T00:00:00Z", updated_at: "2026-01-17T00:00:00Z", comment_type: "comment",
       },
       agentComment("step2", "Step 2 done", "2026-01-17T00:10:00Z"),
+      {
+        type: "comment", id: "aside", actor_type: "member", actor_id: "user-1",
+        content: "Check the tests too", parent_id: "confirm",
+        created_at: "2026-01-17T00:15:00Z", updated_at: "2026-01-17T00:15:00Z", comment_type: "comment",
+      },
       agentComment("step3", "Step 3 done", "2026-01-17T00:20:00Z"),
     ]);
     mockApiObj.listTasksByIssue.mockResolvedValue([{
@@ -3129,8 +3136,8 @@ describe("IssueDetail (shared)", () => {
     await screen.findByText("Step 3 done");
 
     const rendered = Array.from(container.querySelectorAll("[id^='comment-']")).map((el) => el.id)
-      .filter((id) => ["comment-confirm", "comment-step2", "comment-step3"].includes(id));
-    expect(rendered).toEqual(["comment-confirm", "comment-step2", "comment-step3"]);
+      .filter((id) => ["comment-confirm", "comment-step2", "comment-aside", "comment-step3"].includes(id));
+    expect(rendered).toEqual(["comment-confirm", "comment-step2", "comment-aside", "comment-step3"]);
   });
 
 });
