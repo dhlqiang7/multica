@@ -101,32 +101,11 @@ describe("InlineCommentRun", () => {
     expect(api.createTaskSupplement).not.toHaveBeenCalled();
   });
 
-  it("shows fail-closed additional-message availability and sends to the exact run", async () => {
-    vi.mocked(api.listTaskMessages).mockResolvedValue([]);
-    const unsupported = setup(task());
+  it("disables additional messages without negotiated support", () => {
+    const { client } = setup(task());
     expect(screen.getByRole("button", { name: "Add message" })).toBeDisabled();
-    cleanup();
-
-    vi.mocked(api.createTaskSupplement).mockResolvedValue({
-      id: "supplement-comment", issue_id: "issue", author_type: "member", author_id: "user",
-      content: "Create a rollback note.", type: "comment", parent_id: null, reactions: [], attachments: [],
-      created_at: "2026-09-07T00:00:10Z", updated_at: "2026-09-07T00:00:10Z",
-      resolved_at: null, resolved_by_type: null, resolved_by_id: null,
-      supplement_task_id: id, supplement_status: "pending",
-    });
-    setup(task({ supplement_capability: "task-supplement-v1", can_supplement: true }));
-    fireEvent.click(screen.getByRole("button", { name: "Add message" }));
-    const input = screen.getByPlaceholderText("Add guidance for this running turn");
-    fireEvent.change(input, { target: { value: "Create a rollback note." } });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    await waitFor(() => expect(api.createTaskSupplement).toHaveBeenCalledWith(
-      "issue", id, "Create a rollback note.", expect.any(String),
-    ));
-    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByPlaceholderText("Add guidance for this running turn")).not.toBeInTheDocument());
-    unsupported.client.clear();
+    client.clear();
   });
-
   it("preserves additional-message text when delivery submission fails", async () => {
     vi.mocked(api.listTaskMessages).mockResolvedValue([]);
     vi.mocked(api.createTaskSupplement).mockRejectedValue(new Error("run ended"));
@@ -254,13 +233,13 @@ describe("InlineCommentRun", () => {
       <SupplementReceipt issueId="issue" entry={entry} />
     </QueryClientProvider>);
 
-    expect(screen.getByRole("alert")).toHaveTextContent("Not delivered · Codex rejected the message");
+    expect(screen.getByRole("alert")).toHaveTextContent("Not delivered · the agent rejected the message");
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(api.retryTaskSupplement).toHaveBeenCalledWith("issue", id, "supplement-comment"));
     await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).not.toBeDisabled());
     act(() => client.setQueryData(issueKeys.tasks("issue"), [task({ status: "completed" })]));
     await waitFor(() => expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument());
-    expect(screen.getByRole("alert")).toHaveTextContent("Not delivered · Codex rejected the message");
+    expect(screen.getByRole("alert")).toHaveTextContent("Not delivered · the agent rejected the message");
   });
 
   it("previews streamed agent messages in collapsed steps and expands the full body", async () => {

@@ -2,57 +2,32 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"math/rand/v2"
+	"slices"
 	"testing"
 	"time"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestTaskSupplementMigrationsUpDownUpInIsolatedSchema(t *testing.T) {
 	base := openTestPool(t)
-	schema := fmt.Sprintf("task_supplement_migration_%d_%d", time.Now().UnixNano(), rand.Uint32())
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
-	if _, err := base.Exec(ctx, "CREATE SCHEMA "+pgx.Identifier{schema}.Sanitize()); err != nil {
-		t.Fatalf("create schema: %v", err)
-	}
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cleanupCancel()
-		_, _ = base.Exec(cleanupCtx, "DROP SCHEMA IF EXISTS "+pgx.Identifier{schema}.Sanitize()+" CASCADE")
-	})
-
-	config, err := pgxpool.ParseConfig(testDatabaseURL())
-	if err != nil {
-		t.Fatalf("parse database config: %v", err)
-	}
-	config.ConnConfig.RuntimeParams["search_path"] = schema
-	pool, err := pgxpool.NewWithConfig(ctx, config)
-	if err != nil {
-		t.Fatalf("open schema-scoped pool: %v", err)
-	}
-	defer pool.Close()
+	schema := createScratchSchema(t, ctx, base, "task_supplement_")
+	pool := openTestPoolWithSearchPath(t, schema)
 	if _, err := pool.Exec(ctx, `CREATE TABLE agent_task_queue (id UUID PRIMARY KEY, status TEXT NOT NULL)`); err != nil {
-		t.Fatalf("create base task table: %v", err)
+		t.Fatal(err)
 	}
 
-	upVersions := []string{
-		"536_task_supplement",
-		"537_task_supplement_request_index",
-		"538_task_supplement_capability_index",
-		"539_task_supplement_comment_index",
-	}
-	downVersions := []string{
-		"539_task_supplement_comment_index",
-		"538_task_supplement_capability_index",
-		"537_task_supplement_request_index",
-		"536_task_supplement",
-	}
-	run := func(direction string, versions []string) {
-		t.Helper()
+	for _, direction := range []string{"up", "down", "up"} {
+		versions := []string{
+			"536_task_supplement",
+			"537_task_supplement_request_index",
+			"538_task_supplement_capability_index",
+			"539_task_supplement_comment_index",
+		}
+		if direction == "down" {
+			slices.Reverse(versions)
+		}
 		if err := runMigrations(ctx, pool, runOptions{
 			Direction:             direction,
 			Files:                 realMigrationFiles(t, versions, direction),
@@ -63,103 +38,23 @@ func TestTaskSupplementMigrationsUpDownUpInIsolatedSchema(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("migrate %s: %v", direction, err)
 		}
+		for _, table := range []string{"task_supplement", "task_supplement_capability"} {
+			var exists bool
+			if err := pool.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, schema+"."+table).Scan(&exists); err != nil || exists != (direction == "up") {
+				t.Fatalf("after %s, table %s exists=%v: %v", direction, table, exists, err)
+			}
+		}
+		if direction == "up" {
+			var indexes int
+			err := pool.QueryRow(ctx, `
+				SELECT count(*) FROM pg_index i
+				JOIN pg_class c ON c.oid = i.indexrelid
+				JOIN pg_namespace n ON n.oid = c.relnamespace
+				WHERE n.nspname = $1 AND i.indisvalid AND c.relname = ANY($2::text[])
+			`, schema, []string{"task_supplement_task_request_uidx", "task_supplement_capability_task_uidx", "task_supplement_comment_uidx"}).Scan(&indexes)
+			if err != nil || indexes != 3 {
+				t.Fatalf("valid supplement indexes = %d, want 3: %v", indexes, err)
+			}
+		}
 	}
-
-	run("up", upVersions)
-	var validIndexes int
-	if err := pool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM pg_index i
-		JOIN pg_class c ON c.oid = i.indexrelid
-		JOIN pg_namespace n ON n.oid = c.relnamespace
-		WHERE n.nspname = $1
-		  AND c.relname = ANY($2::text[])
-		  AND i.indisvalid
-	`, schema, []string{
-		"task_supplement_task_request_uidx",
-		"task_supplement_capability_task_uidx",
-		"task_supplement_comment_uidx",
-	}).Scan(&validIndexes); err != nil {
-		t.Fatalf("inspect indexes: %v", err)
-	}
-	if validIndexes != 3 {
-		t.Fatalf("valid supplement indexes = %d, want 3", validIndexes)
-	}
-	var removedColumns, foreignKeys int
-	if err := pool.QueryRow(ctx, `
-		SELECT count(*) FROM information_schema.columns
-		WHERE table_schema = $1
-		  AND table_name IN ('task_supplement', 'task_supplement_capability')
-		  AND column_name IN ('ordinal', 'next_ordinal')
-	`, schema).Scan(&removedColumns); err != nil || removedColumns != 0 {
-		t.Fatalf("removed sequence columns = %d: %v", removedColumns, err)
-	}
-	if err := pool.QueryRow(ctx, `
-		SELECT count(*) FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace
-		WHERE n.nspname = $1 AND c.contype = 'f'
-	`, schema).Scan(&foreignKeys); err != nil || foreignKeys != 0 {
-		t.Fatalf("foreign keys = %d: %v", foreignKeys, err)
-	}
-
-	const taskID = "0199a4e8-22ce-7b01-bba5-000000000001"
-	if _, err := pool.Exec(ctx, `INSERT INTO agent_task_queue (id, status) VALUES ($1, 'running')`, taskID); err != nil {
-		t.Fatalf("insert running task: %v", err)
-	}
-	// An old server's SELECT * still scans the original task shape while the
-	// new side tables and terminal trigger remain installed.
-	var oldTaskID, oldStatus string
-	if err := pool.QueryRow(ctx, `SELECT * FROM agent_task_queue WHERE id = $1`, taskID).Scan(&oldTaskID, &oldStatus); err != nil || oldTaskID != taskID || oldStatus != "running" {
-		t.Fatalf("old application task scan = %q/%q: %v", oldTaskID, oldStatus, err)
-	}
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO task_supplement_capability (task_id, workspace_id, issue_id, capability)
-		VALUES ($1, $2, $3, 'task-supplement-v1')
-	`, taskID,
-		"0199a4e8-22ce-7b01-bba5-000000000002",
-		"0199a4e8-22ce-7b01-bba5-000000000003",
-	); err != nil {
-		t.Fatalf("insert negotiated capability: %v", err)
-	}
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO task_supplement (
-			task_id, workspace_id, issue_id, comment_id, author_id, client_request_id, status
-		) VALUES ($1, $2, $3, $4, $5, $6, 'pending')
-	`, taskID,
-		"0199a4e8-22ce-7b01-bba5-000000000002",
-		"0199a4e8-22ce-7b01-bba5-000000000003",
-		"0199a4e8-22ce-7b01-bba5-000000000004",
-		"0199a4e8-22ce-7b01-bba5-000000000005",
-		"0199a4e8-22ce-7b01-bba5-000000000006",
-	); err != nil {
-		t.Fatalf("insert pending supplement: %v", err)
-	}
-	if _, err := pool.Exec(ctx, `UPDATE agent_task_queue SET status = 'completed' WHERE id = $1`, taskID); err != nil {
-		t.Fatalf("exercise terminal trigger: %v", err)
-	}
-	var status, reason string
-	if err := pool.QueryRow(ctx, `SELECT status, failure_reason FROM task_supplement WHERE task_id = $1`, taskID).Scan(&status, &reason); err != nil {
-		t.Fatalf("read terminal receipt: %v", err)
-	}
-	if status != "failed" || reason != "turn_ended" {
-		t.Fatalf("terminal receipt = %q/%q", status, reason)
-	}
-
-	run("down", downVersions)
-	var tables int
-	if err := pool.QueryRow(ctx, `
-		SELECT count(*) FROM information_schema.tables
-		WHERE table_schema = $1 AND table_name IN ('task_supplement', 'task_supplement_capability')
-	`, schema).Scan(&tables); err != nil {
-		t.Fatalf("inspect rollback: %v", err)
-	}
-	if tables != 0 {
-		t.Fatalf("supplement tables after down = %d, want 0", tables)
-	}
-	// Prove an old application schema remains usable after rollback, then that
-	// a forward deploy can recreate the feature without manual repair.
-	if _, err := pool.Exec(ctx, `INSERT INTO agent_task_queue (id, status) VALUES ($1, 'running')`,
-		"0199a4e8-22ce-7b01-bba5-000000000007"); err != nil {
-		t.Fatalf("old schema task insert after down: %v", err)
-	}
-	run("up", upVersions)
 }

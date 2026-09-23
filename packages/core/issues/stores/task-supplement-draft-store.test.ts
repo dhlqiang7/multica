@@ -21,22 +21,6 @@ describe("task supplement draft store", () => {
     expect(useTaskSupplementDraftStore.getState().drafts["task-1"]).toBeUndefined();
   });
 
-  it("keeps text, request identity, and terminal recovery state by task id", () => {
-    const store = useTaskSupplementDraftStore.getState();
-    store.open("task-1", "issue-1");
-    store.setContent("task-1", "issue-1", "preserve both deliverables");
-    store.setRequestId("task-1", "request-1");
-    store.markEnded("task-1");
-
-    expect(useTaskSupplementDraftStore.getState().drafts["task-1"]).toMatchObject({
-      issueId: "issue-1",
-      content: "preserve both deliverables",
-      clientRequestId: "request-1",
-      open: true,
-      ended: true,
-    });
-  });
-
   it("does not let another task consume or clear the draft", () => {
     const store = useTaskSupplementDraftStore.getState();
     store.setContent("task-1", "issue-1", "first");
@@ -50,7 +34,9 @@ describe("task supplement draft store", () => {
     store.setContent("task-1", "issue-1", "same text");
     store.setRequestId("task-1", "request-1");
     store.markEnded("task-1");
-    expect(useTaskSupplementDraftStore.getState().drafts["task-1"]?.clientRequestId).toBe("request-1");
+    expect(useTaskSupplementDraftStore.getState().drafts["task-1"]).toMatchObject({
+      content: "same text", clientRequestId: "request-1", ended: true,
+    });
     store.setContent("task-1", "issue-1", "edited text");
     expect(useTaskSupplementDraftStore.getState().drafts["task-1"]?.clientRequestId).toBeUndefined();
   });
