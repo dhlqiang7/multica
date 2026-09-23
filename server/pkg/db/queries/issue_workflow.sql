@@ -375,6 +375,7 @@ SET status = COALESCE(s.legacy_status_key, CASE s.phase
         WHEN 'closed' THEN 'cancelled'
         ELSE 'in_progress'
     END),
+    duplicate_of_issue_id = CASE WHEN i.status = 'cancelled' AND COALESCE(s.legacy_status_key, CASE s.phase WHEN 'unstarted' THEN 'todo' WHEN 'done' THEN 'done' WHEN 'closed' THEN 'cancelled' ELSE 'in_progress' END) = 'cancelled' THEN i.duplicate_of_issue_id ELSE NULL END,
     workflow_status_id = s.id,
     revision = i.revision + 1,
     updated_at = now()

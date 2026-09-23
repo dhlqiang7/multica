@@ -294,7 +294,8 @@ func (h *Handler) UpdateProjectIssueWorkflow(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	tx, err := h.TxStarter.Begin(r.Context())
+	r = h.withWakeupActor(r)
+	tx, err := h.beginWakeupWrite(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update project workflow")
 		return
@@ -572,8 +573,10 @@ func (h *Handler) TransitionIssueStatusNode(w http.ResponseWriter, r *http.Reque
 		payload := map[string]any{
 			"issue": resp, "status_changed": true, "prev_status": result.Previous.Status,
 			"prev_status_name": result.PreviousStatusName, "status_name": result.StatusName,
-			"assignee_changed": assigneeChanged,
-			"transition":       transitionHistoryToResponse(result.Transition),
+			"duplicate_of_issue_id":      uuidToPtr(result.Issue.DuplicateOfIssueID),
+			"prev_duplicate_of_issue_id": uuidToPtr(result.Previous.DuplicateOfIssueID),
+			"assignee_changed":           assigneeChanged,
+			"transition":                 transitionHistoryToResponse(result.Transition),
 		}
 		h.publish(protocol.EventIssueUpdated, uuidToString(issue.WorkspaceID), actorType, actorID, payload)
 		h.publish(protocol.EventIssueTransitioned, uuidToString(issue.WorkspaceID), actorType, actorID, payload)

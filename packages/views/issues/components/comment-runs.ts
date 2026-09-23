@@ -44,6 +44,13 @@ export function buildCommentRunView(
   // in Execution history, but it must not become an unanchored Activity block.
   const inlineTasks = tasks.filter((task) => task.kind !== "quick_create");
   const comments = new Map(timeline.filter((entry) => entry.type === "comment").map((entry) => [entry.id, entry]));
+  const supplementalByTask = new Map<string, string[]>();
+  for (const entry of comments.values()) {
+    if (!entry.supplement_task_id) continue;
+    const ids = supplementalByTask.get(entry.supplement_task_id) ?? [];
+    ids.push(entry.id);
+    supplementalByTask.set(entry.supplement_task_id, ids);
+  }
   const timelineOrder = new Map(timeline.map((entry, index) => [entry.id, index]));
   const threadRoot = (id: string): string | undefined => {
     const seen = new Set<string>();
@@ -63,6 +70,13 @@ export function buildCommentRunView(
       replies.set(entry.source_task_id, entry);
     }
   }
+  const topLevelOutputs = new Map<string, TimelineEntry[]>();
+  for (const entry of comments.values()) {
+    if (!entry.source_task_id || entry.actor_type !== "agent" || entry.parent_id) continue;
+    const outputs = topLevelOutputs.get(entry.source_task_id) ?? [];
+    outputs.push(entry);
+    topLevelOutputs.set(entry.source_task_id, outputs);
+  }
   const byTask = new Map(inlineTasks.map((task) => [task.id, task]));
   const priorAnchors = new Map([...previous.values()].flatMap((runs) => runs.map((run) => [run.task.id, run.anchorCommentId] as const)));
   const placements: CommentRun[] = [];
@@ -81,9 +95,14 @@ export function buildCommentRunView(
         || (source.status === "dispatched" && !source.delivered_comment_ids?.length)
         || ((source.status === "cancelled" || source.status === "failed")
           && !source.dispatched_at && !source.started_at);
-      const ids = !usesPlannedCoverage && source.delivered_comment_ids !== undefined
+      const baseIds = !usesPlannedCoverage && source.delivered_comment_ids !== undefined
         ? source.delivered_comment_ids
         : [source.trigger_comment_id, ...(source.coalesced_comment_ids ?? [])];
+      const ids = [...new Set([
+        ...baseIds,
+        ...(source.supplement_comment_ids ?? []),
+        ...(supplementalByTask.get(source.id) ?? []),
+      ])];
       const candidates = ids.flatMap((id) => id && comments.has(id) ? [comments.get(id)!] : []);
       const latestCandidateId = () => [...candidates].sort((a, b) => b.created_at.localeCompare(a.created_at)
         || (timelineOrder.get(b.id) ?? -1) - (timelineOrder.get(a.id) ?? -1))[0]?.id;
@@ -118,9 +137,13 @@ export function buildCommentRunView(
   // Project every task-owned answer first, then use that same tree for run
   // grouping, replies, resolution, and navigation. Assignment answers become
   // roots even if the agent originally posted them inside an existing thread.
+  // The run's other top-level comments follow its reply: moving only the
+  // latest one would render it above the progress posted before it (MUL-7548).
+  // Comments the agent placed in a thread stay where it put them.
   const parents = new Map<string, string | undefined>();
   for (const run of placements) {
     if (run.hasReply && run.commentId && run.commentId !== run.anchorCommentId) {
+      for (const output of topLevelOutputs.get(run.task.id) ?? []) parents.set(output.id, run.anchorCommentId);
       parents.set(run.commentId, run.anchorCommentId);
     }
   }

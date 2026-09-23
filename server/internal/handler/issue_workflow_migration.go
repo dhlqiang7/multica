@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/issueworkflow"
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -125,6 +126,9 @@ func applyWorkflowMigration(ctx context.Context, q *db.Queries, issues []db.Issu
 		}
 		current, err := q.MigrateIssueWorkflowBinding(ctx, db.MigrateIssueWorkflowBindingParams{WorkspaceID: previous.WorkspaceID, IssueID: previous.ID, StatusID: target.ID})
 		if err != nil {
+			return err
+		}
+		if _, err := service.StopClosedIssueWakeups(ctx, q, current); err != nil {
 			return err
 		}
 		if _, _, _, err = issueworkflow.RecordTransition(ctx, q, &previous, current, actor, "workflow_migrated"); err != nil {

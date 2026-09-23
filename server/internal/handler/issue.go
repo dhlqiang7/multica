@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -274,10 +275,11 @@ func assertIssueStatusStillActive(ctx context.Context, qtx *db.Queries, workspac
 // Built-in transitions also need the transaction now because the legacy field,
 // workflow projection, and immutable transition must commit atomically.
 func (h *Handler) runWithIssueStatusGuard(ctx context.Context, workspaceID pgtype.UUID, statusKey string, fn func(q *db.Queries) error) error {
-	if statusKey == "" {
+	_, hasActor := ctx.Value(wakeupActorKey{}).(wakeupActor)
+	if !hasActor && statusKey == "" {
 		return fn(h.Queries)
 	}
-	tx, err := h.TxStarter.Begin(ctx)
+	tx, err := h.beginWakeupWrite(ctx)
 	if err != nil {
 		return err
 	}
@@ -291,6 +293,49 @@ func (h *Handler) runWithIssueStatusGuard(ctx context.Context, workspaceID pgtyp
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// updateIssueWithStatusGuard writes params under the status-archive guard.
+func (h *Handler) updateIssueWithStatusGuard(ctx context.Context, workspaceID pgtype.UUID, statusKey string, params db.UpdateIssueParams) (db.Issue, error) {
+	var issue db.Issue
+	var cancelledWakeups []db.AgentTaskQueue
+	err := h.runWithIssueStatusGuard(ctx, workspaceID, statusKey, func(q *db.Queries) error {
+		if params.DuplicateOfIssueID.Valid {
+			if err := lockAndCheckDuplicateMark(ctx, q, workspaceID, params.ID, params.DuplicateOfIssueID); err != nil {
+				return err
+			}
+		}
+		var innerErr error
+		issue, cancelledWakeups, innerErr = updateIssueStoppingWakeups(ctx, q, params)
+		return innerErr
+	})
+	if err != nil {
+		return issue, err
+	}
+	h.broadcastCancelledWakeups(ctx, workspaceID, cancelledWakeups)
+	return issue, nil
+}
+
+// updateIssueStoppingWakeups writes params and, when the write moves the issue
+// into a done/closed status, ends its wakeups with the same queries. Callers
+// run it inside the status write's transaction and broadcast the returned runs
+// after commit.
+func updateIssueStoppingWakeups(ctx context.Context, q *db.Queries, params db.UpdateIssueParams) (db.Issue, []db.AgentTaskQueue, error) {
+	issue, err := q.UpdateIssue(ctx, params)
+	if err != nil || !params.Status.Valid {
+		return issue, nil, err
+	}
+	cancelled, err := service.StopClosedIssueWakeups(ctx, q, issue)
+	if err != nil {
+		return db.Issue{}, nil, fmt.Errorf("stop closed issue wakeups: %w", err)
+	}
+	return issue, cancelled, nil
+}
+
+func (h *Handler) broadcastCancelledWakeups(ctx context.Context, workspaceID pgtype.UUID, cancelled []db.AgentTaskQueue) {
+	if len(cancelled) > 0 {
+		h.TaskService.BroadcastCancelledTasks(ctx, uuidToString(workspaceID), cancelled)
+	}
 }
 
 // writeIssueStatusRaceError renders errIssueStatusArchivedRace as a 409 and
@@ -2920,6 +2965,9 @@ type CreateIssueRequest struct {
 	// transaction as the create. Unknown or non-issue ids are rejected with
 	// 400 (service.ErrIssueLabelNotFound) rather than silently dropped.
 	LabelIDs []string `json:"label_ids,omitempty"`
+	// Properties is an ID-keyed bag whose values use the same typed wire shape
+	// as Issue.properties and the standalone property PUT endpoint.
+	Properties map[string]json.RawMessage `json:"properties,omitempty"`
 	// OriginType / OriginID stamp the new issue with its provenance so
 	// platform-internal flows can deterministically locate it later. Only
 	// trusted callers should set these — currently the daemon CLI passes
@@ -2933,6 +2981,9 @@ type CreateIssueRequest struct {
 
 // UnmarshalJSON preserves omitted-vs-null project intent for both ordinary and comment creation.
 func (req *CreateIssueRequest) UnmarshalJSON(data []byte) error {
+	if err := rejectDuplicateJSONKeys(data); err != nil {
+		return err
+	}
 	type plain CreateIssueRequest
 	var decoded plain
 	if err := json.Unmarshal(data, &decoded); err != nil {
@@ -2947,11 +2998,115 @@ func (req *CreateIssueRequest) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+func rejectDuplicateJSONKeys(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := rejectDuplicateJSONValue(decoder); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("request body must contain one JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
+func rejectDuplicateJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delimiter {
+	case '{':
+		seen := make(map[string]struct{})
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return errors.New("object key must be a string")
+			}
+			if _, duplicate := seen[key]; duplicate {
+				return fmt.Errorf("duplicate JSON key %q", key)
+			}
+			seen[key] = struct{}{}
+			if err := rejectDuplicateJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		_, err = decoder.Token()
+		return err
+	case '[':
+		for decoder.More() {
+			if err := rejectDuplicateJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		_, err = decoder.Token()
+		return err
+	default:
+		return errors.New("invalid JSON delimiter")
+	}
+}
+
+func parseIssueCreateProperties(w http.ResponseWriter, values map[string]json.RawMessage) (map[pgtype.UUID]json.RawMessage, bool) {
+	if len(values) == 0 {
+		return nil, true
+	}
+	parsed := make(map[pgtype.UUID]json.RawMessage, len(values))
+	for propertyID, value := range values {
+		id, err := util.ParseUUID(propertyID)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"code": "invalid_issue_property", "property_id": propertyID,
+				"error": "property id must be a UUID",
+			})
+			return nil, false
+		}
+		if _, duplicate := parsed[id]; duplicate {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"code": "invalid_issue_property", "property_id": propertyID,
+				"error": "property was provided more than once",
+			})
+			return nil, false
+		}
+		parsed[id] = value
+	}
+	return parsed, true
+}
+
+func writeIssueCreatePropertyError(w http.ResponseWriter, err error) bool {
+	var propertyErr *service.IssuePropertyValidationError
+	if errors.As(err, &propertyErr) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"code": "invalid_issue_property", "property_id": propertyErr.PropertyID,
+			"error": propertyErr.Message,
+		})
+		return true
+	}
+	if errors.Is(err, service.ErrIssuePropertiesTooLarge) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"code": "issue_properties_too_large", "error": err.Error(),
+		})
+		return true
+	}
+	return false
+}
+
 func duplicateIssueMessage(issue IssueResponse) string {
 	return issueguard.DuplicateMessage(issue.Identifier, issue.Title, issue.Status)
 }
 
 func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
+	r = h.withWakeupActor(r)
 	var req CreateIssueRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -3067,6 +3222,10 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	labelIDs, ok := parseUUIDSliceOrBadRequest(w, req.LabelIDs, "label_ids")
+	if !ok {
+		return
+	}
+	properties, ok := parseIssueCreateProperties(w, req.Properties)
 	if !ok {
 		return
 	}
@@ -3199,6 +3358,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		AttachmentIDs:     attachmentIDs,
 		LabelIDs:          labelIDs,
 		AllowDuplicate:    req.AllowDuplicate,
+		Properties:        properties,
 	}, service.IssueCreateOpts{
 		ActorID:          actualCreatorID,
 		AnalyticsAgentID: analyticsAgentID,
@@ -3248,6 +3408,9 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	if errors.Is(err, service.ErrIssueStatusUnavailable) {
 		writeError(w, http.StatusConflict,
 			"the target status was archived while this request was in flight; reload the status list and retry")
+		return
+	}
+	if writeIssueCreatePropertyError(w, err) {
 		return
 	}
 	if writeIssueLimitReached(w, err) {
@@ -3316,6 +3479,13 @@ type UpdateIssueRequest struct {
 	// predate the handoff UI removal. It is consumed only when this write starts
 	// a run and is never stored on the issue itself.
 	HandoffNote string `json:"handoff_note,omitempty"`
+	// DuplicateOfIssueID marks this issue as a duplicate of another issue in
+	// the same workspace (MUL-7349). A duplicate is an ordinary cancelled issue
+	// that remembers its original, so this also sets status to cancelled.
+	// Any later status change away from cancelled removes the mark; there is
+	// no explicit null. Write-only: read the relation back from
+	// GET /api/issues/{id}/duplicates. Not accepted by batch updates.
+	DuplicateOfIssueID *string `json:"duplicate_of_issue_id,omitempty"`
 }
 
 func mergeIssueChannelMediaDescription(current, incoming string, base *string, attachments []db.Attachment) string {
@@ -3408,7 +3578,7 @@ func (h *Handler) updateIssueAtomically(ctx context.Context, workspaceID pgtype.
 	if h.TxStarter == nil {
 		return db.Issue{}, db.Issue{}, false, errors.New("atomic issue update requires transaction starter")
 	}
-	tx, err := h.TxStarter.Begin(ctx)
+	tx, err := h.beginWakeupWrite(ctx)
 	if err != nil {
 		return db.Issue{}, db.Issue{}, false, fmt.Errorf("begin atomic issue update: %w", err)
 	}
@@ -3439,6 +3609,11 @@ func (h *Handler) updateIssueAtomically(ctx context.Context, workspaceID pgtype.
 			AttachmentIds: attachmentIDs,
 		}); err != nil {
 			return db.Issue{}, db.Issue{}, false, fmt.Errorf("lock issue attachments: %w", err)
+		}
+	}
+	if params.DuplicateOfIssueID.Valid {
+		if err := lockAndCheckDuplicateMark(ctx, qtx, workspaceID, params.ID, params.DuplicateOfIssueID); err != nil {
+			return db.Issue{}, db.Issue{}, false, err
 		}
 	}
 	current, err := qtx.LockIssueForDescriptionUpdate(ctx, db.LockIssueForDescriptionUpdateParams{
@@ -3568,7 +3743,7 @@ func (h *Handler) updateIssueAtomically(ctx context.Context, workspaceID pgtype.
 			Valid:  true,
 		}
 	}
-	issue, err := qtx.UpdateIssue(ctx, params)
+	issue, cancelledWakeups, err := updateIssueStoppingWakeups(ctx, qtx, params)
 	if err != nil {
 		return db.Issue{}, current, false, fmt.Errorf("update locked issue: %w", err)
 	}
@@ -3639,10 +3814,12 @@ func (h *Handler) updateIssueAtomically(ctx context.Context, workspaceID pgtype.
 		h.TaskService.NotifyWorkflowEntry(ctx, entry)
 	}
 
+	h.broadcastCancelledWakeups(ctx, workspaceID, cancelledWakeups)
 	return issue, current, attachmentsChanged, nil
 }
 
 func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
+	r = h.withWakeupActor(r)
 	id := chi.URLParam(r, "id")
 	prevIssue, ok := h.loadIssueForUser(w, r, id)
 	if !ok {
@@ -3686,8 +3863,14 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	duplicateOfID, ok := parseDuplicateMark(w, &req, rawFields, prevIssue.ID)
+	if !ok {
+		return
+	}
+
 	// Pre-fill nullable fields (bare sqlc.narg) with current values
 	params := db.UpdateIssueParams{
+		SourceTaskID:  h.wakeupSourceTaskID(r),
 		ID:            prevIssue.ID,
 		AssigneeType:  prevIssue.AssigneeType,
 		AssigneeID:    prevIssue.AssigneeID,
@@ -3696,6 +3879,8 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		ParentIssueID: prevIssue.ParentIssueID,
 		ProjectID:     prevIssue.ProjectID,
 		Stage:         prevIssue.Stage,
+		// Checked against the locked rows in updateIssueWithStatusGuard.
+		DuplicateOfIssueID: duplicateOfID,
 	}
 	if req.ExpectedRevision != nil {
 		if *req.ExpectedRevision < 1 {
@@ -3942,6 +4127,9 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
+		if writeDuplicateMarkError(w, err) {
+			return
+		}
 		if errors.Is(err, errIssueFieldConflict) {
 			writeEditConflict(w, "issue", prevIssue.ID)
 			return
@@ -3990,25 +4178,27 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		(prevDueDate != nil && resp.DueDate != nil && *prevDueDate != *resp.DueDate)
 
 	updatePayload := map[string]any{
-		"issue":               resp,
-		"assignee_changed":    assigneeChanged,
-		"status_changed":      statusChanged,
-		"priority_changed":    priorityChanged,
-		"project_changed":     projectChanged,
-		"start_date_changed":  startDateChanged,
-		"due_date_changed":    dueDateChanged,
-		"description_changed": descriptionChanged,
-		"title_changed":       titleChanged,
-		"prev_title":          prevIssue.Title,
-		"prev_assignee_type":  textToPtr(prevIssue.AssigneeType),
-		"prev_assignee_id":    uuidToPtr(prevIssue.AssigneeID),
-		"prev_status":         prevIssue.Status,
-		"prev_priority":       prevIssue.Priority,
-		"prev_start_date":     prevStartDate,
-		"prev_due_date":       prevDueDate,
-		"prev_description":    textToPtr(prevIssue.Description),
-		"creator_type":        prevIssue.CreatorType,
-		"creator_id":          uuidToString(prevIssue.CreatorID),
+		"issue":                      resp,
+		"assignee_changed":           assigneeChanged,
+		"status_changed":             statusChanged,
+		"priority_changed":           priorityChanged,
+		"project_changed":            projectChanged,
+		"start_date_changed":         startDateChanged,
+		"due_date_changed":           dueDateChanged,
+		"description_changed":        descriptionChanged,
+		"title_changed":              titleChanged,
+		"prev_title":                 prevIssue.Title,
+		"prev_assignee_type":         textToPtr(prevIssue.AssigneeType),
+		"prev_assignee_id":           uuidToPtr(prevIssue.AssigneeID),
+		"prev_status":                prevIssue.Status,
+		"prev_priority":              prevIssue.Priority,
+		"prev_start_date":            prevStartDate,
+		"prev_due_date":              prevDueDate,
+		"prev_description":           textToPtr(prevIssue.Description),
+		"creator_type":               prevIssue.CreatorType,
+		"creator_id":                 uuidToString(prevIssue.CreatorID),
+		"duplicate_of_issue_id":      uuidToPtr(issue.DuplicateOfIssueID),
+		"prev_duplicate_of_issue_id": uuidToPtr(prevIssue.DuplicateOfIssueID),
 	}
 	h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, updatePayload)
 	if statusChanged {
@@ -4268,6 +4458,7 @@ func (h *Handler) isAgentAssigneeReady(ctx context.Context, issue db.Issue) bool
 }
 
 func (h *Handler) DeleteIssue(w http.ResponseWriter, r *http.Request) {
+	r = h.withWakeupActor(r)
 	id := chi.URLParam(r, "id")
 	issue, ok := h.loadIssueForUser(w, r, id)
 	if !ok {
@@ -4292,7 +4483,8 @@ func (h *Handler) DeleteIssue(w http.ResponseWriter, r *http.Request) {
 	// other clients after an identifier-path delete.
 	resolvedID := uuidToString(issue.ID)
 	h.publish(protocol.EventIssueDeleted, uuidToString(issue.WorkspaceID), actorType, actorID, map[string]any{"issue_id": resolvedID})
-	h.publishDetachedChildren(r.Context(), deleteResult.DetachedChildren, actorType, actorID)
+	h.publishIssueSnapshots(r.Context(), deleteResult.DetachedChildren, actorType, actorID)
+	h.publishIssueSnapshots(r.Context(), deleteResult.ClearedDuplicates, actorType, actorID)
 	slog.Info("issue deleted", append(logger.RequestAttrs(r), "issue_id", resolvedID, "workspace_id", uuidToString(issue.WorkspaceID))...)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -4305,6 +4497,9 @@ func (h *Handler) DeleteIssue(w http.ResponseWriter, r *http.Request) {
 type issueDeleteResult struct {
 	AttachmentURLs   []string
 	DetachedChildren []db.Issue
+	// ClearedDuplicates lost their duplicate mark because their original was
+	// deleted. They stay cancelled.
+	ClearedDuplicates []db.Issue
 }
 
 func (h *Handler) deleteIssueAndCollectAttachmentURLs(ctx context.Context, issue db.Issue, excludedIssueIDs []pgtype.UUID) (issueDeleteResult, error) {
@@ -4315,7 +4510,7 @@ func (h *Handler) deleteIssuesAndCollectAttachmentURLs(ctx context.Context, issu
 	sort.Slice(issues, func(i, j int) bool {
 		return uuidToString(issues[i].ID) < uuidToString(issues[j].ID)
 	})
-	tx, err := h.TxStarter.Begin(ctx)
+	tx, err := h.beginWakeupWrite(ctx)
 	if err != nil {
 		return issueDeleteResult{}, fmt.Errorf("begin issue delete: %w", err)
 	}
@@ -4336,6 +4531,13 @@ func (h *Handler) deleteIssuesAndCollectAttachmentURLs(ctx context.Context, issu
 			return issueDeleteResult{}, fmt.Errorf("detach child issues: %w", err)
 		}
 		result.DetachedChildren = append(result.DetachedChildren, detached...)
+		cleared, err := qtx.ClearIssueDuplicatesOf(ctx, db.ClearIssueDuplicatesOfParams{
+			WorkspaceID: issue.WorkspaceID, IssueID: issue.ID, ExcludedIssueIds: excludedIssueIDs,
+		})
+		if err != nil {
+			return issueDeleteResult{}, fmt.Errorf("clear duplicate marks: %w", err)
+		}
+		result.ClearedDuplicates = append(result.ClearedDuplicates, cleared...)
 		attachmentURLs, err := qtx.ListAttachmentURLsByIssueOrComments(ctx, issue.ID)
 		if err != nil {
 			return issueDeleteResult{}, fmt.Errorf("list issue attachment URLs: %w", err)
@@ -4388,11 +4590,13 @@ func (h *Handler) deleteIssuesAndCollectAttachmentURLs(ctx context.Context, issu
 	return result, nil
 }
 
-func (h *Handler) publishDetachedChildren(ctx context.Context, children []db.Issue, actorType, actorID string) {
-	for _, child := range children {
-		response := issueToResponse(child, h.getIssuePrefix(ctx, child.WorkspaceID))
-		h.fillStatusCategory(ctx, child.WorkspaceID, &response)
-		h.publish(protocol.EventIssueUpdated, uuidToString(child.WorkspaceID), actorType, actorID, map[string]any{"issue": response})
+// publishIssueSnapshots broadcasts issue:updated for issues a delete rewrote:
+// detached children and duplicates whose original was deleted.
+func (h *Handler) publishIssueSnapshots(ctx context.Context, issues []db.Issue, actorType, actorID string) {
+	for _, issue := range issues {
+		response := issueToResponse(issue, h.getIssuePrefix(ctx, issue.WorkspaceID))
+		h.fillStatusCategory(ctx, issue.WorkspaceID, &response)
+		h.publish(protocol.EventIssueUpdated, uuidToString(issue.WorkspaceID), actorType, actorID, map[string]any{"issue": response})
 	}
 }
 
@@ -4406,6 +4610,7 @@ type BatchUpdateIssuesRequest struct {
 }
 
 func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
+	r = h.withWakeupActor(r)
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to read request body")
@@ -4441,6 +4646,10 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 	var rawUpdates map[string]json.RawMessage
 	if raw, exists := rawTop["updates"]; exists {
 		json.Unmarshal(raw, &rawUpdates)
+	}
+	if _, ok := rawUpdates["duplicate_of_issue_id"]; ok {
+		writeError(w, http.StatusBadRequest, "duplicate_of_issue_id is not supported in batch updates")
+		return
 	}
 
 	// Short-circuit when no mutation field is present in `updates`. Without
@@ -4548,6 +4757,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		}
 
 		params := db.UpdateIssueParams{
+			SourceTaskID:  h.wakeupSourceTaskID(r),
 			ID:            prevIssue.ID,
 			AssigneeType:  prevIssue.AssigneeType,
 			AssigneeID:    prevIssue.AssigneeID,
@@ -4727,12 +4937,14 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		projectChanged := prevIssue.ProjectID != issue.ProjectID
 
 		updatePayload := map[string]any{
-			"issue":            resp,
-			"assignee_changed": assigneeChanged,
-			"status_changed":   statusChanged,
-			"priority_changed": priorityChanged,
-			"project_changed":  projectChanged,
-			"prev_status":      prevIssue.Status,
+			"issue":                      resp,
+			"assignee_changed":           assigneeChanged,
+			"status_changed":             statusChanged,
+			"priority_changed":           priorityChanged,
+			"project_changed":            projectChanged,
+			"duplicate_of_issue_id":      uuidToPtr(issue.DuplicateOfIssueID),
+			"prev_duplicate_of_issue_id": uuidToPtr(prevIssue.DuplicateOfIssueID),
+			"prev_status":                prevIssue.Status,
 		}
 		h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, updatePayload)
 		if statusChanged {
@@ -4856,7 +5068,8 @@ func (h *Handler) BatchDeleteIssues(w http.ResponseWriter, r *http.Request) {
 	for _, issue := range issues {
 		h.publish(protocol.EventIssueDeleted, workspaceID, actorType, actorID, map[string]any{"issue_id": uuidToString(issue.ID)})
 	}
-	h.publishDetachedChildren(r.Context(), deleteResult.DetachedChildren, actorType, actorID)
+	h.publishIssueSnapshots(r.Context(), deleteResult.DetachedChildren, actorType, actorID)
+	h.publishIssueSnapshots(r.Context(), deleteResult.ClearedDuplicates, actorType, actorID)
 	deleted := len(issues)
 
 	slog.Info("batch delete issues", append(logger.RequestAttrs(r), "count", deleted)...)

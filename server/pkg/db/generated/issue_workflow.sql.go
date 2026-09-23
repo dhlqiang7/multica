@@ -65,7 +65,7 @@ WHERE i.id = $1::uuid
   AND w.id = i.workspace_id
   AND s.workspace_id = i.workspace_id
   AND s.legacy_status_key = i.status
-RETURNING i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.workflow_id, i.workflow_status_id, i.last_transition_id
+RETURNING i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.duplicate_of_issue_id, i.workflow_id, i.workflow_status_id, i.last_transition_id
 `
 
 type BindIssueToDefaultWorkflowParams struct {
@@ -106,6 +106,7 @@ func (q *Queries) BindIssueToDefaultWorkflow(ctx context.Context, arg BindIssueT
 		&i.Revision,
 		&i.LastActivityAt,
 		&i.TriageState,
+		&i.DuplicateOfIssueID,
 		&i.WorkflowID,
 		&i.WorkflowStatusID,
 		&i.LastTransitionID,
@@ -119,7 +120,7 @@ SET workflow_id = $1::uuid,
     workflow_status_id = $2::uuid
 WHERE id = $3::uuid
   AND workspace_id = $4::uuid
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, workflow_id, workflow_status_id, last_transition_id
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id, workflow_id, workflow_status_id, last_transition_id
 `
 
 type BindIssueToWorkflowStatusParams struct {
@@ -167,6 +168,7 @@ func (q *Queries) BindIssueToWorkflowStatus(ctx context.Context, arg BindIssueTo
 		&i.Revision,
 		&i.LastActivityAt,
 		&i.TriageState,
+		&i.DuplicateOfIssueID,
 		&i.WorkflowID,
 		&i.WorkflowStatusID,
 		&i.LastTransitionID,
@@ -1516,7 +1518,7 @@ UPDATE issue
 SET last_transition_id = $3
 WHERE id = $1
   AND workspace_id = $2
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, workflow_id, workflow_status_id, last_transition_id
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id, workflow_id, workflow_status_id, last_transition_id
 `
 
 type SetIssueLastTransitionParams struct {
@@ -1558,6 +1560,7 @@ func (q *Queries) SetIssueLastTransition(ctx context.Context, arg SetIssueLastTr
 		&i.Revision,
 		&i.LastActivityAt,
 		&i.TriageState,
+		&i.DuplicateOfIssueID,
 		&i.WorkflowID,
 		&i.WorkflowStatusID,
 		&i.LastTransitionID,
@@ -1843,7 +1846,7 @@ SET assignee_type = $1::text,
     updated_at = now()
 WHERE id = $3::uuid
   AND workspace_id = $4::uuid
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, workflow_id, workflow_status_id, last_transition_id
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id, workflow_id, workflow_status_id, last_transition_id
 `
 
 type UpdateIssueAssigneeForTakeoverParams struct {
@@ -1891,6 +1894,7 @@ func (q *Queries) UpdateIssueAssigneeForTakeover(ctx context.Context, arg Update
 		&i.Revision,
 		&i.LastActivityAt,
 		&i.TriageState,
+		&i.DuplicateOfIssueID,
 		&i.WorkflowID,
 		&i.WorkflowStatusID,
 		&i.LastTransitionID,
@@ -1906,6 +1910,7 @@ SET status = COALESCE(s.legacy_status_key, CASE s.phase
         WHEN 'closed' THEN 'cancelled'
         ELSE 'in_progress'
     END),
+    duplicate_of_issue_id = CASE WHEN i.status = 'cancelled' AND COALESCE(s.legacy_status_key, CASE s.phase WHEN 'unstarted' THEN 'todo' WHEN 'done' THEN 'done' WHEN 'closed' THEN 'cancelled' ELSE 'in_progress' END) = 'cancelled' THEN i.duplicate_of_issue_id ELSE NULL END,
     workflow_status_id = s.id,
     revision = i.revision + 1,
     updated_at = now()
@@ -1916,7 +1921,7 @@ WHERE i.id = $1::uuid
   AND s.workspace_id = i.workspace_id
   AND s.workflow_id = i.workflow_id
   AND s.archived_at IS NULL
-RETURNING i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.workflow_id, i.workflow_status_id, i.last_transition_id
+RETURNING i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.duplicate_of_issue_id, i.workflow_id, i.workflow_status_id, i.last_transition_id
 `
 
 type UpdateIssueWorkflowStatusParams struct {
@@ -1958,6 +1963,7 @@ func (q *Queries) UpdateIssueWorkflowStatus(ctx context.Context, arg UpdateIssue
 		&i.Revision,
 		&i.LastActivityAt,
 		&i.TriageState,
+		&i.DuplicateOfIssueID,
 		&i.WorkflowID,
 		&i.WorkflowStatusID,
 		&i.LastTransitionID,

@@ -17,8 +17,9 @@ import { useT } from "../../../i18n";
 const SEARCH_THRESHOLD = 9;
 
 /** Stable-node status picker for one concrete, workflow-pinned issue. */
-export function WorkflowStatusPicker({ issue, align = "start", trigger, open: controlledOpen, onOpenChange }: {
+export function WorkflowStatusPicker({ issue, align = "start", trigger, open: controlledOpen, onOpenChange, onMarkDuplicate }: {
   issue: Issue;
+  onMarkDuplicate?: () => void;
   trigger?: React.ReactNode;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -62,7 +63,7 @@ export function WorkflowStatusPicker({ issue, align = "start", trigger, open: co
         setOpen(next);
       }}
       width="w-72"
-      footer={workflowQuery.isError || transition.isError ? <div role="alert" className="p-2 text-caption text-destructive">{t(($) => $.handoff.error)} <button type="button" className="underline" onClick={() => void workflowQuery.refetch()}>{t(($) => $.workflow_selection.retry)}</button></div> : workflowQuery.isPending ? <p role="status" className="p-2 text-caption text-muted-foreground">{t(($) => $.workflow_selection.loading)}</p> : undefined}
+      footer={<>{onMarkDuplicate && <button type="button" className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-body hover:bg-accent transition-colors" onClick={() => { setOpen(false); setQuery(""); onMarkDuplicate(); }}>{t(($) => $.pickers.status.mark_duplicate)}</button>}{workflowQuery.isError || transition.isError ? <div role="alert" className="p-2 text-caption text-destructive">{t(($) => $.handoff.error)} <button type="button" className="underline" onClick={() => void workflowQuery.refetch()}>{t(($) => $.workflow_selection.retry)}</button></div> : workflowQuery.isPending ? <p role="status" className="p-2 text-caption text-muted-foreground">{t(($) => $.workflow_selection.loading)}</p> : undefined}</>}
       align={align}
       searchable={activeStatuses.length > SEARCH_THRESHOLD}
       searchPlaceholder={t(($) => $.filters.search_status)}

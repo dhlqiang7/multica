@@ -151,6 +151,16 @@ func transitionIssueToStatusNode(ctx context.Context, q *db.Queries, txStarter T
 		return IssueTransitionResult{}, fmt.Errorf("begin issue transition: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	actorID, sourceTaskID := "", ""
+	if p.Actor.ID.Valid {
+		actorID = util.UUIDToString(p.Actor.ID)
+	}
+	if p.Actor.TaskID.Valid {
+		sourceTaskID = util.UUIDToString(p.Actor.TaskID)
+	}
+	if _, err := tx.Exec(ctx, "SELECT set_config('multica.actor_type',$1,true), set_config('multica.actor_id',$2,true), set_config('multica.source_task_id',$3,true)", p.Actor.Type, actorID, sourceTaskID); err != nil {
+		return IssueTransitionResult{}, err
+	}
 	qtx := q.WithTx(tx)
 	if err := qtx.LockIssueStatusCatalogShared(ctx, p.WorkspaceID); err != nil {
 		return IssueTransitionResult{}, err
@@ -205,7 +215,7 @@ func transitionIssueToStatusNode(ctx context.Context, q *db.Queries, txStarter T
 		// Preserve legacy column-position semantics for system and installed
 		// client writes while sharing all status-entry effects below.
 		current, err = qtx.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
-			ID: p.IssueID, WorkspaceID: p.WorkspaceID, Status: legacyStatus,
+			ID: p.IssueID, WorkspaceID: p.WorkspaceID, Status: legacyStatus, SourceTaskID: p.Actor.TaskID,
 		})
 	} else {
 		current, err = qtx.UpdateIssueWorkflowStatus(ctx, db.UpdateIssueWorkflowStatusParams{
@@ -219,6 +229,11 @@ func transitionIssueToStatusNode(ctx context.Context, q *db.Queries, txStarter T
 	if err != nil {
 		return IssueTransitionResult{}, err
 	}
+	cancelledWakeups, err := StopClosedIssueWakeups(ctx, qtx, result.Issue)
+	if err != nil {
+		return IssueTransitionResult{}, err
+	}
+	result.CancelledTasks = append(result.CancelledTasks, cancelledWakeups...)
 	if err := tx.Commit(ctx); err != nil {
 		return IssueTransitionResult{}, fmt.Errorf("commit issue transition: %w", err)
 	}

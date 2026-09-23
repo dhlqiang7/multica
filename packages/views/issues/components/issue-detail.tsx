@@ -12,6 +12,7 @@ import { useState, useEffect, useCallback, useMemo, useRef, Fragment, type React
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
 import { AppLink, useBackOrReplace } from "../../navigation";
+import { IssueDuplicateBanner, IssueDuplicatesSection } from "./issue-duplicates";
 import {
   Archive,
   Calendar,
@@ -68,8 +69,16 @@ import { formatDateOnly, isPastDateOnly } from "@multica/core/issues/date";
 import { useUpdateIssue } from "@multica/core/issues/mutations";
 import { toast } from "sonner";
 import { errorCode } from "@multica/core/api";
-import { StatusIcon, PriorityIcon, StatusPicker, WorkflowStatusPicker, PriorityPicker, StagePicker, StartDatePicker, DueDatePicker, AssigneePicker, LabelPicker } from ".";
-import { maxSiblingStage } from "./pickers/stage-picker";
+import { StatusIcon } from "./status-icon";
+import { PriorityIcon } from "./priority-icon";
+import { StatusPicker } from "./pickers/status-picker";
+import { PriorityPicker } from "./pickers/priority-picker";
+import { StagePicker, maxSiblingStage } from "./pickers/stage-picker";
+import { StartDatePicker } from "./pickers/start-date-picker";
+import { DueDatePicker } from "./pickers/due-date-picker";
+import { AssigneePicker } from "./pickers/assignee-picker";
+import { LabelPicker } from "./pickers/label-picker";
+import { WorkflowStatusPicker } from "./pickers/workflow-status-picker";
 import { CustomPropertyValueEditor, CustomPropertyValueDisplay } from "./pickers/custom-property-picker";
 import { Switch } from "@multica/ui/components/ui/switch";
 import { IssueActionsDropdown, useIssueActions, IssueActionsContextMenu, IssueContextMenuProvider } from "../actions";
@@ -92,6 +101,7 @@ import { ThreadMinimap, type ThreadMinimapThread } from "./thread-minimap";
 import { collectThreadParticipants, collectThreadReplies, deriveThreadResolution } from "./thread-utils";
 import { IssueAgentHeaderChip } from "./issue-agent-header-chip";
 import { ExecutionLogSection } from "./execution-log-section";
+import { WakeupsSection } from "./wakeups-section";
 import { QuickActionsSection } from "./quick-actions-section";
 import { PluginPanelSection } from "../../plugins";
 import { PullRequestList } from "./pull-request-list";
@@ -2318,9 +2328,9 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           {/* Core props — always rendered. */}
           <PropRow label={t(($) => $.detail.prop_status)}>
             {issue.workflow_id && issue.workflow_status_id ? (
-              <WorkflowStatusPicker issue={issue} align="start" />
+              <WorkflowStatusPicker issue={issue} align="start" onMarkDuplicate={actions.openMarkDuplicate} />
             ) : (
-              <StatusPicker status={issue.status} onUpdate={handleUpdateField} align="start" />
+              <StatusPicker status={issue.status} onUpdate={handleUpdateField} align="start" onMarkDuplicate={actions.openMarkDuplicate} />
             )}
           </PropRow>
           <PropRow label={t(($) => $.detail.prop_assignee)}>
@@ -2506,6 +2516,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           click an action they cannot run, and the refusal is explained at run
           time rather than by a silently shorter list. */}
       <QuickActionsSection issueId={issue.id} />
+      <WakeupsSection issueId={issue.id} closed={["done", "closed"].includes(resolveStatusCategory(issue.status))} />
       <PluginPanelSection issueId={issue.id} />
 
       {/* Parent issue — standalone section, only when the issue has a
@@ -2551,6 +2562,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           </div>}
         </div>
       )}
+
+      <IssueDuplicatesSection issueId={issue.id} />
 
       {/* Pull requests — hidden when the workspace disables the PR sidebar
           (or the GitHub master switch is off). Backend data is kept either
@@ -2658,6 +2671,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             onReplyAccepted: scrollToTimelineBottom, onEdit: editComment, onDelete: deleteComment,
             onToggleReaction: handleToggleReaction, onCreateSubIssue: openCommentSubIssue,
             onResolveToggle: handleResolveToggle,
+            onCopyLink: actions.copyCommentLink,
             onCollapseResolved: reply.resolved_at ? () => toggleResolvedExpand(reply.id, false) : undefined,
             expandedResolvedIds: expandedResolved, onResolvedExpandChange: toggleResolvedExpand,
             highlightedCommentId: highlightedId,
@@ -2695,6 +2709,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             onToggleReaction={handleToggleReaction}
             onCreateSubIssue={openCommentSubIssue}
             onResolveToggle={handleResolveToggle}
+            onCopyLink={actions.copyCommentLink}
             onCollapseResolved={isResolved ? () => toggleResolvedExpand(item.id, false) : undefined}
             expandedResolvedIds={expandedResolved}
             onResolvedExpandChange={toggleResolvedExpand}
@@ -2894,6 +2909,10 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             `useStickyComposer`), so it lands here — right where the launcher
             floats — once the reader scrolls to the bottom. */}
         <div className="mx-auto w-full max-w-4xl px-3 py-6 max-md:pb-chat-launcher md:px-8 md:py-8">
+          <IssueDuplicateBanner
+            issue={issue}
+            onUnmark={() => handleUpdateField({ status: "todo" })}
+          />
           {titleLazy.active && (
             <div className={titleLazy.ready ? undefined : "hidden"}>
               <TitleEditor
