@@ -5,6 +5,7 @@ import { render } from "@testing-library/react";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enRuntimes from "../../locales/en/runtimes.json";
+import { NavigationProvider } from "../../navigation";
 import { RuntimeDetailPage } from "./runtime-detail-page";
 
 // MUL-7107: the loading header used to sit on a bare gutter while the header
@@ -67,7 +68,19 @@ describe("RuntimeDetailPage loading state", () => {
         locale="en"
         resources={{ en: { common: enCommon, runtimes: enRuntimes } }}
       >
-        <RuntimeDetailPage runtimeId="rt-1" />
+        <NavigationProvider
+          value={{
+            push: vi.fn(),
+            replace: vi.fn(),
+            back: vi.fn(),
+            pathname: "/ws/runtimes/rt-1",
+            searchParams: new URLSearchParams(),
+            hash: "",
+            getShareableUrl: (p) => p,
+          }}
+        >
+          <RuntimeDetailPage runtimeId="rt-1" />
+        </NavigationProvider>
       </I18nProvider>,
     );
 
@@ -75,8 +88,7 @@ describe("RuntimeDetailPage loading state", () => {
     // Header band and body band; neither may be left on a bare gutter, or the
     // page shifts sideways when loading finishes.
     expect(railed.length).toBeGreaterThanOrEqual(2);
-    expect(container.querySelector(".border-b")).toContainElement(
-      container.querySelector(`.${RAIL_SENTINEL}`) as HTMLElement,
-    );
+    const headerBand = container.firstElementChild?.firstElementChild;
+    expect(headerBand?.querySelector(`.${RAIL_SENTINEL}`)).not.toBeNull();
   });
 });

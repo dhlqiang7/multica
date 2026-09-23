@@ -437,3 +437,29 @@ function sectionRank(section: RuntimeMachineSection): number {
       return 2;
   }
 }
+
+/**
+ * A machine's list status, on the same "does a person need to step in?"
+ * question as the agent list. Offline alone is not a problem: an old laptop
+ * nobody runs agents on just reads as offline. It becomes one when agents
+ * still depend on the machine, or when a runtime on it cannot start.
+ */
+export type MachineListStatus = "attention" | "online" | "offline";
+
+export const MACHINE_LIST_STATUS_ORDER: readonly MachineListStatus[] = [
+  "attention",
+  "online",
+  "offline",
+];
+
+export function deriveMachineListStatus(
+  machine: Pick<RuntimeMachine, "health" | "runtimes">,
+  boundAgentCount: number,
+  hasFailingRuntime: boolean,
+): MachineListStatus {
+  const offline =
+    machine.health === "offline" || machine.health === "long_offline";
+  if (hasFailingRuntime) return "attention";
+  if (offline) return boundAgentCount > 0 ? "attention" : "offline";
+  return "online";
+}

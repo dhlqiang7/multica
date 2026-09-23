@@ -104,3 +104,14 @@ describe("canReadRuntimeUsage", () => {
     ).toBe(true);
   });
 });
+
+describe("canReadRuntimeUsage for ownerless runtimes", () => {
+  it("hides usage for an ownerless runtime even when it is public", () => {
+    expect(
+      canReadRuntimeUsage(
+        { owner_id: null, visibility: "public" } as unknown as AgentRuntime,
+        "user-me",
+      ),
+    ).toBe(false);
+  });
+});

@@ -10,7 +10,7 @@ import { AiBuilderSessionPage } from "./pages/ai-builder-session-page";
 import { MemberDetailPage } from "./pages/member-detail-page";
 import {
   RuntimeDetailPage,
-  RuntimeSettingsPage,
+  RuntimeOnMachinePage,
 } from "./pages/runtime-detail-page";
 import { AttachmentPreviewRoute } from "./pages/attachment-preview-page";
 import { IssuesPage } from "@multica/views/issues/components";
@@ -174,7 +174,7 @@ export const appRoutes: RouteObject[] = [
           },
           {
             path: "runtimes/:id/runtime/:runtimeId",
-            element: <RuntimeSettingsPage />,
+            element: <RuntimeOnMachinePage />,
             handle: { title: "Runtime" },
           },
           { path: "skills", element: <SkillsPage />, handle: { title: "Skills" } },

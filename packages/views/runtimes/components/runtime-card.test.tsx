@@ -5,7 +5,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { AgentRuntime, RuntimeProfile } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
-import { NavigationProvider, type NavigationAdapter } from "../../navigation";
 import enCommon from "../../locales/en/common.json";
 import enRuntimes from "../../locales/en/runtimes.json";
 import enAgents from "../../locales/en/agents.json";
@@ -14,9 +13,8 @@ const TEST_RESOURCES = {
   en: { common: enCommon, runtimes: enRuntimes, agents: enAgents },
 };
 
-// Stub the workspace queries the columns reach into. None of them feed the
-// row menu directly, but `createRuntimeColumns` wires CliCell + CostCell
-// against the same query client, so we still need useQuery to resolve.
+// The card's dialogs reach into workspace queries; none of them feed what is
+// asserted here, but useQuery still has to resolve.
 vi.mock("@tanstack/react-query", async () => {
   const actual =
     await vi.importActual<typeof import("@tanstack/react-query")>(
@@ -28,7 +26,23 @@ vi.mock("@tanstack/react-query", async () => {
   };
 });
 
+const mockUpdateRuntime = vi.hoisted(() => vi.fn());
+
+vi.mock("@multica/core/hooks", () => ({
+  useWorkspaceId: () => "ws-1",
+}));
+
 vi.mock("@multica/core/runtimes/mutations", () => ({
+  useUpdateRuntime: () => ({
+    mutate: (
+      args: { runtimeId: string; patch: Record<string, unknown> },
+      opts?: { onSuccess?: () => void },
+    ) => {
+      mockUpdateRuntime(args.runtimeId, args.patch);
+      opts?.onSuccess?.();
+    },
+    isPending: false,
+  }),
   useDeleteRuntime: () => ({ mutate: vi.fn(), isPending: false, mutateAsync: vi.fn() }),
   useUnbindAgentsAndDeleteRuntime: () => ({
     mutate: vi.fn(),
@@ -82,31 +96,27 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
-vi.mock("../../common/use-viewing-timezone", () => ({
-  useViewingTimezone: () => "UTC",
-}));
-
 vi.mock("./provider-logo", () => ({ ProviderLogo: () => null }));
 vi.mock("./shared", () => ({
   HealthIcon: () => null,
   useHealthLabel: () => () => "Online",
 }));
 
-import { CliCell, RuntimeRowMenu, type RuntimeRow } from "./runtime-list";
+import { RuntimeCard } from "./runtime-card";
 
 function makeRuntime(overrides: Partial<AgentRuntime>): AgentRuntime {
   return {
     id: "rt-1",
     workspace_id: "ws-1",
     daemon_id: null,
-    name: "rt",
+    name: "Claude (host.local)",
     runtime_mode: "local",
     provider: "claude",
     launch_header: "",
     status: "online",
     device_info: "",
     metadata: {},
-    owner_id: "user-1",
+    owner_id: "user-me",
     visibility: "private",
     last_seen_at: null,
     created_at: "2026-01-01T00:00:00Z",
@@ -125,7 +135,7 @@ function makeProfile(overrides: Partial<RuntimeProfile> = {}): RuntimeProfile {
     description: null,
     fixed_args: [],
     visibility: "workspace",
-    created_by: "user-1",
+    created_by: "user-me",
     enabled: true,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
@@ -133,108 +143,56 @@ function makeProfile(overrides: Partial<RuntimeProfile> = {}): RuntimeProfile {
   };
 }
 
-function makeRow(
+function renderCard(
   runtime: AgentRuntime,
-  canDelete = true,
-  profile: RuntimeProfile | null = null,
-): RuntimeRow {
-  return {
-    runtime,
-    profile,
-    ownerMember: null,
-    workload: { agentIds: [], runningCount: 0, queuedCount: 0 },
-    canDelete,
-  };
-}
-
-function makeAdapter(
-  overrides: Partial<NavigationAdapter> = {},
-): NavigationAdapter {
-  return {
-    push: vi.fn(),
-    replace: vi.fn(),
-    back: vi.fn(),
-    pathname: "/ws-1/runtimes",
-    searchParams: new URLSearchParams(),
-    hash: "",
-    getShareableUrl: (p) => p,
-    ...overrides,
-  };
-}
-
-// The row menu is a plain exported component on the ListGrid version of the
-// list — render it directly with the row fields it reads.
-function renderActionsCell(
-  row: RuntimeRow,
-  options: { detailHref?: string; adapter?: NavigationAdapter } = {},
+  options: {
+    isAdmin?: boolean;
+    profile?: RuntimeProfile | null;
+    machineTitle?: string;
+  } = {},
 ) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-
   return render(
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
-      <NavigationProvider value={options.adapter ?? makeAdapter()}>
-        <QueryClientProvider client={qc}>
-          <RuntimeRowMenu
-            runtime={row.runtime}
-            profile={row.profile}
-            wsId="ws-1"
-            canDelete={row.canDelete}
-            detailHref={options.detailHref}
-          />
-        </QueryClientProvider>
-      </NavigationProvider>
+      <QueryClientProvider client={qc}>
+        <RuntimeCard
+          runtime={runtime}
+          machineTitle={options.machineTitle ?? "host.local"}
+          agents={[]}
+          runningCount={0}
+          queuedCount={0}
+          profile={options.profile ?? null}
+          selected={false}
+          now={Date.parse("2026-01-01T00:00:00Z")}
+          currentUserId="user-me"
+          isAdmin={options.isAdmin ?? false}
+        />
+      </QueryClientProvider>
     </I18nProvider>,
   );
 }
 
-describe("runtime list row menu", () => {
+describe("RuntimeCard actions", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("renders the kebab menu for an online local runtime (self-healing is no longer hidden)", () => {
-    // MUL-3352: hiding the kebab on a self-healing row left owners reading
-    // it as a missing permission. The action stays available; the dialog
-    // surfaces the self-heal warning instead.
-    renderActionsCell(
-      makeRow(makeRuntime({ runtime_mode: "local", status: "online" })),
-    );
+  it("offers delete to the owner of a live local runtime (self-healing is not hidden)", () => {
+    // MUL-3352: hiding the menu on a self-healing runtime read as a missing
+    // permission. The dialog carries the self-heal warning instead.
+    renderCard(makeRuntime({ status: "online" }));
     expect(screen.getByLabelText("Row actions")).toBeInTheDocument();
   });
 
-  it("renders the kebab menu for an offline local runtime", () => {
-    renderActionsCell(
-      makeRow(makeRuntime({ runtime_mode: "local", status: "offline" })),
-    );
-    expect(screen.getByLabelText("Row actions")).toBeInTheDocument();
+  it("hides the menu when the viewer can neither edit nor delete", () => {
+    renderCard(makeRuntime({ owner_id: "someone-else" }));
+    expect(screen.queryByLabelText("Row actions")).not.toBeInTheDocument();
   });
 
-  it("renders the kebab menu for a cloud runtime regardless of status", () => {
-    renderActionsCell(
-      makeRow(makeRuntime({ runtime_mode: "cloud", status: "online" })),
-    );
-    expect(screen.getByLabelText("Row actions")).toBeInTheDocument();
-  });
-
-  it("renders the kebab menu for a custom runtime when the profile is available", () => {
+  it("lets a workspace admin edit a custom runtime from its card", () => {
     const profile = makeProfile();
-    renderActionsCell(
-      makeRow(
-        makeRuntime({ runtime_mode: "local", profile_id: profile.id }),
-        true,
-        profile,
-      ),
-    );
-    expect(screen.getByLabelText("Row actions")).toBeInTheDocument();
-  });
-
-  it("opens custom runtime editing from the unified row menu", () => {
-    const profile = makeProfile();
-    renderActionsCell(
-      makeRow(
-        makeRuntime({ runtime_mode: "local", profile_id: profile.id }),
-        true,
-        profile,
-      ),
-    );
+    renderCard(makeRuntime({ profile_id: profile.id }), {
+      isAdmin: true,
+      profile,
+    });
 
     fireEvent.click(screen.getByLabelText("Row actions"));
     fireEvent.click(screen.getByText("Edit custom runtime"));
@@ -245,99 +203,60 @@ describe("runtime list row menu", () => {
     expect(screen.getByLabelText("Display name")).toHaveValue("Custom Codex");
   });
 
-  it("opens the row's detail in a foreground tab from the menu", () => {
-    const openInNewTab = vi.fn();
-    renderActionsCell(makeRow(makeRuntime({ runtime_mode: "local" })), {
-      detailHref: "/ws-1/runtimes/rt-1",
-      adapter: makeAdapter({ openInNewTab }),
-    });
-
-    fireEvent.click(screen.getByLabelText("Row actions"));
-    fireEvent.click(screen.getByText("Open in new tab"));
-
-    expect(openInNewTab).toHaveBeenCalledWith("/ws-1/runtimes/rt-1", undefined, {
-      activate: true,
-    });
-  });
-
-  it("omits the new-tab entry for rows with no detail destination", () => {
-    // Pending custom runtimes are not navigable, so the list passes no href.
-    renderActionsCell(makeRow(makeRuntime({ runtime_mode: "local" })));
-
-    fireEvent.click(screen.getByLabelText("Row actions"));
-
-    expect(screen.queryByText("Open in new tab")).not.toBeInTheDocument();
-  });
-
-  it("hides the kebab menu when the caller lacks delete permission", () => {
-    // Pre-existing behavior — re-asserted so the new self-healing guard
-    // doesn't accidentally regress it (both paths return the same empty
-    // span).
-    renderActionsCell(
-      makeRow(
-        makeRuntime({ runtime_mode: "local", status: "offline" }),
-        /* canDelete */ false,
-      ),
-    );
+  it("keeps custom runtime deletion from non-admin owners", () => {
+    const profile = makeProfile();
+    renderCard(makeRuntime({ profile_id: profile.id }), { profile });
     expect(screen.queryByLabelText("Row actions")).not.toBeInTheDocument();
   });
 });
 
-// The CLI cell is a plain exported component — render it in isolation,
-// mirroring renderActionsCell.
-function renderCliCell(row: RuntimeRow) {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-
-  return render(
-    <I18nProvider locale="en" resources={TEST_RESOURCES}>
-      <QueryClientProvider client={qc}>
-        <CliCell runtime={row.runtime} />
-      </QueryClientProvider>
-    </I18nProvider>,
-  );
-}
-
-describe("runtime list CLI column", () => {
-  beforeEach(() => vi.clearAllMocks());
-
-  // #3838: every agent showed the same number because the column rendered the
-  // shared multica daemon `cli_version`. It must instead show the agent's own
-  // tool version from `metadata.version`.
-  it("shows the agent's own CLI tool version, not the shared daemon version", () => {
-    renderCliCell(
-      makeRow(
-        makeRuntime({
-          runtime_mode: "local",
-          metadata: { version: "2.1.5 (Claude Code)", cli_version: "0.3.17" },
-        }),
-      ),
+describe("RuntimeCard identity", () => {
+  // #3838: every runtime showed the same number because the shared daemon
+  // `cli_version` was rendered. The card shows the agent CLI's own version.
+  it("shows the agent's own CLI version, not the shared daemon version", () => {
+    renderCard(
+      makeRuntime({
+        metadata: { version: "2.1.5 (Claude Code)", cli_version: "0.3.17" },
+      }),
     );
     expect(screen.getByText("2.1.5 (Claude Code)")).toBeInTheDocument();
     expect(screen.queryByText("0.3.17")).not.toBeInTheDocument();
   });
 
-  it("falls back to an em dash when the agent version is missing", () => {
-    renderCliCell(
-      makeRow(
-        makeRuntime({
-          runtime_mode: "local",
-          metadata: { cli_version: "0.3.17" },
-        }),
-      ),
-    );
-    expect(screen.queryByText("0.3.17")).not.toBeInTheDocument();
-    expect(screen.getByText("—")).toBeInTheDocument();
+  it("uses the provider name when the runtime alias is the machine name", () => {
+    renderCard(makeRuntime({ custom_name: "Studio Mac" }), {
+      machineTitle: "Studio Mac",
+    });
+    expect(screen.getByText("Claude")).toBeInTheDocument();
   });
 
-  it("renders an em dash for cloud runtimes", () => {
-    renderCliCell(
-      makeRow(
-        makeRuntime({
-          runtime_mode: "cloud",
-          metadata: { version: "2.1.5 (Claude Code)" },
-        }),
-      ),
-    );
-    expect(screen.getByText("—")).toBeInTheDocument();
+  it("keeps a runtime-specific alias that differs from the machine name", () => {
+    renderCard(makeRuntime({ custom_name: "Night shift" }), {
+      machineTitle: "Studio Mac",
+    });
+    expect(screen.getByText("Night shift")).toBeInTheDocument();
+  });
+});
+
+describe("RuntimeCard visibility", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("lets the owner switch the runtime to public", () => {
+    renderCard(makeRuntime({ visibility: "private" }));
+    fireEvent.click(screen.getByRole("button", { name: /Public/ }));
+    expect(mockUpdateRuntime).toHaveBeenCalledWith("rt-1", {
+      visibility: "public",
+    });
+  });
+
+  it("keeps visibility read-only for a workspace admin who does not own it", () => {
+    // MUL-6126: sharing a machine is the owner's call.
+    renderCard(makeRuntime({ owner_id: "someone-else", visibility: "public" }), {
+      isAdmin: true,
+    });
+    expect(
+      screen.queryByRole("button", { name: /Private/ }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("Public")).toBeInTheDocument();
   });
 });

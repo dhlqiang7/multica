@@ -2,8 +2,10 @@
 
 import { describe, expect, it } from "vitest";
 import type { AgentRuntime } from "@multica/core/types";
+import type { RuntimeHealth } from "@multica/core/runtimes";
 import {
   buildRuntimeMachines,
+  deriveMachineListStatus,
   filterRuntimeMachines,
   runtimeMachineCounts,
   runtimeRowLabel,
@@ -459,5 +461,22 @@ describe("runtimeRowLabel", () => {
         "Dev Box",
       ),
     ).toBe("just this one");
+  });
+});
+
+describe("deriveMachineListStatus", () => {
+  const machine = (health: RuntimeHealth) => ({ health, runtimes: [] });
+
+  it("flags an offline machine only while agents still depend on it", () => {
+    expect(deriveMachineListStatus(machine("offline"), 2, false)).toBe("attention");
+    expect(deriveMachineListStatus(machine("long_offline"), 0, false)).toBe("offline");
+  });
+
+  it("keeps a briefly unreachable machine online", () => {
+    expect(deriveMachineListStatus(machine("recently_lost"), 3, false)).toBe("online");
+  });
+
+  it("flags a runtime that cannot start even on an online machine", () => {
+    expect(deriveMachineListStatus(machine("online"), 0, true)).toBe("attention");
   });
 });

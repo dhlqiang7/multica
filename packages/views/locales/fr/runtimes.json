@@ -55,7 +55,6 @@
     "no_matches_title": "Aucune machine",
     "no_matches_hint": "Aucune machine ne correspond à la recherche ou au filtre actuel.",
     "select_machine": "Sélectionnez une machine pour inspecter ses runtimes.",
-    "select_runtime": "Les runtimes intégrés apparaissent automatiquement. Sélectionnez-en un pour ses paramètres, ou ajoutez une commande personnalisée.",
     "no_runtimes_title": "Aucun runtime enregistré",
     "no_runtimes_hint": "Démarrez ou reconnectez le daemon de cette machine. Ses runtimes CLI installés apparaîtront ici automatiquement.",
     "not_found_title": "Machine introuvable",
@@ -70,11 +69,8 @@
       "health_issues_other": "{{count}} anomalies",
       "workload": "Charge",
       "workload_value_idle": "Au repos",
-      "workload_idle": "Tous au repos",
       "workload_hint": "{{running}} en cours · {{queued}} en attente",
-      "cli": "CLI",
-      "cloud_worker": "Worker cloud",
-      "local_daemon": "Daemon local"
+      "cli": "CLI"
     },
     "rename": "Renommer la machine",
     "rename_dialog": {
@@ -110,22 +106,12 @@
   },
   "detail": {
     "all_runtimes": "Tous les runtimes",
-    "read_only": "Lecture seule",
-    "delete_button": "Supprimer le runtime",
     "last_seen": "vu pour la dernière fois {{when}}",
     "never_seen": "jamais connecté",
-    "fact_owner": "Propriétaire",
     "fact_device": "Appareil",
-    "fact_runtime": "Runtime",
     "technical_details": "Détails techniques",
     "fact_daemon_cli": "CLI du daemon",
     "fact_daemon_id": "Identifiant du daemon",
-    "serving_title": "Au service de",
-    "serving_count_one": "{{count}} agent",
-    "serving_count_other": "{{count}} agents",
-    "no_agents": "Aucun agent n'est encore associé à ce runtime.",
-    "diagnostics_title": "Diagnostics",
-    "diagnostics_cli": "CLI",
     "diagnostics_visibility": "Visibilité",
     "visibility_label": {
       "private": "Privé",
@@ -184,15 +170,21 @@
       }
     },
     "toast_deleted": "Runtime supprimé",
-    "toast_delete_failed": "Échec de la suppression du runtime",
-    "running_chip_one": "· {{count}} en cours",
-    "running_chip_other": "· {{count}} en cours",
-    "queued_chip_one": "· {{count}} en attente",
-    "queued_chip_other": "· {{count}} en attente"
+    "toast_delete_failed": "Échec de la suppression du runtime"
   },
   "detail_page": {
-    "not_found_title": "Runtime introuvable",
-    "not_found_hint": "Il a peut-être été supprimé, ou vous n'y avez pas accès."
+    "daemon_version": "Daemon {{version}}",
+    "owned_by": "Propriétaire : {{name}}",
+    "more_actions_aria": "Plus d’actions",
+    "running_title": "En cours",
+    "running_empty": "Rien ne s’exécute sur cette machine.",
+    "usage_title": "Utilisation",
+    "run_without_issue": "Exécution de chat ou d’autopilot",
+    "started": "Démarré {{when}}",
+    "queued": "En file",
+    "last_seen_label": "Vu pour la dernière fois",
+    "served_agents": "Agents sur cette machine",
+    "no_served_agents": "Aucun agent ne tourne encore sur cette machine."
   },
   "running_one": "{{count}} en cours",
   "running_other": "{{count}} en cours",
@@ -297,13 +289,7 @@
     "tooltip_total": "Total"
   },
   "list": {
-    "col_runtime": "Runtime",
     "col_health": "Santé",
-    "col_owner": "Propriétaire",
-    "col_agents": "Agents",
-    "col_cost": "Coût · 7 j",
-    "col_cli": "CLI",
-    "cost_delta_flat": "stable",
     "cli_managed_badge": "Desktop",
     "row_actions_aria": "Actions de la ligne",
     "edit_action": "Modifier le runtime personnalisé",
@@ -311,15 +297,11 @@
     "delete_profile_action": "Supprimer de l'espace de travail",
     "delete_permission_hint": "Seuls le propriétaire du runtime et les administrateurs de l'espace de travail peuvent supprimer ce runtime",
     "delete_admin_hint": "Seuls le propriétaire du runtime et les administrateurs de l'espace de travail peuvent supprimer un runtime.",
-    "badge_builtin": "Intégré",
     "badge_custom": "Personnalisé",
-    "badge_registering": "Enregistrement",
-    "badge_disabled": "Désactivé",
     "pending_health": "Enregistrement auprès du daemon",
     "pending_health_warning": "En attente de synchronisation du daemon",
     "pending_health_error": "Erreur d'enregistrement",
-    "pending_health_disabled": "Désactivé",
-    "pending_cli_unknown": "en attente"
+    "pending_health_disabled": "Désactivé"
   },
   "profiles": {
     "cta": "Ajouter un runtime",
@@ -465,5 +447,26 @@
     "table_cache_r": "Cache L",
     "table_cache_w": "Cache É",
     "no_data": "Aucune donnée de consommation pour l'instant"
+  },
+  "card": {
+    "no_agents": "Aucun agent",
+    "agents_more": "{{names}} +{{count}}"
+  },
+  "list_page": {
+    "status_aria": "Filtrer les machines par statut",
+    "status": {
+      "all": "Toutes",
+      "attention": "À traiter",
+      "online": "En ligne",
+      "offline": "Hors ligne",
+      "updatable": "Mise à jour disponible"
+    },
+    "col_machine": "Machine",
+    "col_load": "Charge",
+    "col_runtimes": "Runtimes",
+    "col_daemon": "Daemon",
+    "load_queued_one": "{{count}} en file",
+    "load_queued_other": "{{count}} en file",
+    "updatable_badge": "Mise à jour"
   }
 }

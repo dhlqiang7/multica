@@ -1,13 +1,15 @@
 "use client";
 
 import { use } from "react";
-import { RuntimeSettingsPage } from "@multica/views/runtimes";
+import { RuntimeDetailPage } from "@multica/views/runtimes";
 
-export default function RuntimeSettingsRoute({
+// Runtimes have no page of their own: this older URL opens the machine page
+// with the runtime focused.
+export default function RuntimeOnMachineRoute({
   params,
 }: {
   params: Promise<{ id: string; runtimeId: string }>;
 }) {
   const { id, runtimeId } = use(params);
-  return <RuntimeSettingsPage machineId={id} runtimeId={runtimeId} />;
+  return <RuntimeDetailPage runtimeId={id} focusRuntimeId={runtimeId} />;
 }

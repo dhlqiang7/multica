@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Bot,
   ChevronRight,
   Cloud,
   Loader2,
@@ -18,11 +19,18 @@ import { MIKA_PLACEHOLDER_EMOJI } from "../../onboarding/components/mika-intro";
 import { useRequiredWorkspaceSlug, useWorkspacePaths } from "@multica/core/paths";
 import { agentTaskSnapshotOptions } from "@multica/core/agents";
 import { chatSessionsOptions } from "@multica/core/chat/queries";
-import { runtimeProfileListOptions } from "@multica/core/runtimes";
+import {
+  deriveRuntimeHealth,
+  runtimeProfileListOptions,
+  type RuntimeHealth,
+} from "@multica/core/runtimes";
 import { runtimeListOptions, runtimeKeys } from "@multica/core/runtimes/queries";
 import { useWSEvent } from "@multica/core/realtime";
-import { agentListOptions } from "@multica/core/workspace/queries";
-import type { AgentRuntime } from "@multica/core/types";
+import {
+  agentListOptions,
+  memberListOptions,
+} from "@multica/core/workspace/queries";
+import type { AgentRuntime, MemberWithUser } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Dialog,
@@ -37,24 +45,54 @@ import {
 } from "./mika-runtime-choice";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import {
+  LIST_GRID_BOTTOM_CLEARANCE,
+  ListGrid,
+  ListGridCell,
+  ListGridGroupHeader,
+  ListGridHeader,
+  ListGridHeaderCell,
+  ListGridRow,
+} from "@multica/ui/components/ui/list-grid";
+import {
   CollectionPageHeader,
   CollectionPageHeaderAction,
   CollectionPageState,
 } from "../../layout/collection-page";
-import { PAGE_GUTTER, PAGE_RAIL, PageHeader } from "../../layout/page-header";
+import {
+  PAGE_GUTTER,
+  PAGE_RAIL,
+  PAGE_TOOLBAR,
+  PageHeader,
+} from "../../layout/page-header";
+import {
+  StatusDot,
+  StatusSummaryTabs,
+  type StatusTone,
+} from "../../layout/status-summary";
 import { cn } from "@multica/ui/lib/utils";
-import { AppLink, useNavigation } from "../../navigation";
+import { useNavigation, useRowLink } from "../../navigation";
 import {
   getMikaOnboarding,
   pickContentLang,
 } from "../../onboarding/templates";
 import { ConnectRemoteDialog } from "./connect-remote-dialog";
 import { CloudRuntimeDialog } from "./cloud-runtime-dialog";
-import { ProviderLogo } from "./provider-logo";
-import { buildWorkloadIndex, RuntimeList } from "./runtime-list";
-import { pendingRuntimeFromProfile } from "./pending-runtime";
-import { buildRuntimeMachines, type RuntimeMachine } from "./runtime-machines";
-import { HealthDot, HealthIcon, useHealthLabel } from "./shared";
+import { buildWorkloadIndex } from "./runtime-list";
+import {
+  customRuntimeRegistrationFailure,
+  pendingRuntimeFromProfile,
+} from "./pending-runtime";
+import {
+  buildRuntimeMachines,
+  deriveMachineListStatus,
+  MACHINE_LIST_STATUS_ORDER,
+  runtimeRowLabel,
+  type MachineListStatus,
+  type RuntimeMachine,
+} from "./runtime-machines";
+import { RuntimeCard } from "./runtime-card";
+import { HealthIcon, useHealthLabel } from "./shared";
+import { isNewer, useLatestCliVersion } from "./update-section";
 import { useT, useTimeAgo } from "../../i18n";
 import { daemonRuntimesDocsHref } from "./runtime-docs";
 
@@ -177,33 +215,39 @@ export function RuntimesPage({
           <EmptyState onConnectRemote={() => setShowConnectDialog(true)} />
         </div>
       ) : (
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className={cn(PAGE_RAIL, PAGE_GUTTER, "flex flex-col py-4 sm:py-6")}>
-            {!agentsLoading &&
-              !chatSessionsLoading &&
-              memberNeedsMikaSetup(agents, chatSessions) &&
-              runtimes.length > 0 && (
-              <MikaSetupCard
-                workspaceId={wsId}
-                runtimes={runtimes}
-                runtimesLoading={runtimesLoading}
-                currentUserId={currentUserId ?? null}
-              />
+        <div className="flex min-h-0 flex-1 flex-col">
+          {!agentsLoading &&
+            !chatSessionsLoading &&
+            memberNeedsMikaSetup(agents, chatSessions) &&
+            runtimes.length > 0 && (
+              <div className={cn(PAGE_RAIL, PAGE_GUTTER, "pt-4")}>
+                <MikaSetupCard
+                  workspaceId={wsId}
+                  runtimes={runtimes}
+                  runtimesLoading={runtimesLoading}
+                  currentUserId={currentUserId ?? null}
+                />
+              </div>
             )}
-            {(machines.length > 0 || bootstrapping) && (
-              <MachineList
-                machines={machines}
-                bootstrapping={bootstrapping}
-              />
-            )}
-            {orphanProfileRuntimes.length > 0 && (
-              <OrphanRuntimeProfiles
-                runtimes={orphanProfileRuntimes}
-                now={now}
-                hasMachines={machines.length > 0}
-              />
-            )}
-          </div>
+          {machines.length > 0 || bootstrapping ? (
+            <MachineList
+              machines={machines}
+              workloadIndex={workloadIndex}
+              bootstrapping={bootstrapping}
+              orphans={
+                orphanProfileRuntimes.length > 0 ? (
+                  <OrphanRuntimeProfiles
+                    runtimes={orphanProfileRuntimes}
+                    now={now}
+                  />
+                ) : null
+              }
+            />
+          ) : (
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <OrphanRuntimeProfiles runtimes={orphanProfileRuntimes} now={now} />
+            </div>
+          )}
         </div>
       )}
 
@@ -345,15 +389,19 @@ function MikaSetupCard({
 function OrphanRuntimeProfiles({
   runtimes,
   now,
-  hasMachines,
 }: {
   runtimes: ReturnType<typeof pendingRuntimeFromProfile>[];
   now: number;
-  hasMachines: boolean;
 }) {
   const { t } = useT("runtimes");
+  const wsId = useWorkspaceId();
+  const currentUserId = useAuthStore((state) => state.user?.id ?? null);
+  const { data: members = [] } = useQuery(memberListOptions(wsId));
+  const { data: profiles = [] } = useQuery(runtimeProfileListOptions(wsId));
+  const me = members.find((member) => member.user_id === currentUserId);
+  const isAdmin = me?.role === "owner" || me?.role === "admin";
   return (
-    <section className={hasMachines ? "mt-6" : undefined}>
+    <section className={cn(PAGE_RAIL, PAGE_GUTTER, "py-6")}>
       <div className="mb-3">
         <h2 className="text-body font-semibold">
           {t(($) => $.profiles.unassigned_title)}
@@ -362,8 +410,25 @@ function OrphanRuntimeProfiles({
           {t(($) => $.profiles.unassigned_description)}
         </p>
       </div>
-      <div className="overflow-hidden rounded-lg border bg-card">
-        <RuntimeList runtimes={runtimes} now={now} />
+      <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
+        {runtimes.map((runtime) => (
+          <RuntimeCard
+            key={runtime.id}
+            runtime={runtime}
+            machineTitle=""
+            agents={[]}
+            runningCount={0}
+            queuedCount={0}
+            profile={
+              profiles.find((profile) => profile.id === runtime.profile_id) ??
+              null
+            }
+            selected={false}
+            now={now}
+            currentUserId={currentUserId}
+            isAdmin={isAdmin}
+          />
+        ))}
       </div>
     </section>
   );
@@ -411,14 +476,74 @@ function PageHeaderBar({
   );
 }
 
+// Machines are few, so the list is not virtualized and has no column
+// toggles; it shares the ListGrid template, status tabs and status groups
+// with the other AI Team lists. Each row carries the machine's runtimes as
+// chips, so a single broken CLI is visible without opening the machine.
+const MACHINE_GRID_COLS =
+  "grid-cols-[0.75rem_minmax(140px,1fr)_120px_1.25rem_0.75rem] " +
+  "@3xl:grid-cols-[0.75rem_minmax(200px,1.2fr)_150px_170px_minmax(220px,2fr)_120px_1.25rem_0.75rem]";
+
+const MACHINE_TONE: Record<MachineListStatus, StatusTone> = {
+  attention: "attention",
+  online: "idle",
+  offline: "offline",
+};
+
+type MachineTab = "all" | MachineListStatus | "updatable";
+
+interface MachineRowData {
+  machine: RuntimeMachine;
+  status: MachineListStatus;
+  agentCountByRuntime: Map<string, number>;
+  updatable: boolean;
+}
+
 function MachineList({
   machines,
+  workloadIndex,
   bootstrapping,
+  orphans,
 }: {
   machines: RuntimeMachine[];
+  workloadIndex: ReturnType<typeof buildWorkloadIndex>;
   bootstrapping?: boolean;
+  orphans: React.ReactNode;
 }) {
   const { t } = useT("runtimes");
+  const wsId = useWorkspaceId();
+  const latestCli = useLatestCliVersion();
+  const { data: members = [] } = useQuery(memberListOptions(wsId));
+  const [tab, setTab] = useState<MachineTab>("all");
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+
+  const rows = useMemo<MachineRowData[]>(
+    () =>
+      machines.map((machine) => {
+        const agentCountByRuntime = new Map<string, number>();
+        let bound = 0;
+        for (const runtime of machine.runtimes) {
+          const count = workloadIndex.get(runtime.id)?.agentIds.length ?? 0;
+          agentCountByRuntime.set(runtime.id, count);
+          bound += count;
+        }
+        const failing = machine.runtimes.some(
+          (runtime) => !!customRuntimeRegistrationFailure(runtime),
+        );
+        return {
+          machine,
+          status: deriveMachineListStatus(machine, bound, failing),
+          agentCountByRuntime,
+          updatable:
+            machine.mode === "local" &&
+            !!latestCli &&
+            !!machine.cliVersion &&
+            isNewer(latestCli, machine.cliVersion),
+        };
+      }),
+    [machines, workloadIndex, latestCli],
+  );
+
   if (machines.length === 0) {
     return (
       <CollectionPageState
@@ -437,115 +562,269 @@ function MachineList({
     );
   }
 
+  const counts: Record<MachineTab, number> = {
+    all: rows.length,
+    attention: 0,
+    online: 0,
+    offline: 0,
+    updatable: 0,
+  };
+  for (const row of rows) {
+    counts[row.status] += 1;
+    if (row.updatable) counts.updatable += 1;
+  }
+  const visible = rows.filter((row) =>
+    tab === "all"
+      ? true
+      : tab === "updatable"
+        ? row.updatable
+        : row.status === tab,
+  );
+  const tabLabels: Record<MachineTab, string> = {
+    all: t(($) => $.list_page.status.all),
+    attention: t(($) => $.list_page.status.attention),
+    online: t(($) => $.list_page.status.online),
+    offline: t(($) => $.list_page.status.offline),
+    updatable: t(($) => $.list_page.status.updatable),
+  };
+  const ownerName = (machine: RuntimeMachine): string | null => {
+    const ownerId = machine.runtimes[0]?.owner_id;
+    if (!ownerId) return null;
+    return (
+      members.find((member: MemberWithUser) => member.user_id === ownerId)
+        ?.name ?? null
+    );
+  };
+
+  const renderRow = (row: MachineRowData) => (
+    <MachineRow
+      key={row.machine.id}
+      row={row}
+      ownerName={ownerName(row.machine)}
+    />
+  );
+
   return (
-    <div className="overflow-hidden rounded-lg border bg-card">
-      <div className="divide-y">
-        {machines.map((machine) => (
-          <MachineRow key={machine.id} machine={machine} />
-        ))}
+    <>
+      <div className={PAGE_TOOLBAR}>
+        <StatusSummaryTabs
+          items={(
+            ["all", "attention", "online", "offline", "updatable"] as const
+          ).map((key) => ({
+            key,
+            label: tabLabels[key],
+            count: counts[key],
+            tone:
+              key === "all" || key === "updatable" ? undefined : MACHINE_TONE[key],
+          }))}
+          value={tab}
+          onChange={setTab}
+          ariaLabel={t(($) => $.list_page.status_aria)}
+        />
       </div>
-    </div>
+      <div className="min-h-0 flex-1 overflow-auto @container">
+        <ListGrid
+          className={`${MACHINE_GRID_COLS} @3xl:min-w-[900px]`}
+          style={{ paddingBottom: LIST_GRID_BOTTOM_CLEARANCE }}
+        >
+          <ListGridHeader>
+            <ListGridHeaderCell>{t(($) => $.list_page.col_machine)}</ListGridHeaderCell>
+            <ListGridHeaderCell>{t(($) => $.list.col_health)}</ListGridHeaderCell>
+            <ListGridHeaderCell className="hidden @3xl:flex">
+              {t(($) => $.list_page.col_load)}
+            </ListGridHeaderCell>
+            <ListGridHeaderCell className="hidden @3xl:flex">
+              {t(($) => $.list_page.col_runtimes)}
+            </ListGridHeaderCell>
+            <ListGridHeaderCell className="hidden @3xl:flex">
+              {t(($) => $.list_page.col_daemon)}
+            </ListGridHeaderCell>
+            <span aria-hidden="true" />
+          </ListGridHeader>
+          {visible.length === 0 ? (
+            <div className="col-span-full py-16 text-center text-body text-muted-foreground">
+              {t(($) => $.machine.no_matches_hint)}
+            </div>
+          ) : tab === "all" ? (
+            MACHINE_LIST_STATUS_ORDER.flatMap((status) => {
+              const members = visible.filter((row) => row.status === status);
+              if (members.length === 0) return [];
+              const open = !collapsed.has(status);
+              return [
+                <ListGridGroupHeader
+                  key={`group:${status}`}
+                  open={open}
+                  onToggle={() =>
+                    setCollapsed((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(status)) next.delete(status);
+                      else next.add(status);
+                      return next;
+                    })
+                  }
+                  label={
+                    <span className="inline-flex items-center gap-1.5">
+                      <StatusDot tone={MACHINE_TONE[status]} />
+                      {tabLabels[status]}
+                    </span>
+                  }
+                  count={members.length}
+                />,
+                ...(open ? members.map(renderRow) : []),
+              ];
+            })
+          ) : (
+            visible.map(renderRow)
+          )}
+        </ListGrid>
+        {orphans}
+      </div>
+    </>
   );
 }
 
-function MachineRow({ machine }: { machine: RuntimeMachine }) {
+const RUNTIME_DOT: Record<RuntimeHealth, StatusTone> = {
+  online: "idle",
+  recently_lost: "attention",
+  offline: "offline",
+  long_offline: "offline",
+};
+
+function MachineRow({
+  row,
+  ownerName,
+}: {
+  row: MachineRowData;
+  ownerName: string | null;
+}) {
   const { t } = useT("runtimes");
   const healthLabel = useHealthLabel();
   const timeAgo = useTimeAgo();
   const paths = useWorkspacePaths();
+  const rowLink = useRowLink();
+  const { machine } = row;
   const Icon = machine.section === "cloud" ? Cloud : Monitor;
-  const locator = machine.id;
-  const busyCount = machine.runningCount + machine.queuedCount;
-  const body = (
-    <>
-      <span className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border bg-background">
-        <Icon aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
-        <HealthDot
-          health={machine.health}
-          className="absolute -bottom-0.5 -right-0.5 ring-2 ring-background"
-        />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-body font-medium">
-          {machine.title}
-        </span>
-        <span className="mt-1 flex min-w-0 items-center gap-2 text-caption text-muted-foreground">
-          <span className="truncate">
-            {machine.subtitle ??
-              (machine.section === "cloud"
-                ? t(($) => $.machine.metrics.cloud_worker)
-                : t(($) => $.machine.metrics.local_daemon))}
-          </span>
-          {machine.isCurrent && (
-            <span className="shrink-0 rounded-xs bg-muted px-1.5 py-0.5 text-micro font-medium text-muted-foreground">
-              {t(($) => $.machine.this_machine)}
-            </span>
-          )}
-        </span>
-      </span>
+  const busy = machine.runningCount + machine.queuedCount;
+  const offline =
+    machine.health === "offline" || machine.health === "long_offline";
+  const visibleRuntimes = machine.runtimes.slice(0, 3);
+  const extraRuntimes = machine.runtimes.length - visibleRuntimes.length;
+  const tag =
+    machine.section === "cloud"
+      ? t(($) => $.machine.section_cloud)
+      : machine.isCurrent
+        ? t(($) => $.machine.this_machine)
+        : null;
+  const subtitle = [machine.subtitle, ownerName].filter(Boolean).join(" · ");
 
-      <span className="hidden w-36 shrink-0 items-center gap-1.5 text-caption md:flex">
-        <HealthIcon health={machine.health} />
-        <span>{healthLabel(machine.health)}</span>
-      </span>
-      <span className="hidden w-40 shrink-0 flex-col gap-1 lg:flex">
-        <span className="text-caption text-muted-foreground">
-          {t(($) => $.machine.runtime_count, {
-            count: machine.runtimes.length,
-          })}
+  return (
+    <ListGridRow
+      className="h-16 cursor-pointer"
+      {...rowLink(paths.runtimeDetail(machine.id), machine.title)}
+    >
+      <ListGridCell className="gap-3">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-surface-border bg-surface">
+          <Icon aria-hidden="true" className="size-4 text-muted-foreground" />
         </span>
-        <ProviderIconStack providers={machine.providerNames} />
-      </span>
-      <span className="hidden w-36 shrink-0 text-caption text-muted-foreground xl:block">
-        {busyCount > 0
-          ? t(($) => $.machine.metrics.workload_hint, {
-              running: machine.runningCount,
-              queued: machine.queuedCount,
-            })
-          : t(($) => $.machine.metrics.workload_idle)}
-      </span>
-      <span className="hidden w-28 shrink-0 text-right text-caption text-muted-foreground lg:block">
-        {machine.lastSeenAt ? timeAgo(machine.lastSeenAt) : "—"}
-      </span>
-      {locator && (
+        <span className="min-w-0 flex-1">
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="min-w-0 truncate text-body font-medium">
+              {machine.title}
+            </span>
+            {tag ? (
+              <span className="shrink-0 rounded-xs bg-muted px-1 text-micro font-medium text-muted-foreground">
+                {tag}
+              </span>
+            ) : null}
+          </span>
+          {subtitle ? (
+            <span className="mt-0.5 block truncate text-caption text-muted-foreground">
+              {subtitle}
+            </span>
+          ) : null}
+        </span>
+      </ListGridCell>
+      <ListGridCell className="gap-1.5">
+        <HealthIcon health={machine.health} />
+        <span className="min-w-0 truncate text-caption">
+          {healthLabel(machine.health)}
+          {machine.health !== "online" && machine.lastSeenAt ? (
+            <span className="text-muted-foreground">
+              {" · "}
+              {timeAgo(machine.lastSeenAt)}
+            </span>
+          ) : null}
+        </span>
+      </ListGridCell>
+      <ListGridCell className="hidden gap-1.5 @3xl:flex">
+        {busy === 0 ? (
+          <span className="text-caption text-muted-foreground">
+            {t(($) => $.machine.metrics.workload_value_idle)}
+          </span>
+        ) : offline ? (
+          <span className="truncate text-caption text-warning">
+            {t(($) => $.list_page.load_queued, { count: machine.queuedCount })}
+          </span>
+        ) : (
+          <>
+            <StatusDot tone="working" />
+            <span className="truncate text-caption">
+              {t(($) => $.machine.metrics.workload_hint, {
+                running: machine.runningCount,
+                queued: machine.queuedCount,
+              })}
+            </span>
+          </>
+        )}
+      </ListGridCell>
+      <ListGridCell className="hidden gap-1.5 overflow-hidden @3xl:flex">
+        {visibleRuntimes.map((runtime) => {
+          const failing = !!customRuntimeRegistrationFailure(runtime);
+          return (
+            <span
+              key={runtime.id}
+              className="inline-flex h-6 min-w-0 shrink-0 items-center gap-1.5 rounded-md border border-surface-border bg-surface px-1.5 text-caption"
+            >
+              <StatusDot
+                tone={
+                  failing
+                    ? "attention"
+                    : RUNTIME_DOT[deriveRuntimeHealth(runtime, Date.now())]
+                }
+              />
+              <span className="max-w-28 truncate">
+                {runtimeRowLabel(runtime, machine.title)}
+              </span>
+              <span className="inline-flex items-center gap-0.5 text-muted-foreground">
+                <Bot aria-hidden="true" className="size-3" />
+                {row.agentCountByRuntime.get(runtime.id) ?? 0}
+              </span>
+            </span>
+          );
+        })}
+        {extraRuntimes > 0 ? (
+          <span className="shrink-0 text-caption text-muted-foreground">
+            +{extraRuntimes}
+          </span>
+        ) : null}
+      </ListGridCell>
+      <ListGridCell className="hidden gap-1.5 @3xl:flex">
+        <span className="truncate font-mono text-caption text-muted-foreground">
+          {machine.cliVersion ?? "—"}
+        </span>
+        {row.updatable ? (
+          <span className="shrink-0 rounded-xs bg-success/10 px-1 text-micro font-medium text-success">
+            {t(($) => $.list_page.updatable_badge)}
+          </span>
+        ) : null}
+      </ListGridCell>
+      <ListGridCell className="justify-end px-0">
         <ChevronRight
           aria-hidden="true"
-          className="h-4 w-4 shrink-0 text-faint-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-muted-foreground"
+          className="size-4 text-faint-foreground transition-transform group-hover/row:translate-x-0.5 group-hover/row:text-muted-foreground"
         />
-      )}
-    </>
-  );
-
-  return (
-    <AppLink
-      href={paths.runtimeDetail(locator)}
-      className="group flex min-w-0 items-center gap-3 px-4 py-3.5 transition-colors hover:bg-accent/40 focus-visible:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-    >
-      {body}
-    </AppLink>
-  );
-}
-
-function ProviderIconStack({ providers }: { providers: string[] }) {
-  const visible = providers.slice(0, 4);
-  const extra = providers.length - visible.length;
-  if (visible.length === 0) return null;
-  return (
-    <span className="flex min-w-0 items-center -space-x-1">
-      {visible.map((provider) => (
-        <span
-          key={provider}
-          className="inline-flex h-5 w-5 items-center justify-center rounded-xs bg-background ring-1 ring-border"
-        >
-          <ProviderLogo provider={provider} className="h-3.5 w-3.5" />
-        </span>
-      ))}
-      {extra > 0 && (
-        <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-xs bg-muted px-1 text-micro font-medium text-muted-foreground ring-1 ring-border">
-          +{extra}
-        </span>
-      )}
-    </span>
+      </ListGridCell>
+    </ListGridRow>
   );
 }
 

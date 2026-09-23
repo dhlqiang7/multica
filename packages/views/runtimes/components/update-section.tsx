@@ -68,7 +68,7 @@ function parseReleaseVersion(v: string): number[] | null {
  * operator to replace a locally built binary on the strength of a claim we
  * could not make.
  */
-function isNewer(latest: string, current: string): boolean {
+export function isNewer(latest: string, current: string): boolean {
   const l = parseReleaseVersion(latest);
   const c = parseReleaseVersion(current);
   if (!l || !c) return false;
@@ -78,6 +78,24 @@ function isNewer(latest: string, current: string): boolean {
     if (lv < cv) return false;
   }
   return false;
+}
+
+/**
+ * The latest released CLI version, fetched once per ten minutes for the
+ * whole app. Lists use it to mark machines whose daemon can be updated.
+ */
+export function useLatestCliVersion(): string | null {
+  const [latest, setLatest] = useState<string | null>(cachedLatestVersion);
+  useEffect(() => {
+    let alive = true;
+    fetchLatestVersion().then((version) => {
+      if (alive) setLatest(version);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return latest;
 }
 
 const statusConfig: Record<

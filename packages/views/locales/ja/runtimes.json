@@ -53,7 +53,6 @@
     "no_matches_title": "マシンなし",
     "no_matches_hint": "現在の検索またはフィルターに一致するマシンがありません。",
     "select_machine": "マシンを選択して、そのランタイムを確認してください。",
-    "select_runtime": "組み込みランタイムは自動的に表示されます。設定を見るか、カスタムコマンドを追加してください。",
     "no_runtimes_title": "登録済みのランタイムがありません",
     "no_runtimes_hint": "このマシンのデーモンを起動または再接続してください。インストール済みの CLI ランタイムが自動的に表示されます。",
     "not_found_title": "マシンが見つかりません",
@@ -66,11 +65,8 @@
       "health_issues_other": "問題 {{count}} 件",
       "workload": "作業量",
       "workload_value_idle": "アイドル",
-      "workload_idle": "すべてアイドル",
       "workload_hint": "実行中 {{running}} 件 · キュー待ち {{queued}} 件",
-      "cli": "CLI",
-      "cloud_worker": "クラウドワーカー",
-      "local_daemon": "ローカルデーモン"
+      "cli": "CLI"
     },
     "rename": "マシンの名前を変更",
     "rename_dialog": {
@@ -106,21 +102,12 @@
   },
   "detail": {
     "all_runtimes": "すべてのランタイム",
-    "read_only": "読み取り専用",
-    "delete_button": "ランタイムを削除",
     "last_seen": "最終確認 {{when}}",
     "never_seen": "未接続",
-    "fact_owner": "所有者",
     "fact_device": "デバイス",
-    "fact_runtime": "ランタイム",
     "technical_details": "技術的な詳細",
     "fact_daemon_cli": "デーモン CLI",
     "fact_daemon_id": "デーモン ID",
-    "serving_title": "提供中",
-    "serving_count_other": "エージェント {{count}} 個",
-    "no_agents": "まだこのランタイムに紐づいたエージェントがありません。",
-    "diagnostics_title": "診断",
-    "diagnostics_cli": "CLI",
     "diagnostics_visibility": "公開範囲",
     "visibility_label": {
       "private": "非公開",
@@ -176,13 +163,21 @@
       }
     },
     "toast_deleted": "ランタイムを削除しました",
-    "toast_delete_failed": "ランタイムを削除できませんでした",
-    "running_chip_other": "· 実行中 {{count}} 件",
-    "queued_chip_other": "· キュー待ち {{count}} 件"
+    "toast_delete_failed": "ランタイムを削除できませんでした"
   },
   "detail_page": {
-    "not_found_title": "ランタイムが見つかりません",
-    "not_found_hint": "削除されたか、アクセス権がない可能性があります。"
+    "daemon_version": "デーモン {{version}}",
+    "owned_by": "所有者 {{name}}",
+    "more_actions_aria": "その他の操作",
+    "running_title": "実行中",
+    "running_empty": "このマシンで進行中の実行はありません。",
+    "usage_title": "使用量",
+    "run_without_issue": "チャットまたはオートパイロットの実行",
+    "started": "{{when}}に開始",
+    "queued": "キュー待ち",
+    "last_seen_label": "最終接続",
+    "served_agents": "このマシンのエージェント",
+    "no_served_agents": "このマシンで動作しているエージェントはまだありません。"
   },
   "running_other": "実行中 {{count}} 件",
   "queued_other": "キュー待ち {{count}} 件",
@@ -284,13 +279,7 @@
     "tooltip_total": "合計"
   },
   "list": {
-    "col_runtime": "ランタイム",
     "col_health": "状態",
-    "col_owner": "所有者",
-    "col_agents": "エージェント",
-    "col_cost": "コスト · 7 日",
-    "col_cli": "CLI",
-    "cost_delta_flat": "変化なし",
     "cli_managed_badge": "デスクトップ",
     "row_actions_aria": "行の操作",
     "edit_action": "カスタムランタイムを編集",
@@ -298,15 +287,11 @@
     "delete_profile_action": "ワークスペースから削除",
     "delete_permission_hint": "ランタイムの所有者とワークスペース管理者のみが、このランタイムを削除できます",
     "delete_admin_hint": "ランタイムの所有者とワークスペース管理者のみが、ランタイムを削除できます。",
-    "badge_builtin": "組み込み",
     "badge_custom": "カスタム",
-    "badge_registering": "登録中",
-    "badge_disabled": "無効",
     "pending_health": "Daemon に登録中",
     "pending_health_warning": "Daemon 同期待ち",
     "pending_health_error": "登録エラー",
-    "pending_health_disabled": "無効",
-    "pending_cli_unknown": "待機中"
+    "pending_health_disabled": "無効"
   },
   "profiles": {
     "cta": "ランタイムを追加",
@@ -449,5 +434,25 @@
     "table_cache_r": "キャッシュ R",
     "table_cache_w": "キャッシュ W",
     "no_data": "まだ使用量データがありません"
+  },
+  "card": {
+    "no_agents": "エージェントなし",
+    "agents_more": "{{names}} ほか {{count}} 件"
+  },
+  "list_page": {
+    "status_aria": "ステータスでマシンを絞り込む",
+    "status": {
+      "all": "すべて",
+      "attention": "要対応",
+      "online": "オンライン",
+      "offline": "オフライン",
+      "updatable": "更新あり"
+    },
+    "col_machine": "マシン",
+    "col_load": "負荷",
+    "col_runtimes": "ランタイム",
+    "col_daemon": "デーモン",
+    "load_queued_other": "キュー待ち {{count}} 件",
+    "updatable_badge": "更新あり"
   }
 }
