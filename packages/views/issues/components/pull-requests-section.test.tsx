@@ -85,6 +85,19 @@ describe("PullRequestsSection (MUL-7429)", () => {
     );
   });
 
+  it("accepts a link pasted without a scheme", async () => {
+    apiMock.linkIssuePullRequest.mockResolvedValue({ pull_requests: [], auto_complete: decision });
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Link pull request" }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "Link pull request" }), {
+      target: { value: "github.com/acme/widget/pull/41/files" },
+    });
+    fireEvent.submit(screen.getByRole("textbox", { name: "Link pull request" }).closest("form")!);
+    await waitFor(() =>
+      expect(apiMock.linkIssuePullRequest).toHaveBeenCalledWith("issue-1", { url: "github.com/acme/widget/pull/41/files" }),
+    );
+  });
+
   it("explains a PR Multica has not received", async () => {
     apiMock.linkIssuePullRequest.mockRejectedValue(new ApiError("not found", 404, "Not Found"));
     renderSection();

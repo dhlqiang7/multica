@@ -138,8 +138,12 @@ function LinkPullRequestPopover({
           </label>
           <Input
             id={`link-pr-${issueId}`}
-            type="url"
+            // Not type="url": the browser would block "github.com/…" without a
+            // scheme, which the server accepts.
+            type="text"
             inputMode="url"
+            autoComplete="off"
+            spellCheck={false}
             autoFocus
             value={url}
             placeholder={t(($) => $.pr_automation.link_placeholder)}
