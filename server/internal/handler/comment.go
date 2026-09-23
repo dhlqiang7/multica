@@ -130,7 +130,7 @@ func commentToResponse(c db.Comment, reactions []ReactionResponse, attachments [
 	}
 }
 
-// Share the existing plugin comment limit with ordinary and supplemental input.
+// Shared bound for plugin comments and input sent to a running agent.
 const maxCommentContentBytes = 64 * 1024
 
 // summaryContentRunes bounds comment content under summary=true. 200 runes is
@@ -1718,10 +1718,6 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	// the plausible cause of GH #5388. Mirrors the skill-import sanitization;
 	// normalizing first means all-NUL content is correctly treated as empty.
 	req.Content = sanitizeNullBytes(req.Content)
-	if len(req.Content) > maxCommentContentBytes {
-		writeError(w, http.StatusBadRequest, "content is too long")
-		return
-	}
 	if req.Content == "" {
 		writeError(w, http.StatusBadRequest, "content is required")
 		return
@@ -3395,10 +3391,6 @@ func (h *Handler) UpdateComment(w http.ResponseWriter, r *http.Request) {
 	// rejects before the empty check, so an edit that introduces such a byte
 	// can't 500 (GH #5388).
 	req.Content = sanitizeNullBytes(req.Content)
-	if len(req.Content) > maxCommentContentBytes {
-		writeError(w, http.StatusBadRequest, "content is too long")
-		return
-	}
 	if req.ContentBase != nil {
 		sanitized := sanitizeNullBytes(*req.ContentBase)
 		req.ContentBase = &sanitized
