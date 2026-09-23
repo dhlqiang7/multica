@@ -45,6 +45,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
@@ -79,6 +80,7 @@ import {
 import { useT } from "../i18n";
 import { useNavigation } from "../navigation";
 import { openExternal } from "../platform";
+import { useImmersiveMode } from "../platform/use-immersive-mode";
 import { ReadonlyContent } from "./readonly-content";
 import {
   canOpenPreview,
@@ -285,6 +287,11 @@ export function useAttachmentPreview(): AttachmentPreviewHandle {
 // panel) the moment navigation happens blanks the canvas for the full
 // network+decode gap; decode-then-swap is the standard lightbox fix.
 //
+// Only a URL that actually decoded as an image is ever held. The panel is
+// reused across kinds, so arriving at an image from a PDF or a document has no
+// previous frame: the image shows as itself and loads in place — handing the
+// PDF's URL to <img> would fail and be blamed on the image being opened.
+//
 // On load failure the hook reports the error and keeps the last good frame —
 // when the whole remaining sequence is broken the reader stays on the last
 // image that worked (with the "unavailable" toast) instead of a broken glyph.
@@ -296,14 +303,13 @@ function useSettledImageURL(
   enabled: boolean,
   onLoadError?: () => void,
 ): string {
-  const [settled, setSettled] = useState(targetUrl);
+  const [settled, setSettled] = useState<string | null>(null);
   const onErrorRef = useRef(onLoadError);
   onErrorRef.current = onLoadError;
 
   useEffect(() => {
-    if (!enabled) return;
-    if (!targetUrl) {
-      setSettled(targetUrl);
+    if (!enabled || !targetUrl) {
+      setSettled(null);
       return;
     }
     let cancelled = false;
@@ -327,7 +333,7 @@ function useSettledImageURL(
     };
   }, [targetUrl, enabled]);
 
-  return enabled ? settled : targetUrl;
+  return enabled && settled !== null ? settled : targetUrl;
 }
 
 // Warms the browser cache for a sequence neighbour so paging to it swaps
@@ -353,6 +359,14 @@ export function PreviewImagePrefetch({ source }: { source: PreviewSource }) {
 // ---------------------------------------------------------------------------
 // Viewer — frame + dispatch
 // ---------------------------------------------------------------------------
+
+// Desktop window chrome. The viewer covers the whole window, including the
+// top bar's drag region, so it declares its own: the viewer is `no-drag`
+// (a drag region underneath would otherwise swallow clicks on its controls),
+// its top bar drags the window, and the controls in that bar opt back out.
+// Chromium-only CSS; browsers ignore it.
+const NO_DRAG = { WebkitAppRegion: "no-drag" } as CSSProperties;
+const DRAG = { WebkitAppRegion: "drag" } as CSSProperties;
 
 // A focused player or field owns its arrow keys (seek, caret) — the sequence
 // only takes them when nothing else would.
@@ -380,6 +394,11 @@ export function AttachmentPreviewModal({
 
   const onPrev = sequence?.onPrev;
   const onNext = sequence?.onNext;
+
+  // macOS desktop: hide the traffic lights while the viewer is up — its top
+  // bar starts at the window's top-left corner, where they would sit on the
+  // file name. No-op on web and other platforms.
+  useImmersiveMode(open);
 
   useEffect(() => {
     if (!open) return;
@@ -458,6 +477,7 @@ export function AttachmentPreviewModal({
           role="dialog"
           aria-modal="true"
           aria-label={state.filename}
+          style={NO_DRAG}
           initial={{ opacity: 0 }}
           animate={{
             opacity: 1,
@@ -556,6 +576,10 @@ function PreviewPanel({
   // swap itself is what used to flash. Also absorbs the re-sign URL upgrade
   // (raw -> signed) without a second visible load.
   const mediaUrl = useSettledImageURL(targetUrl, kind === "image", onImageError);
+  // A load error from the <img> belongs to the file being opened only when
+  // that is what it shows — a frame held from the previous image never
+  // reports against the next one.
+  const imageLoadError = mediaUrl === targetUrl ? onImageError : undefined;
 
   // Natural size is carried with the URL it was measured from, so a panel
   // reused for a different attachment can never fit the new image against the
@@ -605,7 +629,10 @@ function PreviewPanel({
     <>
       {/* Three columns so the counter stays centered on the window while a
           long filename truncates before reaching it. */}
-      <header className="dark grid h-14 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4 pl-3 pr-2 text-foreground">
+      <header
+        className="dark grid h-14 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4 pl-3 pr-2 text-foreground"
+        style={DRAG}
+      >
         <div className="flex min-w-0 items-center gap-2.5">
           <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-secondary text-muted-foreground">
             <KindIcon className="size-4" />
@@ -630,7 +657,10 @@ function PreviewPanel({
               })
             : null}
         </span>
-        <div className="flex items-center justify-self-end gap-0.5">
+        <div
+          className="flex items-center justify-self-end gap-0.5"
+          style={NO_DRAG}
+        >
           {/* Standalone preview keeps the original gate — no controls until
               the image is measured, and none at all for content that has no
               intrinsic size to drive. In a sequence they stay mounted
@@ -685,7 +715,7 @@ function PreviewPanel({
             canvas={canvas}
             natural={natural}
             onNaturalSize={handleNaturalSize}
-            onError={onImageError}
+            onError={imageLoadError}
           />
         ) : (
           <PreviewContent

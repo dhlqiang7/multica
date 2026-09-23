@@ -129,6 +129,19 @@ function sequenceOf(attachments: Attachment[]) {
   return collectPreviewSequence(attachments.map((a) => ({ attachments: [a] })));
 }
 
+// jsdom has no Image.decode(); the viewer swaps images without one, so the
+// decode-then-swap path only runs under a stub. Returns the restore.
+function stubDecode(impl: (this: HTMLImageElement) => Promise<void>): () => void {
+  Object.defineProperty(HTMLImageElement.prototype, "decode", {
+    configurable: true,
+    writable: true,
+    value: impl,
+  });
+  return () => {
+    delete (HTMLImageElement.prototype as { decode?: unknown }).decode;
+  };
+}
+
 function fileAttachment(n: number, filename: string, contentType: string): Attachment {
   return { ...imageAttachment(n), filename, content_type: contentType };
 }
@@ -350,6 +363,73 @@ describe("PreviewSequenceProvider", () => {
       fireEvent.keyDown(document, { key: "ArrowRight" });
     });
     expectCounter("2 / 2");
+  });
+
+  // Review of #8763: the panel is reused across kinds, so the frame it held
+  // for a PDF must never reach the image canvas while the next image decodes.
+  it("shows the image itself, not the previous file, while it decodes", () => {
+    const restoreDecode = stubDecode(() => new Promise<void>(() => {}));
+    try {
+      const mixed = [
+        fileAttachment(1, "spec.pdf", "application/pdf"),
+        imageAttachment(2),
+        imageAttachment(3),
+      ];
+      render(
+        <PreviewSequenceProvider items={sequenceOf(mixed)}>
+          <Opener openKey={mixed[0]!.id} />
+        </PreviewSequenceProvider>,
+      );
+      act(() => {
+        fireEvent.click(screen.getByText("open"));
+      });
+      act(() => {
+        fireEvent.click(nextButton());
+      });
+
+      const image = screen.getByRole("dialog").querySelector("img")!;
+      expect(image.getAttribute("src")).toBe(mixed[1]!.download_url);
+      expectCounter("2 / 3");
+      expect(nextButton()).not.toBeDisabled();
+      expect(toastErrorMock).not.toHaveBeenCalled();
+    } finally {
+      restoreDecode();
+    }
+  });
+
+  it("does not blame the next image for an error on the frame still held", async () => {
+    const [first, second] = [imageAttachment(1), imageAttachment(2)];
+    const restoreDecode = stubDecode(function (this: HTMLImageElement) {
+      return this.src === first.download_url
+        ? Promise.resolve()
+        : new Promise<void>(() => {});
+    });
+    try {
+      render(
+        <PreviewSequenceProvider items={sequenceOf([first, second])}>
+          <Opener openKey={first.id} />
+        </PreviewSequenceProvider>,
+      );
+      act(() => {
+        fireEvent.click(screen.getByText("open"));
+      });
+      await act(async () => {});
+      act(() => {
+        fireEvent.click(nextButton());
+      });
+
+      // The first image stays up while the second decodes; an error from it
+      // is about the first file, not the one being opened.
+      const held = screen.getByRole("dialog").querySelector("img")!;
+      expect(held.getAttribute("src")).toBe(first.download_url);
+      act(() => {
+        fireEvent.error(held);
+      });
+      expectCounter("2 / 2");
+      expect(toastErrorMock).not.toHaveBeenCalled();
+    } finally {
+      restoreDecode();
+    }
   });
 
   it("reports false for an image the surface does not know", () => {

@@ -481,6 +481,23 @@ describe("AttachmentPreviewModal — controls", () => {
     expect(screen.queryByText("application/pdf")).toBeNull();
   });
 
+  it("hides the desktop window buttons while open and restores them on close", async () => {
+    const setImmersiveMode = vi.fn();
+    (window as unknown as { desktopAPI?: unknown }).desktopAPI = { setImmersiveMode };
+    try {
+      const att = makeAttachment({ filename: "manual.pdf", content_type: "application/pdf" });
+      render(<ClosablePreview attachment={att} />);
+      expect(setImmersiveMode).toHaveBeenLastCalledWith(true);
+
+      fireEvent.click(screen.getByTitle("Close"));
+      await waitFor(() => {
+        expect(setImmersiveMode).toHaveBeenLastCalledWith(false);
+      });
+    } finally {
+      delete (window as unknown as { desktopAPI?: unknown }).desktopAPI;
+    }
+  });
+
   it("clicking the backdrop closes the modal", () => {
     const onClose = vi.fn();
     const att = makeAttachment({ filename: "manual.pdf", content_type: "application/pdf" });
