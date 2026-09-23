@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Blend } from "lucide-react";
+import { CircleEqual } from "lucide-react";
 import type { IssueStatus, UpdateIssueRequest } from "@multica/core/types";
 import { STATUS_CONFIG } from "@multica/core/issues/config";
 import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
@@ -101,7 +101,7 @@ export function StatusPicker({
             }}
             className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-body hover:bg-accent transition-colors"
           >
-            <Blend className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <CircleEqual className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
             <span>{t(($) => $.pickers.status.mark_duplicate)}</span>
           </button>
         ) : undefined

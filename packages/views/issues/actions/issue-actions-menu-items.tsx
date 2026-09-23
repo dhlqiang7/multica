@@ -6,9 +6,9 @@ import { toast } from "sonner";
 import {
   ArrowDown,
   ArrowUp,
-  Blend,
   Calendar,
   CalendarClock,
+  CircleEqual,
   ExternalLink,
   FolderOpen,
   Link2,
@@ -357,7 +357,7 @@ export function IssueActionsMenuItems({
             {t(($) => $.actions.add_sub_issue)}
           </P.Item>
           <P.Item onClick={openMarkDuplicate}>
-            <Blend className="h-3.5 w-3.5" />
+            <CircleEqual className="h-3.5 w-3.5" />
             {t(($) => $.actions.mark_duplicate)}
           </P.Item>
         </P.SubContent>
