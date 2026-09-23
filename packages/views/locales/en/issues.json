@@ -620,7 +620,6 @@
     "recipient_state_queued": "Queued",
     "recipient_count_one": "{{count}} agent will receive this",
     "recipient_count_other": "{{count}} agents will receive this",
-    "steer_placeholder": "Message {{name}} — it reads this after the current step...",
     "steer_attachment_notice": "Only text can join a running run, so a message with files is handled after it.",
     "steer_ended_notice": "{{name}} just finished its run, so this message starts a new one.",
     "restart_send": "Stop and send",

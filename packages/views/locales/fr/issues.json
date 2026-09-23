@@ -620,7 +620,6 @@
     "recipient_state_queued": "En file",
     "recipient_count_one": "{{count}} agent recevra ce message",
     "recipient_count_other": "{{count}} agents recevront ce message",
-    "steer_placeholder": "Écrire à {{name}} — lu après l'étape en cours...",
     "steer_attachment_notice": "Seul du texte peut rejoindre une exécution en cours : un message avec des fichiers sera traité après.",
     "steer_ended_notice": "{{name}} vient de terminer son exécution : ce message en lance une nouvelle.",
     "restart_send": "Arrêter et envoyer",

@@ -604,7 +604,6 @@
     "recipient_state_starting": "起動中",
     "recipient_state_queued": "待機中",
     "recipient_count_other": "{{count}} 個のエージェントが受け取ります",
-    "steer_placeholder": "{{name}} に追加で伝える。現在のステップの後に読まれます...",
     "steer_attachment_notice": "実行中に追加できるのはテキストのみのため、ファイル付きのメッセージはこの実行の後に処理されます。",
     "steer_ended_notice": "{{name}} の実行が終わったため、このメッセージで新しい実行を始めます。",
     "restart_send": "停止して送信",

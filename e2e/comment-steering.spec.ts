@@ -57,9 +57,11 @@ test("a reply steers the thread agent's running turn and shows its receipt", asy
     await expect(page.locator(`[data-run-id="${turnId}"]`)).toBeVisible({ timeout: 45_000 });
 
     const shell = page.getByTestId("reply-composer-shell").first();
-    await expect(shell).toHaveText("Message Lambda — it reads this after the current step...");
+    // The empty box makes no claim about who a reply goes to; the chip says
+    // so once there is text and the recipient is known.
+    await expect(shell).toHaveText("Leave a reply...");
     await shell.click();
-    const placeholder = "Message Lambda — it reads this after the current step...";
+    const placeholder = "Leave a reply...";
     const editor = page.locator(`.ProseMirror[data-placeholder="${placeholder}"], .ProseMirror:has([data-placeholder="${placeholder}"])`).first();
     await editor.fill("This PR only fixes web; leave the desktop login page alone.");
     const chip = page.getByRole("button", { name: "Lambda trigger: Add to current run" });

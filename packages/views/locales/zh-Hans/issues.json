@@ -604,7 +604,6 @@
     "recipient_state_starting": "正在启动",
     "recipient_state_queued": "排队中",
     "recipient_count_other": "{{count}} 个智能体会收到",
-    "steer_placeholder": "给 {{name}} 插话，它会在当前步骤结束后读到...",
     "steer_attachment_notice": "插话只支持文字，带附件的消息会在本轮结束后处理。",
     "steer_ended_notice": "{{name}} 刚完成了本次运行，这条消息会开始新一轮。",
     "restart_send": "停止并发送",

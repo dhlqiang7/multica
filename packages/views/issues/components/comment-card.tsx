@@ -42,7 +42,7 @@ import { SteerBadge, SteerReceipts } from "./steer-receipts";
 import type { AgentTask, TimelineEntry, Attachment } from "@multica/core/types";
 import { contentReferencesAttachment } from "@multica/core/types";
 import { isDeletedComment } from "@multica/core/issues/comment-deletion";
-import { commentSupplementReceipts, isSteerableTask, isSupplementInFlight, type CommentSteerRequest } from "@multica/core/issues/run-steering";
+import { commentSupplementReceipts, isSupplementInFlight, type CommentSteerRequest } from "@multica/core/issues/run-steering";
 import { useConfigStore } from "@multica/core/config";
 import { selectStandaloneAttachments } from "@multica/core/attachments/image-sequence";
 import { useCommentCollapseStore, useCommentDraftStore } from "@multica/core/issues/stores";
@@ -1032,10 +1032,6 @@ function CommentCardImpl({
     (task: AgentTask) => runs.some((run) => run.task.id === task.id),
     [runs],
   );
-  const steerableRun = runs.find((run) => isSteerableTask(run.task));
-  const replyPlaceholder = steerableRun
-    ? t(($) => $.comment.steer_placeholder, { name: getActorName("agent", steerableRun.task.agent_id) })
-    : t(($) => $.reply.placeholder);
 
   const allNestedReplies = replies;
   // What the thread shows. Tombstones are excluded from display and counts but
@@ -1475,7 +1471,7 @@ function CommentCardImpl({
                   issueId={issueId}
                   parentId={replyTargetId}
                   targetMissing={replyTargetMissing}
-                  placeholder={replyPlaceholder}
+                  placeholder={t(($) => $.reply.placeholder)}
                   size="sm"
                   avatarType="member"
                   avatarId={currentUserId ?? ""}
