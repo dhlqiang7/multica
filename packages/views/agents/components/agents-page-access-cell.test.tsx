@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { summarizeActivityWindow } from "@multica/core/agents";
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { I18nProvider } from "@multica/core/i18n/react";
@@ -40,9 +41,11 @@ function makeRow(
     },
     runtime: null,
     presence: null,
-    activity: null,
-    runCount: 0,
+    status: { status: "idle", reason: null },
+    activity: summarizeActivityWindow(undefined, 7),
     lastActiveDays: null,
+    lastDoneAt: null,
+    currentIssueId: null,
     owner: null,
     isOwnedByMe: false,
     canManage: false,

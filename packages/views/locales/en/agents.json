@@ -68,7 +68,6 @@
   },
   "columns": {
     "agent": "Agent",
-    "status": "Status",
     "workload": "Workload",
     "runtime": "Runtime",
     "activity_7d": "Activity (7d)",
@@ -77,18 +76,16 @@
     "model": "Model",
     "created": "Created",
     "owner": "Owner",
-    "access": "Access"
+    "access": "Access",
+    "now": "Now"
   },
   "row": {
     "you": "You",
     "archived": "Archived",
-    "needs_runtime": "Needs a runtime",
     "no_description": "No description",
     "fallback_runtime_cloud": "Cloud",
     "fallback_runtime_local": "Local",
-    "actions_aria": "Row actions",
-    "task_count_one": "{{count}} run",
-    "task_count_other": "{{count}} runs"
+    "actions_aria": "Row actions"
   },
   "activity_tooltip": {
     "created_today": "Created today",
@@ -174,7 +171,6 @@
     "section_properties": "Properties",
     "section_details": "Details",
     "section_details_hint": "Read-only ownership and lifecycle information.",
-    "section_skills": "Skills",
     "section_integrations": "Integrations",
     "prop_runtime": "Runtime",
     "prop_model": "Model",
@@ -960,19 +956,12 @@
       "user_cancelled": "Cancelled by user"
     }
   },
-  "last_active": {
-    "today": "Today",
-    "days_ago_one": "{{count}} day ago",
-    "days_ago_other": "{{count}} days ago",
-    "none": "No activity (30d)"
-  },
   "toolbar": {
     "result_count_title": "Matching agents / agents in scope",
     "filter_label": "Filter",
     "filter_active_count_one": "{{count}} filter",
     "filter_active_count_other": "{{count}} filters",
     "clear_filters": "Clear filters",
-    "section_availability": "Availability",
     "section_access": "Access",
     "section_runtime": "Runtime",
     "display": "Display",
@@ -987,5 +976,35 @@
     "selected_one": "{{count}} selected",
     "selected_other": "{{count}} selected",
     "clear_selection": "Clear selection"
+  },
+  "list": {
+    "status_aria": "Filter agents by status",
+    "status": {
+      "all": "All",
+      "attention": "Needs attention",
+      "working": "Working",
+      "idle": "Idle",
+      "offline": "Offline"
+    },
+    "group_by": "Group",
+    "group": {
+      "status": "Status",
+      "none": "None"
+    },
+    "now": {
+      "needs_runtime": "Needs a runtime",
+      "bind": "Bind",
+      "offline_queued_one": "Runtime offline · {{count}} queued",
+      "offline_queued_other": "Runtime offline · {{count}} queued",
+      "working_one": "{{count}} run in progress",
+      "working_other": "{{count}} runs in progress",
+      "more": "+{{count}}",
+      "idle": "Idle",
+      "idle_since": "Idle · active {{when}}",
+      "offline": "Offline",
+      "offline_since": "Offline · last seen {{when}}"
+    },
+    "success_rate_aria_one": "{{rate}}% succeeded, {{count}} run in the last 7 days",
+    "success_rate_aria_other": "{{rate}}% succeeded, {{count}} runs in the last 7 days"
   }
 }

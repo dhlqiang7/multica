@@ -1,3 +1,4 @@
+import { summarizeActivityWindow } from "@multica/core/agents";
 import { describe, it, expect } from "vitest";
 import {
   effectiveAccessScope,
@@ -41,9 +42,11 @@ function makeRow(
     },
     runtime: null,
     presence: null,
-    activity: null,
-    runCount: 0,
+    status: { status: "idle", reason: null },
+    activity: summarizeActivityWindow(undefined, 7),
     lastActiveDays: null,
+    lastDoneAt: null,
+    currentIssueId: null,
     owner: null,
     isOwnedByMe: false,
     canManage: false,
@@ -143,24 +146,6 @@ describe("rowMatchesFilters — access dimension", () => {
     };
     expect(rowMatchesFilters(ownerUser1, filters, "")).toBe(true);
     expect(rowMatchesFilters(ownerUser2, filters, "")).toBe(false);
-  });
-
-  it("access + availability filter: both must pass (AND)", () => {
-    const onlineAgent = makeRow(
-      { permission_mode: "public_to", invocation_targets: [{ target_type: 'workspace', target_id: '' }] },
-      { presence: { availability: "online" } as AgentListRow["presence"] },
-    );
-    const offlineAgent = makeRow(
-      { permission_mode: "public_to", invocation_targets: [{ target_type: 'workspace', target_id: '' }] },
-      { presence: { availability: "offline" } as AgentListRow["presence"] },
-    );
-    const filters: AgentListFilters = {
-      ...noFilters,
-      access: ["workspace"],
-      availability: ["online"],
-    };
-    expect(rowMatchesFilters(onlineAgent, filters, "")).toBe(true);
-    expect(rowMatchesFilters(offlineAgent, filters, "")).toBe(false);
   });
 
   it("access + runtimes filter: both must pass (AND)", () => {

@@ -68,7 +68,6 @@
   },
   "columns": {
     "agent": "Agent",
-    "status": "Statut",
     "workload": "Charge",
     "runtime": "Runtime",
     "activity_7d": "Activité (7 j)",
@@ -77,18 +76,16 @@
     "model": "Modèle",
     "created": "Création",
     "owner": "Propriétaire",
-    "access": "Accès"
+    "access": "Accès",
+    "now": "En ce moment"
   },
   "row": {
     "you": "Vous",
     "archived": "Archivé",
-    "needs_runtime": "Runtime requis",
     "no_description": "Aucune description",
     "fallback_runtime_cloud": "Cloud",
     "fallback_runtime_local": "Local",
-    "actions_aria": "Actions de la ligne",
-    "task_count_one": "{{count}} exécution",
-    "task_count_other": "{{count}} exécutions"
+    "actions_aria": "Actions de la ligne"
   },
   "activity_tooltip": {
     "created_today": "Créé aujourd'hui",
@@ -174,7 +171,6 @@
     "section_properties": "Propriétés",
     "section_details": "Détails",
     "section_details_hint": "Informations de propriété et de cycle de vie, en lecture seule.",
-    "section_skills": "Skills",
     "section_integrations": "Intégrations",
     "prop_runtime": "Runtime",
     "prop_model": "Modèle",
@@ -960,19 +956,12 @@
       "user_cancelled": "Annulée par l'utilisateur"
     }
   },
-  "last_active": {
-    "today": "Aujourd'hui",
-    "days_ago_one": "il y a {{count}} jour",
-    "days_ago_other": "il y a {{count}} jours",
-    "none": "Aucune activité (30 j)"
-  },
   "toolbar": {
     "result_count_title": "Agents correspondants / agents dans la portée",
     "filter_label": "Filtrer",
     "filter_active_count_one": "{{count}} filtre",
     "filter_active_count_other": "{{count}} filtres",
     "clear_filters": "Effacer les filtres",
-    "section_availability": "Disponibilité",
     "section_access": "Accès",
     "section_runtime": "Runtime",
     "display": "Affichage",
@@ -987,5 +976,35 @@
     "selected_one": "{{count}} sélectionné",
     "selected_other": "{{count}} sélectionnés",
     "clear_selection": "Effacer la sélection"
+  },
+  "list": {
+    "status_aria": "Filtrer les agents par statut",
+    "status": {
+      "all": "Tous",
+      "attention": "À traiter",
+      "working": "En cours",
+      "idle": "Inactifs",
+      "offline": "Hors ligne"
+    },
+    "group_by": "Grouper",
+    "group": {
+      "status": "Statut",
+      "none": "Aucun"
+    },
+    "now": {
+      "needs_runtime": "Runtime requis",
+      "bind": "Associer",
+      "offline_queued_one": "Runtime hors ligne · {{count}} en file",
+      "offline_queued_other": "Runtime hors ligne · {{count}} en file",
+      "working_one": "{{count}} exécution en cours",
+      "working_other": "{{count}} exécutions en cours",
+      "more": "+{{count}}",
+      "idle": "Inactif",
+      "idle_since": "Inactif · actif {{when}}",
+      "offline": "Hors ligne",
+      "offline_since": "Hors ligne · vu {{when}}"
+    },
+    "success_rate_aria_one": "{{rate}} % de réussite, {{count}} exécution sur 7 jours",
+    "success_rate_aria_other": "{{rate}} % de réussite, {{count}} exécutions sur 7 jours"
   }
 }

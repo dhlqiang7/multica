@@ -66,7 +66,6 @@
   },
   "columns": {
     "agent": "智能体",
-    "status": "状态",
     "workload": "工作负载",
     "runtime": "运行时",
     "activity_7d": "活动（7 天）",
@@ -74,18 +73,17 @@
     "last_active": "最近活跃",
     "model": "模型",
     "created": "创建时间",
-    "owner": "owner",
-    "access": "访问权限"
+    "owner": "所有者",
+    "access": "访问权限",
+    "now": "现在"
   },
   "row": {
     "you": "你",
     "archived": "已归档",
-    "needs_runtime": "需绑定运行时",
     "no_description": "暂无描述",
     "fallback_runtime_cloud": "云端",
     "fallback_runtime_local": "本地",
-    "actions_aria": "行操作",
-    "task_count_other": "{{count}} 次运行"
+    "actions_aria": "行操作"
   },
   "activity_tooltip": {
     "created_today": "今天创建",
@@ -165,7 +163,6 @@
     "section_properties": "属性",
     "section_details": "详情",
     "section_details_hint": "只读的所有权和生命周期信息。",
-    "section_skills": "Skills",
     "section_integrations": "集成",
     "prop_runtime": "运行时",
     "prop_model": "模型",
@@ -940,17 +937,11 @@
       "user_cancelled": "用户取消"
     }
   },
-  "last_active": {
-    "today": "今天",
-    "days_ago_other": "{{count}} 天前",
-    "none": "30 天内无活动"
-  },
   "toolbar": {
     "result_count_title": "当前结果 / 范围内全部",
     "filter_label": "筛选",
     "filter_active_count_other": "{{count}} 项筛选",
     "clear_filters": "清除筛选",
-    "section_availability": "可用性",
     "section_access": "访问权限",
     "section_runtime": "运行时",
     "display": "显示",
@@ -958,11 +949,38 @@
     "direction_asc": "升序",
     "direction_desc": "降序",
     "section_columns": "列",
-    "section_owner": "owner",
+    "section_owner": "所有者",
     "section_model": "模型"
   },
   "actions": {
     "selected_other": "已选 {{count}} 项",
     "clear_selection": "清除选择"
+  },
+  "list": {
+    "status_aria": "按状态筛选智能体",
+    "status": {
+      "all": "全部",
+      "attention": "需要关注",
+      "working": "工作中",
+      "idle": "空闲",
+      "offline": "离线"
+    },
+    "group_by": "分组",
+    "group": {
+      "status": "状态",
+      "none": "不分组"
+    },
+    "now": {
+      "needs_runtime": "需要运行时",
+      "bind": "绑定",
+      "offline_queued_other": "运行时离线 · {{count}} 个排队",
+      "working_other": "{{count}} 个运行进行中",
+      "more": "+{{count}}",
+      "idle": "空闲",
+      "idle_since": "空闲 · {{when}}活跃",
+      "offline": "离线",
+      "offline_since": "离线 · 最后在线 {{when}}"
+    },
+    "success_rate_aria_other": "近 7 天 {{count}} 次运行，成功率 {{rate}}%"
   }
 }

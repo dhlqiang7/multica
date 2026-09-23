@@ -58,7 +58,6 @@
   },
   "columns": {
     "agent": "エージェント",
-    "status": "ステータス",
     "workload": "作業量",
     "runtime": "ランタイム",
     "activity_7d": "アクティビティ（7日）",
@@ -67,17 +66,16 @@
     "model": "モデル",
     "created": "作成日時",
     "owner": "オーナー",
-    "access": "アクセス"
+    "access": "アクセス",
+    "now": "現在"
   },
   "row": {
     "you": "あなた",
     "archived": "アーカイブ済み",
-    "needs_runtime": "ランタイム未設定",
     "no_description": "説明なし",
     "fallback_runtime_cloud": "クラウド",
     "fallback_runtime_local": "ローカル",
-    "actions_aria": "行の操作",
-    "task_count_other": "{{count}} 件の実行"
+    "actions_aria": "行の操作"
   },
   "activity_tooltip": {
     "created_today": "今日作成",
@@ -157,7 +155,6 @@
     "section_properties": "プロパティ",
     "section_details": "詳細",
     "section_details_hint": "所有者とライフサイクルに関する読み取り専用情報です。",
-    "section_skills": "スキル",
     "section_integrations": "連携",
     "prop_runtime": "ランタイム",
     "prop_model": "モデル",
@@ -846,17 +843,11 @@
     "agent_count_other": "エージェント {{count}} 件",
     "empty": "まだマシンがありません"
   },
-  "last_active": {
-    "today": "今日",
-    "days_ago_other": "{{count}} 日前",
-    "none": "30 日間アクティビティなし"
-  },
   "toolbar": {
     "result_count_title": "該当エージェント / スコープ内全体",
     "filter_label": "フィルター",
     "filter_active_count_other": "{{count}} 件のフィルター",
     "clear_filters": "フィルターをクリア",
-    "section_availability": "可用性",
     "section_access": "アクセス",
     "section_runtime": "ランタイム",
     "display": "表示",
@@ -964,5 +955,32 @@
   "actions": {
     "selected_other": "{{count}} 件選択中",
     "clear_selection": "選択を解除"
+  },
+  "list": {
+    "status_aria": "ステータスでエージェントを絞り込む",
+    "status": {
+      "all": "すべて",
+      "attention": "要対応",
+      "working": "作業中",
+      "idle": "待機中",
+      "offline": "オフライン"
+    },
+    "group_by": "グループ",
+    "group": {
+      "status": "ステータス",
+      "none": "なし"
+    },
+    "now": {
+      "needs_runtime": "ランタイムが必要",
+      "bind": "設定",
+      "offline_queued_other": "ランタイムがオフライン · {{count}} 件待機中",
+      "working_other": "{{count}} 件実行中",
+      "more": "+{{count}}",
+      "idle": "待機中",
+      "idle_since": "待機中 · {{when}}に稼働",
+      "offline": "オフライン",
+      "offline_since": "オフライン · 最終接続 {{when}}"
+    },
+    "success_rate_aria_other": "直近 7 日間で {{count}} 件実行、成功率 {{rate}}%"
   }
 }

@@ -38,10 +38,9 @@ export const AGENT_SORT_DEFAULT_DIRECTION: Record<
   created: "desc",
 };
 
-/** Multi-select filter state. Empty array per dimension = inactive. */
+/** Multi-select filter state. Empty array per dimension = inactive. The
+ *  list's status tabs cover availability, so it is not a filter here. */
 export interface AgentListFilters {
-  /** AgentAvailability values (online / unstable / offline). */
-  availability: string[];
   /** Runtime ids. */
   runtimes: string[];
   /** Owner user ids. Owner is the same person-axis as the Mine scope: the
@@ -57,31 +56,45 @@ export interface AgentListFilters {
 }
 
 export const EMPTY_AGENT_FILTERS: AgentListFilters = {
-  availability: [],
   runtimes: [],
   owners: [],
   models: [],
   access: [],
 };
 
-// User-hideable columns. Name and the structural columns (checkbox, kebab)
-// are always visible.
+// User-hideable columns. Name and the structural columns (checkbox, actions)
+// are always visible. `status` is the "Now" column; `activity` is the
+// 7-day chart with its success rate, which replaced separate run-count and
+// last-active columns.
 export type AgentColumnKey =
   | "status"
+  | "runtime"
+  | "activity"
   | "owner"
   | "access"
-  | "runtime"
-  | "lastActive"
-  | "runs"
   | "model"
   | "created";
 
-/** Model and created are opt-in: hidden until the user enables them. Owner
- *  is shown by default (the user wants to see who owns each agent). */
-export const AGENT_DEFAULT_HIDDEN_COLUMNS: AgentColumnKey[] = [
+export const AGENT_COLUMN_KEYS: AgentColumnKey[] = [
+  "status",
+  "runtime",
+  "activity",
+  "owner",
+  "access",
   "model",
   "created",
 ];
+
+/** The default set answers "who is doing what, where, and how well"; access,
+ *  model and creation date are one toggle away in the Display menu. */
+export const AGENT_DEFAULT_HIDDEN_COLUMNS: AgentColumnKey[] = [
+  "access",
+  "model",
+  "created",
+];
+
+/** "status" groups rows by list status (needs attention first). */
+export type AgentGroupBy = "status" | "none";
 
 export interface AgentsViewState {
   scope: AgentsScope;
@@ -89,7 +102,9 @@ export interface AgentsViewState {
   sortDirection: AgentSortDirection;
   hiddenColumns: AgentColumnKey[];
   filters: AgentListFilters;
+  groupBy: AgentGroupBy;
   setScope: (scope: AgentsScope) => void;
+  setGroupBy: (groupBy: AgentGroupBy) => void;
   /** Header click: toggles direction on the active field, otherwise switches
    *  to the field with its default direction. */
   toggleSort: (field: AgentSortField) => void;
@@ -109,6 +124,7 @@ const DEFAULTS = {
   sortDirection: AGENT_SORT_DEFAULT_DIRECTION.lastActive,
   hiddenColumns: AGENT_DEFAULT_HIDDEN_COLUMNS,
   filters: EMPTY_AGENT_FILTERS,
+  groupBy: "status" as AgentGroupBy,
 };
 
 export const useAgentsViewStore = create<AgentsViewState>()(
@@ -120,6 +136,7 @@ export const useAgentsViewStore = create<AgentsViewState>()(
       // filters intact (you can carry "owner = Bob" between them).
       setScope: (scope) =>
         set(scope === "mine" ? { scope, filters: EMPTY_AGENT_FILTERS } : { scope }),
+      setGroupBy: (groupBy) => set({ groupBy }),
       toggleSort: (field) =>
         set((state) =>
           state.sortField === field
@@ -172,7 +189,20 @@ export const useAgentsViewStore = create<AgentsViewState>()(
         sortDirection: state.sortDirection,
         hiddenColumns: state.hiddenColumns,
         filters: state.filters,
+        groupBy: state.groupBy,
       }),
+      // v1 (MUL-7661): the column set changed (runs / last active folded into
+      // the 7-day activity column; access now opt-in) and availability moved
+      // from the filter menu to the status tabs. Column choices made against
+      // the old set don't carry over, so they restart from the new defaults.
+      version: 1,
+      migrate: (persisted, version) => {
+        const p = (persisted ?? {}) as Partial<AgentsViewState>;
+        if (version < 1) {
+          return { ...p, hiddenColumns: AGENT_DEFAULT_HIDDEN_COLUMNS };
+        }
+        return p;
+      },
       // On rehydrate, if the new workspace has no persisted value, reset to
       // the defaults instead of leaving the previous workspace's in-memory
       // view state in place. Default merge keeps current state when
@@ -183,10 +213,20 @@ export const useAgentsViewStore = create<AgentsViewState>()(
         // Deep-merge filters so a payload persisted before a new filter
         // dimension existed (e.g. `owners`) still gets that key's default
         // instead of dropping it to `undefined` and crashing `.length`.
+        const filters = { ...EMPTY_AGENT_FILTERS, ...(p.filters ?? {}) };
         return {
           ...current,
           ...p,
-          filters: { ...EMPTY_AGENT_FILTERS, ...(p.filters ?? {}) },
+          hiddenColumns: (p.hiddenColumns ?? DEFAULTS.hiddenColumns).filter(
+            (key) => AGENT_COLUMN_KEYS.includes(key),
+          ),
+          groupBy: p.groupBy === "none" ? "none" : "status",
+          filters: {
+            runtimes: filters.runtimes,
+            owners: filters.owners,
+            models: filters.models,
+            access: filters.access,
+          },
         };
       },
     },

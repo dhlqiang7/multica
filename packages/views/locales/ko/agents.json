@@ -66,7 +66,6 @@
   },
   "columns": {
     "agent": "에이전트",
-    "status": "상태",
     "workload": "작업량",
     "runtime": "런타임",
     "activity_7d": "활동(7일)",
@@ -75,17 +74,16 @@
     "model": "모델",
     "created": "생성일",
     "owner": "소유자",
-    "access": "접근 권한"
+    "access": "접근 권한",
+    "now": "현재"
   },
   "row": {
     "you": "나",
     "archived": "보관됨",
-    "needs_runtime": "런타임 필요",
     "no_description": "설명 없음",
     "fallback_runtime_cloud": "클라우드",
     "fallback_runtime_local": "로컬",
-    "actions_aria": "행 작업",
-    "task_count_other": "실행 {{count}}개"
+    "actions_aria": "행 작업"
   },
   "activity_tooltip": {
     "created_today": "오늘 생성됨",
@@ -165,7 +163,6 @@
     "section_properties": "속성",
     "section_details": "세부 정보",
     "section_details_hint": "소유권과 수명 주기에 대한 읽기 전용 정보입니다.",
-    "section_skills": "스킬",
     "section_integrations": "연동",
     "prop_runtime": "런타임",
     "prop_model": "모델",
@@ -846,17 +843,11 @@
       "user_cancelled": "사용자가 취소함"
     }
   },
-  "last_active": {
-    "today": "오늘",
-    "days_ago_other": "{{count}}일 전",
-    "none": "30일간 활동 없음"
-  },
   "toolbar": {
     "result_count_title": "일치하는 에이전트 / 범위 내 전체",
     "filter_label": "필터",
     "filter_active_count_other": "필터 {{count}}개",
     "clear_filters": "필터 지우기",
-    "section_availability": "가용성",
     "section_access": "접근 권한",
     "section_runtime": "런타임",
     "display": "표시",
@@ -964,5 +955,32 @@
   "actions": {
     "selected_other": "{{count}}개 선택됨",
     "clear_selection": "선택 해제"
+  },
+  "list": {
+    "status_aria": "상태로 에이전트 필터링",
+    "status": {
+      "all": "전체",
+      "attention": "조치 필요",
+      "working": "작업 중",
+      "idle": "대기 중",
+      "offline": "오프라인"
+    },
+    "group_by": "그룹",
+    "group": {
+      "status": "상태",
+      "none": "없음"
+    },
+    "now": {
+      "needs_runtime": "런타임 필요",
+      "bind": "연결",
+      "offline_queued_other": "런타임 오프라인 · {{count}}개 대기 중",
+      "working_other": "실행 {{count}}개 진행 중",
+      "more": "+{{count}}",
+      "idle": "대기 중",
+      "idle_since": "대기 중 · {{when}} 활동",
+      "offline": "오프라인",
+      "offline_since": "오프라인 · 마지막 접속 {{when}}"
+    },
+    "success_rate_aria_other": "최근 7일 실행 {{count}}개, 성공률 {{rate}}%"
   }
 }

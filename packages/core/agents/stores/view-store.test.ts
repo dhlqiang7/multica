@@ -46,6 +46,7 @@ describe("useAgentsViewStore", () => {
     const parsed = JSON.parse(raw as string);
     expect(Object.keys(parsed.state).sort()).toEqual([
       "filters",
+      "groupBy",
       "hiddenColumns",
       "scope",
       "sortDirection",
@@ -100,7 +101,7 @@ describe("useAgentsViewStore", () => {
     localStorage.setItem(
       "multica_agents_view:acme",
       JSON.stringify({
-        state: { filters: { availability: ["online"], runtimes: [] } },
+        state: { filters: { runtimes: ["rt-1"] } },
         version: 0,
       }),
     );
@@ -111,7 +112,7 @@ describe("useAgentsViewStore", () => {
 
     const filters = useAgentsViewStore.getState().filters;
     expect(filters.owners).toEqual([]);
-    expect(filters.availability).toEqual(["online"]);
+    expect(filters.runtimes).toEqual(["rt-1"]);
   });
 
   describe("access filter dimension", () => {
@@ -167,13 +168,42 @@ describe("useAgentsViewStore", () => {
       expect(useAgentsViewStore.getState().filters.access).toEqual(["workspace"]);
     });
 
+    it("restarts column choices from the new defaults when migrating a v0 payload", async () => {
+      localStorage.setItem(
+        "multica_agents_view:acme",
+        JSON.stringify({
+          state: {
+            scope: "all",
+            hiddenColumns: ["model", "created", "runs"],
+            filters: { availability: ["online"], owners: ["u1"] },
+          },
+          version: 0,
+        }),
+      );
+
+      setCurrentWorkspace("acme", "ws_a");
+      await flush();
+      await flush();
+
+      const state = useAgentsViewStore.getState();
+      expect(state.scope).toBe("all");
+      expect(state.hiddenColumns).toEqual(["access", "model", "created"]);
+      expect(state.groupBy).toBe("status");
+      expect(state.filters).toEqual({
+        runtimes: [],
+        owners: ["u1"],
+        models: [],
+        access: [],
+      });
+    });
+
     it("backfills access to [] when rehydrating a pre-access payload", async () => {
       // Pre-access payloads would leave filters.access undefined and crash
       // the row-filter predicate (`filters.access.length`).
       localStorage.setItem(
         "multica_agents_view:acme",
         JSON.stringify({
-          state: { filters: { availability: ["online"] } },
+          state: { filters: { runtimes: [] } },
           version: 0,
         }),
       );

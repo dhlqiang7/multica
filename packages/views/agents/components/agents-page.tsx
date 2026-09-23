@@ -3,22 +3,32 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
+  AlertTriangle,
   Bot,
   Lock,
+  MessageSquare,
   Plus,
+  Search,
+  WifiOff,
 } from "lucide-react";
+import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type {
   Agent,
   AgentRuntime,
+  AgentTask,
   MemberWithUser,
 } from "@multica/core/types";
 import {
-  type AgentActivity,
-  agentRunCounts30dOptions,
+  type ActivityWindowSummary,
+  AGENT_LIST_STATUS_ORDER,
+  type AgentListStatus,
+  type AgentListStatusDetail,
+  agentTaskSnapshotOptions,
+  deriveAgentListStatus,
   effectiveAccessScope,
-  isAgentRuntimeBound,
+  summarizeActivityWindow,
   useWorkspaceActivityMap,
   useWorkspacePresenceMap,
   VISIBILITY_TOOLTIP,
@@ -35,7 +45,10 @@ import {
 } from "@multica/core/agents/stores";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { issueDetailOptions } from "@multica/core/issues/queries";
+import { useModalStore } from "@multica/core/modals";
 import { useWorkspacePaths } from "@multica/core/paths";
+import { useAgentPermissions } from "@multica/core/permissions";
 import {
   agentListOptions,
   memberListOptions,
@@ -43,11 +56,14 @@ import {
 import { runtimeDisplayLabel, runtimeListOptions } from "@multica/core/runtimes";
 import { Button } from "@multica/ui/components/ui/button";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
+import { Input } from "@multica/ui/components/ui/input";
 import {
   LIST_GRID_BOTTOM_CLEARANCE,
+  LIST_GRID_GROUP_HEIGHT,
   ListGrid,
   ListGridBody,
   ListGridCell,
+  ListGridGroupHeader,
   ListGridHeader,
   ListGridHeaderCell,
   ListGridRow,
@@ -59,36 +75,48 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@multica/ui/components/ui/tooltip";
-import { useNavigation, useRowLink } from "../../navigation";
+import { cn } from "@multica/ui/lib/utils";
+import {
+  AppLink,
+  rowLinkInteractiveProps,
+  useNavigation,
+  useRowLink,
+} from "../../navigation";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { docsLocalePrefix } from "../../common/docs-locale";
 import { ProviderLogo } from "../../runtimes/components/provider-logo";
+import { splitRuntimeName } from "../../runtimes/components/runtime-machines";
 import {
   CollectionPageHeader,
   CollectionPageHeaderAction,
   CollectionPageState,
 } from "../../layout/collection-page";
-import { availabilityConfig } from "../presence";
+import {
+  StatusDot,
+  type StatusTone,
+} from "../../layout/status-summary";
 import { AgentRowActions } from "./agent-row-actions";
 import {
   AgentListToolbar,
   countActiveFilterDimensions,
+  type AgentStatusTab,
 } from "./agent-list-toolbar";
-import { useLocale, useT } from "../../i18n";
+import { Sparkline } from "./sparkline";
+import { useLocale, useT, useTimeAgo } from "../../i18n";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 
 // Column template — single source of truth for header, rows, and skeletons.
 // Same conventions as the skills/autopilots lists (see list-grid.tsx):
 // deterministic var-width tracks, two-zone responsiveness (≥@2xl WYSIWYG
 // with min-width + horizontal-scroll escape valve; <@2xl static core set of
-// name + status, toggles don't apply).
+// name + now, toggles don't apply).
 //
 // Agents are identity-type entities (few, avatar + persona), so rows are
 // the TWO-LINE form: avatar left, name + description right, 64px tall —
 // the documented exception to the single-line management-list rule.
 const GRID_COLS =
   "grid-cols-[0.75rem_minmax(120px,1fr)_var(--agc-status-mobile)_1.75rem_0.75rem] " +
-  "@2xl:grid-cols-[0.75rem_1rem_minmax(200px,1fr)_var(--agc-status-desktop)_var(--agc-owner)_var(--agc-access)_var(--agc-runtime)_var(--agc-lastactive)_var(--agc-runs)_var(--agc-model)_var(--agc-created)_1.75rem_0.75rem]";
+  "@2xl:grid-cols-[0.75rem_1rem_minmax(200px,1fr)_var(--agc-status)_var(--agc-runtime)_var(--agc-activity)_var(--agc-owner)_var(--agc-access)_var(--agc-model)_var(--agc-created)_5.25rem_0.75rem]";
 
 // Two-line rows; the virtualizer's fixed-size contract.
 const ROW_HEIGHT = 64;
@@ -96,23 +124,21 @@ const ROW_HEIGHT = 64;
 // Single source for hideable column widths: track vars and the grid's
 // min-width derive from the same numbers.
 const COLUMN_WIDTHS: Record<AgentColumnKey, number> = {
-  // Sized for the worst case "Online · 2 tasks" (~140px incl. padding);
-  // idle rows show only the dot + label and leave some in-track slack.
-  status: 144,
-  owner: 144,
+  // "Now" carries an issue identifier and title, so it gets the most room.
+  status: 260,
+  runtime: 196,
+  activity: 112,
+  owner: 132,
   // Fits the longest label "Specific people" (~120px incl. padding).
   access: 132,
-  runtime: 144,
-  lastActive: 120,
-  runs: 88,
   model: 120,
   created: 104,
 };
 
-// Fixed tracks (edges 12+12, checkbox 16, name min 200, kebab 28) plus the
-// 11 gap-x-3 gaps between the wide template's 12 tracks (zero-width tracks
-// still carry gaps).
-const FIXED_TRACKS_WIDTH = 268 + 11 * 12;
+// Fixed tracks (edges 12+12, checkbox 16, name min 200, actions 84) plus
+// the 11 gap-x-3 gaps between the wide template's 12 tracks (zero-width
+// tracks still carry gaps).
+const FIXED_TRACKS_WIDTH = 324 + 11 * 12;
 
 function columnTrackVars(
   isVisible: (key: AgentColumnKey) => boolean,
@@ -126,13 +152,12 @@ function columnTrackVars(
       0,
     );
   return {
-    "--agc-status-mobile": isVisible("status") ? "96px" : "0px",
-    "--agc-status-desktop": width("status"),
+    "--agc-status-mobile": isVisible("status") ? "132px" : "0px",
+    "--agc-status": width("status"),
+    "--agc-runtime": width("runtime"),
+    "--agc-activity": width("activity"),
     "--agc-owner": width("owner"),
     "--agc-access": width("access"),
-    "--agc-runtime": width("runtime"),
-    "--agc-lastactive": width("lastActive"),
-    "--agc-runs": width("runs"),
     "--agc-model": width("model"),
     "--agc-created": width("created"),
     "--agc-minw": `${minWidth}px`,
@@ -143,25 +168,67 @@ export interface AgentListRow {
   agent: Agent;
   runtime: AgentRuntime | null;
   presence: AgentPresenceDetail | null;
-  activity: AgentActivity | null;
-  runCount: number;
+  status: AgentListStatusDetail;
+  activity: ActivityWindowSummary;
   /** Days since the last bucket with runs; null = nothing in the window. */
   lastActiveDays: number | null;
+  /** When the agent last finished a run, from the task snapshot. */
+  lastDoneAt: string | null;
+  /** The issue its oldest active run is on, when that run has one. */
+  currentIssueId: string | null;
   owner: MemberWithUser | null;
   isOwnedByMe: boolean;
   canManage: boolean;
 }
 
 // Most recent activity bucket with runs, as "days ago" (0 = today).
-// Day-granularity by design — derived from the same 30-day buckets the
-// detail page charts, no extra API.
-function lastActiveDaysAgo(activity: AgentActivity | null): number | null {
-  if (!activity) return null;
+function lastActiveDaysAgo(activity: ActivityWindowSummary): number | null {
   for (let i = activity.buckets.length - 1; i >= 0; i--) {
     const bucket = activity.buckets[i];
     if (bucket && bucket.total > 0) return activity.buckets.length - 1 - i;
   }
   return null;
+}
+
+const ACTIVE_TASK_STATUSES = new Set<AgentTask["status"]>([
+  "running",
+  "queued",
+  "dispatched",
+  "waiting_local_directory",
+]);
+
+interface SnapshotFacts {
+  lastDoneAt: string | null;
+  currentIssueId: string | null;
+}
+
+// One pass over the workspace task snapshot: each agent's latest finish
+// time and the issue its first active run belongs to (running first).
+function buildSnapshotFacts(tasks: readonly AgentTask[]): Map<string, SnapshotFacts> {
+  const out = new Map<string, SnapshotFacts>();
+  const currentRank = new Map<string, number>();
+  for (const task of tasks) {
+    const facts = out.get(task.agent_id) ?? {
+      lastDoneAt: null,
+      currentIssueId: null,
+    };
+    if (
+      task.completed_at &&
+      (!facts.lastDoneAt || task.completed_at > facts.lastDoneAt)
+    ) {
+      facts.lastDoneAt = task.completed_at;
+    }
+    if (ACTIVE_TASK_STATUSES.has(task.status) && task.issue_id) {
+      const rank = task.status === "running" ? 0 : 1;
+      const prev = currentRank.get(task.agent_id);
+      if (prev === undefined || rank < prev) {
+        facts.currentIssueId = task.issue_id;
+        currentRank.set(task.agent_id, rank);
+      }
+    }
+    out.set(task.agent_id, facts);
+  }
+  return out;
 }
 
 function matchesAgentSearch(row: AgentListRow, query: string): boolean {
@@ -188,12 +255,6 @@ export function rowMatchesFilters(
   query: string,
 ): boolean {
   if (!matchesAgentSearch(row, query.trim().toLowerCase())) return false;
-  if (
-    filters.availability.length > 0 &&
-    (!row.presence || !filters.availability.includes(row.presence.availability))
-  ) {
-    return false;
-  }
   if (
     filters.runtimes.length > 0 &&
     !filters.runtimes.includes(row.agent.runtime_id)
@@ -245,6 +306,17 @@ export interface AgentsPageProps {
   hasLocalMachine?: boolean;
 }
 
+const STATUS_TONE: Record<Exclude<AgentListStatus, "archived">, StatusTone> = {
+  attention: "attention",
+  working: "working",
+  idle: "idle",
+  offline: "offline",
+};
+
+type ListItem =
+  | { kind: "group"; status: Exclude<AgentListStatus, "archived">; count: number }
+  | { kind: "row"; row: AgentListRow };
+
 // ---------------------------------------------------------------------------
 // Page header
 // ---------------------------------------------------------------------------
@@ -252,9 +324,13 @@ export interface AgentsPageProps {
 function PageHeaderBar({
   totalCount,
   onCreate,
+  search,
+  onSearchChange,
 }: {
   totalCount: number;
   onCreate: () => void;
+  search?: string;
+  onSearchChange?: (value: string) => void;
 }) {
   const { t, i18n } = useT("agents");
   return (
@@ -268,11 +344,25 @@ function PageHeaderBar({
         label: t(($) => $.page.learn_more),
       }}
       actions={
-        <CollectionPageHeaderAction
-          icon={Plus}
-          label={t(($) => $.page.new_agent)}
-          onClick={onCreate}
-        />
+        <>
+          {onSearchChange ? (
+            <div className="relative hidden md:block">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(e) => onSearchChange(e.target.value)}
+                aria-label={t(($) => $.page.search_placeholder)}
+                placeholder={t(($) => $.page.search_placeholder)}
+                className="h-8 w-56 pl-8 text-body"
+              />
+            </div>
+          ) : null}
+          <CollectionPageHeaderAction
+            icon={Plus}
+            label={t(($) => $.page.new_agent)}
+            onClick={onCreate}
+          />
+        </>
       }
     />
   );
@@ -415,12 +505,19 @@ function NameCell({ row }: { row: AgentListRow }) {
   );
 }
 
-// Availability dot + label, with the workload folded in as a suffix
-// ("Online · 2 tasks") — a 0-2 integer doesn't earn its own column.
-function StatusCell({ row }: { row: AgentListRow }) {
+/**
+ * "Now": what the agent is doing, or what is stopping it. The line is the
+ * list status spelled out — the issue it is on while working, what blocks
+ * it (with the fix one click away) when it needs attention, and how long
+ * it has been quiet otherwise.
+ */
+function NowCell({ row }: { row: AgentListRow }) {
   const { t } = useT("agents");
-  const { agent, presence } = row;
-  if (agent.archived_at) {
+  const timeAgo = useTimeAgo();
+  const paths = useWorkspacePaths();
+  const { agent, presence, status } = row;
+
+  if (status.status === "archived") {
     return (
       <ListGridCell>
         <span className="text-caption text-muted-foreground">
@@ -429,38 +526,116 @@ function StatusCell({ row }: { row: AgentListRow }) {
       </ListGridCell>
     );
   }
-  if (!isAgentRuntimeBound(agent)) {
+
+  if (status.reason === "no_runtime") {
     return (
-      <ListGridCell className="gap-1.5">
-        <AlertCircle className="size-3.5 shrink-0 text-amber-500" />
-        <span className="truncate text-caption text-amber-600 dark:text-amber-400">
-          {t(($) => $.row.needs_runtime)}
+      <ListGridCell className="gap-2">
+        <AlertTriangle
+          aria-hidden="true"
+          className="size-3.5 shrink-0 text-warning"
+        />
+        <span className="min-w-0 truncate text-caption">
+          {t(($) => $.list.now.needs_runtime)}
+        </span>
+        {row.canManage ? (
+          <Button
+            variant="outline"
+            size="xs"
+            className="hidden shrink-0 @2xl:inline-flex"
+            render={
+              <AppLink
+                href={`${paths.agentDetail(agent.id)}?view=execution`}
+                {...rowLinkInteractiveProps}
+              />
+            }
+            nativeButton={false}
+          >
+            {t(($) => $.list.now.bind)}
+          </Button>
+        ) : null}
+      </ListGridCell>
+    );
+  }
+
+  if (status.reason === "runtime_offline_queued") {
+    return (
+      <ListGridCell className="gap-2">
+        <WifiOff aria-hidden="true" className="size-3.5 shrink-0 text-warning" />
+        <span className="min-w-0 truncate text-caption">
+          {t(($) => $.list.now.offline_queued, {
+            count: presence?.queuedCount ?? 0,
+          })}
         </span>
       </ListGridCell>
     );
   }
-  if (!presence) {
+
+  if (status.status === "working") {
+    const active = (presence?.runningCount ?? 0) + (presence?.queuedCount ?? 0);
     return (
-      <ListGridCell>
-        <span className="text-caption text-faint-foreground">—</span>
+      <ListGridCell className="gap-2">
+        <StatusDot tone="working" />
+        {row.currentIssueId ? (
+          <CurrentIssue
+            issueId={row.currentIssueId}
+            fallback={t(($) => $.list.now.working, { count: active })}
+          />
+        ) : (
+          <span className="min-w-0 truncate text-caption">
+            {t(($) => $.list.now.working, { count: active })}
+          </span>
+        )}
+        {row.currentIssueId && active > 1 ? (
+          <span className="shrink-0 rounded-xs bg-muted px-1 text-micro tabular-nums text-muted-foreground">
+            {t(($) => $.list.now.more, { count: active - 1 })}
+          </span>
+        ) : null}
       </ListGridCell>
     );
   }
-  const visual = availabilityConfig[presence.availability];
-  const active = presence.runningCount + presence.queuedCount;
+
+  if (status.status === "offline") {
+    const seen = row.runtime?.last_seen_at;
+    return (
+      <ListGridCell className="gap-2">
+        <StatusDot tone="offline" />
+        <span className="min-w-0 truncate text-caption text-muted-foreground">
+          {seen
+            ? t(($) => $.list.now.offline_since, { when: timeAgo(seen) })
+            : t(($) => $.list.now.offline)}
+        </span>
+      </ListGridCell>
+    );
+  }
+
   return (
-    <ListGridCell className="gap-1.5">
-      <span className={`size-1.5 shrink-0 rounded-full ${visual.dotClass}`} />
-      <span className={`truncate text-caption ${visual.textClass}`}>
-        {t(($) => $.availability[presence.availability])}
-        {active > 0 && (
-          <span className="text-muted-foreground">
-            {" · "}
-            {t(($) => $.row.task_count, { count: active })}
-          </span>
-        )}
+    <ListGridCell className="gap-2">
+      <StatusDot tone={presence?.availability === "unstable" ? "attention" : "idle"} />
+      <span className="min-w-0 truncate text-caption text-muted-foreground">
+        {row.lastDoneAt
+          ? t(($) => $.list.now.idle_since, { when: timeAgo(row.lastDoneAt!) })
+          : t(($) => $.list.now.idle)}
       </span>
     </ListGridCell>
+  );
+}
+
+function CurrentIssue({ issueId, fallback }: { issueId: string; fallback: string }) {
+  const wsId = useWorkspaceId();
+  const { data: issue } = useQuery({
+    ...issueDetailOptions(wsId, issueId),
+    staleTime: 60 * 1000,
+  });
+  if (!issue) {
+    return <span className="min-w-0 truncate text-caption">{fallback}</span>;
+  }
+  return (
+    <span className="flex min-w-0 items-baseline gap-1.5 text-caption">
+      <span className="shrink-0 font-mono text-muted-foreground">
+        {issue.identifier}
+      </span>
+      <span className="min-w-0 truncate">{issue.title}</span>
+    </span>
   );
 }
 
@@ -515,17 +690,16 @@ export function AccessCell({ row }: { row: AgentListRow }) {
   );
 }
 
+// "machine · runtime": the machine is what goes offline, so it leads.
+function runtimeCellLabel(runtime: AgentRuntime): string {
+  const label = runtimeDisplayLabel(runtime);
+  if (runtime.custom_name?.trim()) return label;
+  const { base, hostname } = splitRuntimeName(label);
+  const host = hostname ?? runtime.device_info?.split(" · ")[0]?.trim();
+  return host ? `${host} · ${base}` : base;
+}
+
 function RuntimeCell({ row }: { row: AgentListRow }) {
-  const { t } = useT("agents");
-  if (!isAgentRuntimeBound(row.agent)) {
-    return (
-      <ListGridCell className="hidden @2xl:flex">
-        <span className="truncate text-caption text-amber-600 dark:text-amber-400">
-          {t(($) => $.row.needs_runtime)}
-        </span>
-      </ListGridCell>
-    );
-  }
   const runtime = row.runtime;
   return (
     <ListGridCell className="hidden @2xl:flex">
@@ -538,7 +712,7 @@ function RuntimeCell({ row }: { row: AgentListRow }) {
             className="h-3.5 w-3.5 shrink-0"
           />
           <span className="min-w-0 truncate text-caption text-muted-foreground">
-            {runtimeDisplayLabel(runtime)}
+            {runtimeCellLabel(runtime)}
           </span>
         </span>
       ) : (
@@ -548,23 +722,97 @@ function RuntimeCell({ row }: { row: AgentListRow }) {
   );
 }
 
-function LastActiveCell({ row }: { row: AgentListRow }) {
+// Seven daily columns (failures stacked in red) plus the success rate: how
+// busy the agent has been and how often it lands the work, in one glance.
+function ActivityCell({ row }: { row: AgentListRow }) {
   const { t } = useT("agents");
-  const days = row.lastActiveDays;
+  const { activity } = row;
+  const rate = activity.successRate;
   return (
-    <ListGridCell className="hidden @2xl:flex">
-      {days === null ? (
-        <span className="truncate text-caption text-muted-foreground">
-          {row.agent.archived_at ? "—" : t(($) => $.last_active.none)}
-        </span>
-      ) : (
-        <span className="whitespace-nowrap text-caption tabular-nums text-muted-foreground">
-          {days === 0
-            ? t(($) => $.last_active.today)
-            : t(($) => $.last_active.days_ago, { count: days })}
-        </span>
-      )}
+    <ListGridCell className="hidden gap-2 @2xl:flex">
+      <Sparkline
+        buckets={activity.buckets}
+        width={52}
+        height={18}
+        className="shrink-0"
+      />
+      <span
+        className={cn(
+          "text-caption tabular-nums",
+          rate === null
+            ? "text-faint-foreground"
+            : rate < 80
+              ? "text-destructive"
+              : "text-muted-foreground",
+        )}
+        aria-label={
+          rate === null
+            ? undefined
+            : t(($) => $.list.success_rate_aria, {
+                rate,
+                count: activity.totalRuns,
+              })
+        }
+      >
+        {rate === null ? "—" : `${rate}%`}
+      </span>
     </ListGridCell>
+  );
+}
+
+// Assign and DM, revealed on hover next to the kebab — the two things a
+// person most often comes to the list to do with an agent.
+function QuickActions({ agent }: { agent: Agent }) {
+  const { t } = useT("agents");
+  const wsId = useWorkspaceId();
+  const paths = useWorkspacePaths();
+  const { canAssign, isLoading } = useAgentPermissions(agent, wsId);
+  if (agent.archived_at || isLoading || !canAssign.allowed) return null;
+  const runtimeMissing = !agent.runtime_id;
+  const iconButton =
+    "flex size-7 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-accent-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/row:opacity-100";
+  return (
+    <>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              aria-label={t(($) => $.detail.assign_work)}
+              className={iconButton}
+              onClick={() => {
+                if (runtimeMissing) {
+                  toast.error(t(($) => $.detail.runtime_required_toast));
+                  return;
+                }
+                useModalStore
+                  .getState()
+                  .open("quick-create-issue", { agent_id: agent.id });
+              }}
+            >
+              <Plus className="size-4" />
+            </button>
+          }
+        />
+        <TooltipContent>{t(($) => $.detail.assign_work)}</TooltipContent>
+      </Tooltip>
+      {runtimeMissing ? null : (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <AppLink
+                href={`${paths.chat()}?agent=${agent.id}`}
+                aria-label={t(($) => $.detail.dm)}
+                className={iconButton}
+              >
+                <MessageSquare className="size-4" />
+              </AppLink>
+            }
+          />
+          <TooltipContent>{t(($) => $.detail.dm)}</TooltipContent>
+        </Tooltip>
+      )}
+    </>
   );
 }
 
@@ -593,6 +841,25 @@ function AgentListHeader({
   const sorted = (field: AgentSortField) =>
     sortField === field ? sortDirection : false;
   const anySelected = allSelected || someSelected;
+  const hideable = (key: AgentColumnKey, label: string, extra?: {
+    className?: string;
+    sortField?: AgentSortField;
+  }) =>
+    isColVisible(key) ? (
+      <ListGridHeaderCell
+        className={cn("hidden @2xl:flex", extra?.className)}
+        sorted={extra?.sortField ? sorted(extra.sortField) : undefined}
+        onSort={
+          extra?.sortField
+            ? () => onSort(extra.sortField as AgentSortField)
+            : undefined
+        }
+      >
+        {label}
+      </ListGridHeaderCell>
+    ) : (
+      <ListGridHeaderCell className="hidden px-0 @2xl:flex" />
+    );
   return (
     <ListGridHeader>
       <div className="hidden items-center justify-center @2xl:flex">
@@ -618,72 +885,20 @@ function AgentListHeader({
         {t(($) => $.columns.agent)}
       </ListGridHeaderCell>
       {isColVisible("status") ? (
-        <ListGridHeaderCell>{t(($) => $.columns.status)}</ListGridHeaderCell>
+        <ListGridHeaderCell>{t(($) => $.columns.now)}</ListGridHeaderCell>
       ) : (
         <ListGridHeaderCell className="px-0" />
       )}
-      {isColVisible("owner") ? (
-        <ListGridHeaderCell className="hidden @2xl:flex">
-          {t(($) => $.columns.owner)}
-        </ListGridHeaderCell>
-      ) : (
-        <ListGridHeaderCell className="hidden px-0 @2xl:flex" />
-      )}
-      {isColVisible("access") ? (
-        <ListGridHeaderCell className="hidden @2xl:flex">
-          {t(($) => $.columns.access)}
-        </ListGridHeaderCell>
-      ) : (
-        <ListGridHeaderCell className="hidden px-0 @2xl:flex" />
-      )}
-      {isColVisible("runtime") ? (
-        <ListGridHeaderCell className="hidden @2xl:flex">
-          {t(($) => $.columns.runtime)}
-        </ListGridHeaderCell>
-      ) : (
-        <ListGridHeaderCell className="hidden px-0 @2xl:flex" />
-      )}
-      {isColVisible("lastActive") ? (
-        <ListGridHeaderCell
-          className="hidden @2xl:flex"
-          sorted={sorted("lastActive")}
-          onSort={() => onSort("lastActive")}
-        >
-          {t(($) => $.columns.last_active)}
-        </ListGridHeaderCell>
-      ) : (
-        <ListGridHeaderCell className="hidden px-0 @2xl:flex" />
-      )}
-      {isColVisible("runs") ? (
-        <ListGridHeaderCell
-          className="hidden @2xl:flex"
-          align="right"
-          sorted={sorted("runs")}
-          onSort={() => onSort("runs")}
-        >
-          {t(($) => $.columns.runs)}
-        </ListGridHeaderCell>
-      ) : (
-        <ListGridHeaderCell className="hidden px-0 @2xl:flex" />
-      )}
-      {isColVisible("model") ? (
-        <ListGridHeaderCell className="hidden @2xl:flex">
-          {t(($) => $.columns.model)}
-        </ListGridHeaderCell>
-      ) : (
-        <ListGridHeaderCell className="hidden px-0 @2xl:flex" />
-      )}
-      {isColVisible("created") ? (
-        <ListGridHeaderCell
-          className="hidden @2xl:flex"
-          sorted={sorted("created")}
-          onSort={() => onSort("created")}
-        >
-          {t(($) => $.columns.created)}
-        </ListGridHeaderCell>
-      ) : (
-        <ListGridHeaderCell className="hidden px-0 @2xl:flex" />
-      )}
+      {hideable("runtime", t(($) => $.columns.runtime))}
+      {hideable("activity", t(($) => $.columns.activity_7d), {
+        sortField: "runs",
+      })}
+      {hideable("owner", t(($) => $.columns.owner))}
+      {hideable("access", t(($) => $.columns.access))}
+      {hideable("model", t(($) => $.columns.model))}
+      {hideable("created", t(($) => $.columns.created), {
+        sortField: "created",
+      })}
       <span aria-hidden="true" />
     </ListGridHeader>
   );
@@ -714,12 +929,7 @@ function LoadingSkeleton() {
         <ListGridHeaderCell className="hidden @2xl:flex">
           <Skeleton className="h-3 w-14" />
         </ListGridHeaderCell>
-        <ListGridHeaderCell className="hidden @2xl:flex">
-          <Skeleton className="h-3 w-14" />
-        </ListGridHeaderCell>
-        <ListGridHeaderCell className="hidden @2xl:flex">
-          <Skeleton className="h-3 w-10" />
-        </ListGridHeaderCell>
+        <ListGridHeaderCell className="hidden px-0 @2xl:flex" />
         <ListGridHeaderCell className="hidden px-0 @2xl:flex" />
         <ListGridHeaderCell className="hidden px-0 @2xl:flex" />
         <span aria-hidden="true" />
@@ -735,24 +945,19 @@ function LoadingSkeleton() {
             </div>
           </ListGridCell>
           <ListGridCell>
+            <Skeleton className="h-3 w-40" />
+          </ListGridCell>
+          <ListGridCell className="hidden @2xl:flex">
+            <Skeleton className="h-3 w-28" />
+          </ListGridCell>
+          <ListGridCell className="hidden @2xl:flex">
             <Skeleton className="h-3 w-16" />
           </ListGridCell>
           <ListGridCell className="hidden gap-1.5 @2xl:flex">
             <Skeleton className="size-5 rounded-full" />
             <Skeleton className="h-3 w-12" />
           </ListGridCell>
-          <ListGridCell className="hidden @2xl:flex">
-            <Skeleton className="h-3 w-14" />
-          </ListGridCell>
-          <ListGridCell className="hidden @2xl:flex">
-            <Skeleton className="h-3 w-16" />
-          </ListGridCell>
-          <ListGridCell className="hidden @2xl:flex">
-            <Skeleton className="h-3 w-12" />
-          </ListGridCell>
-          <ListGridCell className="hidden justify-end @2xl:flex">
-            <Skeleton className="h-3 w-8" />
-          </ListGridCell>
+          <ListGridCell className="hidden px-0 @2xl:flex" />
           <ListGridCell className="hidden px-0 @2xl:flex" />
           <ListGridCell className="hidden px-0 @2xl:flex" />
           <span aria-hidden="true" />
@@ -763,9 +968,116 @@ function LoadingSkeleton() {
 }
 
 // ---------------------------------------------------------------------------
-// Batch toolbar — archive (with confirm; archiving cancels active tasks) and
 // Page
 // ---------------------------------------------------------------------------
+
+function compareRows(
+  a: AgentListRow,
+  b: AgentListRow,
+  sortField: AgentSortField,
+  sortDirection: "asc" | "desc",
+): number {
+  const dir = sortDirection === "asc" ? 1 : -1;
+  if (sortField === "name") {
+    return a.agent.name.localeCompare(b.agent.name) * dir;
+  }
+  if (sortField === "runs") {
+    return (
+      (a.activity.totalRuns - b.activity.totalRuns) * dir ||
+      a.agent.name.localeCompare(b.agent.name)
+    );
+  }
+  if (sortField === "created") {
+    return (
+      (Date.parse(a.agent.created_at) - Date.parse(b.agent.created_at)) * dir
+    );
+  }
+  // lastActive: smaller daysAgo = more recent. "desc" (the default) means
+  // most recently active first; never-active rows sort last in both
+  // directions. Run count breaks ties.
+  const av = a.lastActiveDays ?? Number.POSITIVE_INFINITY;
+  const bv = b.lastActiveDays ?? Number.POSITIVE_INFINITY;
+  const byDays = sortDirection === "desc" ? av - bv : bv - av;
+  return (
+    byDays ||
+    b.activity.totalRuns - a.activity.totalRuns ||
+    a.agent.name.localeCompare(b.agent.name)
+  );
+}
+
+/**
+ * Lay the visible rows out as list items, grouped by status when asked.
+ * While the pointer is over the list the previous layout is kept (rows
+ * keep their slots, fresh data renders in them) so a run finishing does
+ * not move the row someone is about to click.
+ */
+function useListLayout({
+  rows,
+  grouped,
+  collapsed,
+  frozen,
+}: {
+  rows: AgentListRow[];
+  grouped: boolean;
+  collapsed: ReadonlySet<string>;
+  frozen: boolean;
+}): ListItem[] {
+  const live = useMemo(() => {
+    if (!grouped) {
+      return {
+        order: rows.map((r) => r.agent.id),
+        groupOf: new Map<string, Exclude<AgentListStatus, "archived">>(),
+      };
+    }
+    const groupOf = new Map<string, Exclude<AgentListStatus, "archived">>();
+    const order: string[] = [];
+    for (const status of AGENT_LIST_STATUS_ORDER) {
+      for (const row of rows) {
+        if (row.status.status === status) {
+          groupOf.set(row.agent.id, status);
+          order.push(row.agent.id);
+        }
+      }
+    }
+    return { order, groupOf };
+  }, [rows, grouped]);
+
+  const frozenRef = useRef(live);
+  if (!frozen) frozenRef.current = live;
+  const layout = frozen ? frozenRef.current : live;
+
+  return useMemo(() => {
+    const byId = new Map(rows.map((r) => [r.agent.id, r]));
+    const ordered: AgentListRow[] = [];
+    for (const id of layout.order) {
+      const row = byId.get(id);
+      if (row) {
+        ordered.push(row);
+        byId.delete(id);
+      }
+    }
+    // Rows that appeared while the layout was held go to the end of the
+    // group they belong to now.
+    const late = Array.from(byId.values());
+    if (!grouped) return [...ordered, ...late].map((row) => ({ kind: "row", row }) as ListItem);
+
+    const groupOf = (row: AgentListRow) =>
+      layout.groupOf.get(row.agent.id) ??
+      (row.status.status === "archived" ? "offline" : row.status.status);
+    const items: ListItem[] = [];
+    for (const status of AGENT_LIST_STATUS_ORDER) {
+      const members = [
+        ...ordered.filter((row) => groupOf(row) === status),
+        ...late.filter((row) => groupOf(row) === status),
+      ];
+      if (members.length === 0) continue;
+      items.push({ kind: "group", status, count: members.length });
+      if (collapsed.has(status)) continue;
+      for (const row of members) items.push({ kind: "row", row });
+    }
+    return items;
+  }, [rows, layout, grouped, collapsed]);
+}
 
 export function AgentsPage(_props: AgentsPageProps = {}) {
   const { t } = useT("agents");
@@ -786,9 +1098,7 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
     runtimeListOptions(wsId),
   );
   const { data: members = [] } = useQuery(memberListOptions(wsId));
-  const { data: runCountsRaw = [], isPending: runCountsPending } = useQuery(
-    agentRunCounts30dOptions(wsId),
-  );
+  const { data: snapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
   const { byAgent: presenceMap, loading: presenceLoading } =
     useWorkspacePresenceMap(wsId);
   const { byAgent: activityMap, loading: activityLoading } =
@@ -798,6 +1108,11 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
     new Set(),
   );
   const [search, setSearch] = useState("");
+  const [statusTab, setStatusTab] = useState<AgentStatusTab>("all");
+  const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
+  const [pointerInList, setPointerInList] = useState(false);
 
   const rawScope = useAgentsViewStore((s) => s.scope);
   const scope = AGENT_SCOPES.includes(rawScope) ? rawScope : "mine";
@@ -806,6 +1121,8 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
   const sortDirection = useAgentsViewStore((s) => s.sortDirection);
   const hiddenColumns = useAgentsViewStore((s) => s.hiddenColumns);
   const filters = useAgentsViewStore((s) => s.filters);
+  const groupBy = useAgentsViewStore((s) => s.groupBy);
+  const setGroupBy = useAgentsViewStore((s) => s.setGroupBy);
   const handleSort = useAgentsViewStore((s) => s.toggleSort);
   const handleSortFieldSelect = useAgentsViewStore((s) => s.setSortField);
   const setSortDirection = useAgentsViewStore((s) => s.setSortDirection);
@@ -830,17 +1147,13 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
     return m;
   }, [runtimes]);
 
-  const runCountsById = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const r of runCountsRaw) m.set(r.agent_id, r.run_count);
-    return m;
-  }, [runCountsRaw]);
-
   const membersById = useMemo(() => {
     const m = new Map<string, MemberWithUser>();
     for (const mem of members) m.set(mem.user_id, mem);
     return m;
   }, [members]);
+
+  const snapshotFacts = useMemo(() => buildSnapshotFacts(snapshot), [snapshot]);
 
   const isWorkspaceAdmin = useMemo(() => {
     if (!currentUser) return false;
@@ -866,8 +1179,8 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
   }, [agents, currentUser]);
 
   // Rows within the current scope, unfiltered, fully assembled — the
-  // toolbar's option lists and the "n / total" denominator derive from
-  // this; cells never pull their own queries.
+  // toolbar's option lists and the status counts derive from this; cells
+  // never pull their own list queries.
   const scopeRows = useMemo<AgentListRow[]>(() => {
     const inScope = agents.filter((a) => {
       if (scope === "archived") return !!a.archived_at;
@@ -879,14 +1192,20 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
     });
     return inScope.map((agent) => {
       const isOwner = !!currentUser?.id && agent.owner_id === currentUser.id;
-      const activity = activityMap.get(agent.id) ?? null;
+      const activity = summarizeActivityWindow(activityMap.get(agent.id), 7);
+      const presence = presenceMap.get(agent.id) ?? null;
+      const facts = snapshotFacts.get(agent.id);
       return {
         agent,
         runtime: runtimesById.get(agent.runtime_id) ?? null,
-        presence: presenceMap.get(agent.id) ?? null,
+        presence,
+        status: deriveAgentListStatus(agent, presence),
         activity,
-        runCount: runCountsById.get(agent.id) ?? 0,
-        lastActiveDays: lastActiveDaysAgo(activity),
+        lastActiveDays: lastActiveDaysAgo(
+          summarizeActivityWindow(activityMap.get(agent.id), 30),
+        ),
+        lastDoneAt: facts?.lastDoneAt ?? null,
+        currentIssueId: facts?.currentIssueId ?? null,
         owner: agent.owner_id ? membersById.get(agent.owner_id) ?? null : null,
         isOwnedByMe: isOwner,
         canManage: isWorkspaceAdmin || isOwner,
@@ -900,42 +1219,50 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
     membersById,
     presenceMap,
     activityMap,
-    runCountsById,
+    snapshotFacts,
     isWorkspaceAdmin,
   ]);
 
-  // Visible rows: local search + filters, then sort.
-  const rows = useMemo<AgentListRow[]>(() => {
-    const filtered = scopeRows.filter((row) => rowMatchesFilters(row, filters, search));
+  // Search + filters, before the status tab: the tab counts describe what
+  // the filters left, so a tab never promises rows it then hides.
+  const filteredRows = useMemo(
+    () => scopeRows.filter((row) => rowMatchesFilters(row, filters, search)),
+    [scopeRows, filters, search],
+  );
 
-    const dir = sortDirection === "asc" ? 1 : -1;
-    filtered.sort((a, b) => {
-      if (sortField === "name") {
-        return a.agent.name.localeCompare(b.agent.name) * dir;
-      }
-      if (sortField === "runs") {
-        return (a.runCount - b.runCount) * dir ||
-          a.agent.name.localeCompare(b.agent.name);
-      }
-      if (sortField === "created") {
-        return (
-          (Date.parse(a.agent.created_at) - Date.parse(b.agent.created_at)) *
-          dir
-        );
-      }
-      // lastActive: smaller daysAgo = more recent. "desc" (the default)
-      // means most recently active first; never-active rows sort last in
-      // both directions. Run count breaks ties.
-      const av = a.lastActiveDays ?? Number.POSITIVE_INFINITY;
-      const bv = b.lastActiveDays ?? Number.POSITIVE_INFINITY;
-      const byDays = sortDirection === "desc" ? av - bv : bv - av;
-      return (
-        byDays || b.runCount - a.runCount ||
-        a.agent.name.localeCompare(b.agent.name)
-      );
-    });
-    return filtered;
-  }, [scopeRows, search, filters, sortField, sortDirection]);
+  const statusCounts = useMemo(() => {
+    const counts: Record<AgentStatusTab, number> = {
+      all: filteredRows.length,
+      attention: 0,
+      working: 0,
+      idle: 0,
+      offline: 0,
+    };
+    for (const row of filteredRows) {
+      if (row.status.status !== "archived") counts[row.status.status] += 1;
+    }
+    return counts;
+  }, [filteredRows]);
+
+  const showStatus = scope !== "archived";
+  const activeStatus: AgentStatusTab = showStatus ? statusTab : "all";
+
+  const rows = useMemo<AgentListRow[]>(() => {
+    const visible =
+      activeStatus === "all"
+        ? [...filteredRows]
+        : filteredRows.filter((row) => row.status.status === activeStatus);
+    visible.sort((a, b) => compareRows(a, b, sortField, sortDirection));
+    return visible;
+  }, [filteredRows, activeStatus, sortField, sortDirection]);
+
+  const grouped = showStatus && groupBy === "status" && activeStatus === "all";
+  const items = useListLayout({
+    rows,
+    grouped,
+    collapsed: collapsedGroups,
+    frozen: pointerInList,
+  });
 
   const noMatchText = useMemo(() => {
     const query = search.trim();
@@ -949,25 +1276,27 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
       return t(($) => $.no_matches.search_active, { query });
     }
     if (scope === "archived") return t(($) => $.no_matches.no_archived);
-    if (countActiveFilterDimensions(filters) > 0) {
+    if (countActiveFilterDimensions(filters) > 0 || activeStatus !== "all") {
       return t(($) => $.no_matches.no_filter_match);
     }
     return t(($) => $.no_matches.title);
-  }, [filters, scope, search, t]);
+  }, [filters, scope, search, activeStatus, t]);
 
   // Row virtualization — headless math, offsets as padding on the rows
-  // wrapper, fixed-height rows. The scroll element is the SINGLE outer
-  // scroller (both axes): splitting horizontal scrolling (wrapper) from
-  // vertical scrolling (an inner element) connected by an h-full
-  // percentage bridge caused a non-converging layout loop (flickering
-  // double scrollbars) and clipped the last row under the horizontal
-  // scrollbar. The sticky header pins inside this scroller; the vertical
-  // scrollbar spans the full pane height (Linear's structure).
+  // wrapper, fixed-height items (rows 64px, group dividers 36px). The
+  // scroll element is the SINGLE outer scroller (both axes); the sticky
+  // header pins inside it (Linear's structure).
   const listScrollRef = useRef<HTMLDivElement | null>(null);
   const rowVirtualizer = useVirtualizer({
-    count: rows.length,
+    count: items.length,
     getScrollElement: () => listScrollRef.current,
-    estimateSize: () => ROW_HEIGHT,
+    estimateSize: (index) =>
+      items[index]?.kind === "group" ? LIST_GRID_GROUP_HEIGHT : ROW_HEIGHT,
+    getItemKey: (index) => {
+      const item = items[index];
+      if (!item) return index;
+      return item.kind === "group" ? `group:${item.status}` : item.row.agent.id;
+    },
     overscan: 10,
   });
 
@@ -986,6 +1315,15 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
     setSelectedIds(
       allSelected ? new Set() : new Set(rows.map((r) => r.agent.id)),
     );
+  };
+
+  const toggleGroup = (status: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(status)) next.delete(status);
+      else next.add(status);
+      return next;
+    });
   };
 
   const virtualItems = rowVirtualizer.getVirtualItems();
@@ -1011,26 +1349,26 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
   const totalCount = agents.filter((a) => !a.archived_at).length;
   const showEmpty = !isLoading && agents.length === 0;
 
-  // The active sort field / availability filter reads columns that arrive in
-  // separate queries from the main agent list (activity → lastActiveDays,
-  // run-counts → runCount, presence → availability). Rendering real rows
-  // before those land would sort on placeholder values (lastActiveDays
-  // null→Infinity, runCount 0) and visibly re-order the list once each query
-  // resolves. Gate the first real paint on exactly the auxiliary queries the
-  // current sort / filter depends on — nothing for name/created, run-counts
-  // for runs, activity + run-counts (its tiebreaker) for the default
-  // lastActive, plus presence whenever an availability filter is active. The
-  // queries still run in parallel, so this defers the first paint by at most
-  // one extra round-trip (shown as skeleton) and never serialises them. An
-  // empty workspace (showEmpty) skips the gate so the empty state is never
-  // blocked on the auxiliary queries.
-  const needsRunCounts = sortField === "lastActive" || sortField === "runs";
-  const needsActivity = sortField === "lastActive";
-  const needsPresence = filters.availability.length > 0;
+  // Sorting and grouping read columns that arrive in separate queries from
+  // the agent list (activity → last active + run counts, presence → list
+  // status). Rendering rows before those land would place them on
+  // placeholder values and visibly reshuffle the list once each query
+  // resolves, so the first real paint waits for exactly the queries the
+  // current view depends on. An empty workspace skips the gate so the empty
+  // state is never blocked on them.
+  const needsActivity = sortField === "lastActive" || sortField === "runs";
+  const needsPresence = showStatus;
   const listReady =
     (!needsActivity || !activityLoading) &&
-    (!needsRunCounts || !runCountsPending) &&
     (!needsPresence || !presenceLoading);
+
+  const statusLabels: Record<AgentStatusTab, string> = {
+    all: t(($) => $.list.status.all),
+    attention: t(($) => $.list.status.attention),
+    working: t(($) => $.list.status.working),
+    idle: t(($) => $.list.status.idle),
+    offline: t(($) => $.list.status.offline),
+  };
 
   return (
     // relative: positioning anchor for the batch toolbar (page-centered,
@@ -1039,6 +1377,8 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
       <PageHeaderBar
         totalCount={totalCount}
         onCreate={() => navigation.push(paths.newAgent())}
+        search={search}
+        onSearchChange={showEmpty ? undefined : setSearch}
       />
 
       {isLoading || (!showEmpty && !listReady) ? (
@@ -1052,11 +1392,21 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
       ) : (
         <>
           <AgentListToolbar
+            statusTabs={
+              showStatus
+                ? {
+                    value: activeStatus,
+                    onChange: setStatusTab,
+                    counts: statusCounts,
+                    labels: statusLabels,
+                  }
+                : null
+            }
             scope={scope}
             onScopeChange={setScope}
             scopeCounts={scopeCounts}
-            search={search}
-            onSearchChange={setSearch}
+            groupBy={groupBy}
+            onGroupByChange={showStatus ? setGroupBy : null}
             filters={filters}
             onToggleFilter={toggleFilter}
             onClearFilters={clearFilters}
@@ -1068,11 +1418,12 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
             onToggleColumn={toggleColumn}
             allRows={scopeRows}
             members={members}
-            visibleCount={rows.length}
           />
           <div
             ref={listScrollRef}
             className="min-h-0 flex-1 overflow-auto @container"
+            onPointerEnter={() => setPointerInList(true)}
+            onPointerLeave={() => setPointerInList(false)}
           >
             <ListGrid
               className={`${GRID_COLS} @2xl:min-w-[var(--agc-minw)]`}
@@ -1100,8 +1451,25 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
                   </div>
                 )}
                 {virtualItems.map((vi) => {
-                  const row = rows[vi.index];
-                  if (!row) return null;
+                  const item = items[vi.index];
+                  if (!item) return null;
+                  if (item.kind === "group") {
+                    return (
+                      <ListGridGroupHeader
+                        key={`group:${item.status}`}
+                        open={!collapsedGroups.has(item.status)}
+                        onToggle={() => toggleGroup(item.status)}
+                        label={
+                          <span className="inline-flex items-center gap-1.5">
+                            <StatusDot tone={STATUS_TONE[item.status]} />
+                            {statusLabels[item.status]}
+                          </span>
+                        }
+                        count={item.count}
+                      />
+                    );
+                  }
+                  const { row } = item;
                   return (
                     <ListGridRow
                       key={row.agent.id}
@@ -1116,9 +1484,19 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
                       />
                       <NameCell row={row} />
                       {isColVisible("status") ? (
-                        <StatusCell row={row} />
+                        <NowCell row={row} />
                       ) : (
                         <ListGridCell className="px-0" />
+                      )}
+                      {isColVisible("runtime") ? (
+                        <RuntimeCell row={row} />
+                      ) : (
+                        <ListGridCell className="hidden px-0 @2xl:flex" />
+                      )}
+                      {isColVisible("activity") ? (
+                        <ActivityCell row={row} />
+                      ) : (
+                        <ListGridCell className="hidden px-0 @2xl:flex" />
                       )}
                       {isColVisible("owner") ? (
                         <OwnerCell row={row} />
@@ -1127,23 +1505,6 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
                       )}
                       {isColVisible("access") ? (
                         <AccessCell row={row} />
-                      ) : (
-                        <ListGridCell className="hidden px-0 @2xl:flex" />
-                      )}
-                      {isColVisible("runtime") ? (
-                        <RuntimeCell row={row} />
-                      ) : (
-                        <ListGridCell className="hidden px-0 @2xl:flex" />
-                      )}
-                      {isColVisible("lastActive") ? (
-                        <LastActiveCell row={row} />
-                      ) : (
-                        <ListGridCell className="hidden px-0 @2xl:flex" />
-                      )}
-                      {isColVisible("runs") ? (
-                        <ListGridCell className="hidden justify-end font-mono text-caption tabular-nums text-muted-foreground @2xl:flex">
-                          {row.runCount.toLocaleString(locale)}
-                        </ListGridCell>
                       ) : (
                         <ListGridCell className="hidden px-0 @2xl:flex" />
                       )}
@@ -1165,11 +1526,14 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
                       ) : (
                         <ListGridCell className="hidden px-0 @2xl:flex" />
                       )}
-                      <ListGridCell className="justify-end px-0">
+                      <ListGridCell className="justify-end gap-0.5 px-0">
                         <span
                           onClick={(e) => e.stopPropagation()}
-                          className="flex items-center"
+                          className="flex items-center gap-0.5"
                         >
+                          <span className="hidden items-center gap-0.5 @2xl:flex">
+                            <QuickActions agent={row.agent} />
+                          </span>
                           <AgentRowActions
                             agent={row.agent}
                             presence={row.presence}

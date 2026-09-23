@@ -8,20 +8,16 @@ import { renderWithI18n } from "../../test/i18n";
 import { NavigationProvider, type NavigationAdapter } from "../../navigation";
 import { AgentsPage } from "./agents-page";
 
-// These tests pin the `listReady` render gate (MUL-4511): the Agents list must
-// not paint real rows until the auxiliary queries the active sort field /
-// filter depends on have landed, or it sorts on placeholder values
-// (lastActiveDays null→Infinity, runCount 0) and visibly re-orders when each
-// query resolves. The gate waits per need — nothing for name/created,
-// run-counts for runs, activity + run-counts for the default lastActive,
-// presence when an availability filter is active — and never blocks the empty
-// state on those queries.
+// These tests pin the `listReady` render gate (MUL-4511) and the status
+// grouping (MUL-7661): the Agents list must not paint real rows until the
+// auxiliary queries the view depends on have landed, or it places rows on
+// placeholder values and visibly re-orders when each query resolves. Sorting
+// by last active / runs waits on activity; the status groups wait on
+// presence. The empty state never waits on either.
 
 const mocks = vi.hoisted(() => ({
   agents: [] as Agent[],
   agentsLoading: false,
-  runCounts: [] as Array<{ agent_id: string; run_count: number }>,
-  runCountsPending: false,
   activity: {
     byAgent: new Map<string, AgentActivity>(),
     loading: false,
@@ -34,15 +30,16 @@ const mocks = vi.hoisted(() => ({
     scope: "all",
     sortField: "lastActive" as string,
     sortDirection: "desc" as string,
-    hiddenColumns: ["model", "created"] as string[],
+    hiddenColumns: ["access", "model", "created"] as string[],
+    groupBy: "status" as string,
     filters: {
-      availability: [] as string[],
       runtimes: [] as string[],
       owners: [] as string[],
       models: [] as string[],
       access: [] as string[],
     },
     setScope: vi.fn(),
+    setGroupBy: vi.fn(),
     toggleSort: vi.fn(),
     setSortField: vi.fn(),
     setSortDirection: vi.fn(),
@@ -62,9 +59,6 @@ vi.mock("@tanstack/react-query", () => ({
         error: null,
         refetch: vi.fn(),
       };
-    }
-    if (key === "agent-run-counts") {
-      return { data: mocks.runCounts, isPending: mocks.runCountsPending };
     }
     return { data: [], isLoading: false, isPending: false };
   },
@@ -90,26 +84,25 @@ vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock("@multica/core/agents", () => ({
-  isAgentRuntimeBound: (agent: { runtime_id: string; runtime_bound?: boolean }) =>
-    agent.runtime_bound !== false && agent.runtime_id.length > 0,
-  agentRunCounts30dOptions: () => ({ queryKey: ["agent-run-counts"] }),
+vi.mock("@multica/core/agents", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@multica/core/agents")>()),
+  agentTaskSnapshotOptions: () => ({ queryKey: ["agent-task-snapshot"] }),
   useWorkspaceActivityMap: () => mocks.activity,
   useWorkspacePresenceMap: () => mocks.presence,
-  VISIBILITY_TOOLTIP: { private: "Private", workspace: "Workspace" },
-  effectiveAccessScope: (pm: unknown, it: unknown) => {
-    if (pm !== "public_to") return "owner-only";
-    if ((Array.isArray(it) ? it : []).some((t) => (t as {target_type?: string})?.target_type === "workspace")) return "workspace";
-    return "specific-people";
-  },
-  ALL_ACCESS_SCOPES: ["workspace", "specific-people", "owner-only"],
 }));
 
-vi.mock("@multica/core/agents/stores", () => ({
+vi.mock("@multica/core/agents/stores", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@multica/core/agents/stores")>()),
   useAgentsViewStore: (selector: (state: unknown) => unknown) =>
     selector(mocks.viewState),
-  AGENT_DEFAULT_HIDDEN_COLUMNS: ["model", "created"],
-  AGENT_SCOPES: ["mine", "all", "archived"],
+}));
+
+vi.mock("@multica/core/permissions", () => ({
+  useAgentPermissions: () => ({
+    canAssign: { allowed: true },
+    canEdit: { allowed: true },
+    isLoading: false,
+  }),
 }));
 
 vi.mock("@multica/core/api", () => ({
@@ -127,6 +120,7 @@ vi.mock("@multica/core/hooks", () => ({
 
 vi.mock("@multica/core/paths", () => ({
   useWorkspacePaths: () => ({
+    chat: () => "/test-workspace/chat",
     newAgent: () => "/test-workspace/agents/new",
     newAgentManual: () => "/test-workspace/agents/new/manual",
     agentDetail: (id: string) => `/test-workspace/agents/${id}`,
@@ -141,6 +135,7 @@ vi.mock("@multica/core/workspace/queries", () => ({
 
 vi.mock("@multica/core/runtimes", () => ({
   runtimeListOptions: () => ({ queryKey: ["runtimes"] }),
+  runtimeDisplayLabel: (runtime: { name: string }) => runtime.name,
 }));
 
 // View-layer children with heavy / portal deps — stub to keep the test focused
@@ -151,7 +146,6 @@ vi.mock("./agent-list-toolbar", () => ({
   AgentListToolbar: () => <div data-testid="agent-list-toolbar" />,
   countActiveFilterDimensions: () => 0,
 }));
-vi.mock("../presence", () => ({ availabilityConfig: {} }));
 vi.mock("@multica/ui/components/ui/skeleton", () => ({
   Skeleton: (props: Record<string, unknown>) => (
     <div data-testid="skeleton" {...props} />
@@ -241,16 +235,14 @@ function betaPrecedesAlpha(): boolean {
 beforeEach(() => {
   mocks.agents = [ALPHA, BETA];
   mocks.agentsLoading = false;
-  mocks.runCounts = [];
-  mocks.runCountsPending = false;
   mocks.activity = { byAgent: new Map(), loading: false };
   mocks.presence = { byAgent: new Map(), loading: false };
   mocks.viewState.scope = "all";
   mocks.viewState.sortField = "lastActive";
   mocks.viewState.sortDirection = "desc";
-  mocks.viewState.hiddenColumns = ["model", "created"];
+  mocks.viewState.hiddenColumns = ["access", "model", "created"];
+  mocks.viewState.groupBy = "status";
   mocks.viewState.filters = {
-    availability: [],
     runtimes: [],
     owners: [],
     models: [],
@@ -260,9 +252,8 @@ beforeEach(() => {
 
 describe("AgentsPage listReady gate", () => {
   it("shows only a skeleton (no real rows) while lastActive deps are pending", () => {
-    // Default lastActive sort depends on activity + run-counts.
+    // Default lastActive sort depends on activity.
     mocks.activity = { byAgent: new Map(), loading: true };
-    mocks.runCountsPending = true;
 
     renderPage();
 
@@ -281,11 +272,6 @@ describe("AgentsPage listReady gate", () => {
       ]),
       loading: false,
     };
-    mocks.runCounts = [
-      { agent_id: ALPHA.id, run_count: 0 },
-      { agent_id: BETA.id, run_count: 0 },
-    ];
-    mocks.runCountsPending = false;
 
     renderPage();
 
@@ -294,13 +280,11 @@ describe("AgentsPage listReady gate", () => {
     expect(betaPrecedesAlpha()).toBe(true);
   });
 
-  it("renders rows immediately for name sort without waiting on activity/run-counts", () => {
+  it("renders rows for name sort without waiting on activity", () => {
     mocks.viewState.sortField = "name";
     mocks.viewState.sortDirection = "asc";
-    // Auxiliary queries are still in flight — name sort must not wait on them.
+    // Activity is still in flight — name sort must not wait on it.
     mocks.activity = { byAgent: new Map(), loading: true };
-    mocks.runCountsPending = true;
-    mocks.presence = { byAgent: new Map(), loading: true };
 
     renderPage();
 
@@ -310,18 +294,15 @@ describe("AgentsPage listReady gate", () => {
     expect(betaPrecedesAlpha()).toBe(false);
   });
 
-  it("shows a skeleton (not a false empty/false result) while an availability filter waits on presence", () => {
-    // Availability filter needs presence; sort by name so ONLY presence gates.
-    // Ungated, presence-null rows would all be filtered out → a false "no
-    // matches" state. Gated, we hold on a skeleton instead.
+  it("holds a skeleton while the status groups wait on presence", () => {
+    // Ungated, every row would land in "Idle" and then jump to its real
+    // group once presence arrives.
     mocks.viewState.sortField = "name";
-    mocks.viewState.filters.availability = ["online"];
     mocks.presence = { byAgent: new Map(), loading: true };
 
     renderPage();
 
     expect(screen.queryByText("Alpha Agent")).not.toBeInTheDocument();
-    expect(screen.queryByText("Beta Agent")).not.toBeInTheDocument();
     expect(screen.getAllByTestId("skeleton").length).toBeGreaterThan(0);
   });
 
@@ -329,13 +310,40 @@ describe("AgentsPage listReady gate", () => {
     mocks.agents = [];
     // All auxiliary queries pending — the empty state must not wait on them.
     mocks.activity = { byAgent: new Map(), loading: true };
-    mocks.runCountsPending = true;
     mocks.presence = { byAgent: new Map(), loading: true };
 
     renderPage();
 
     expect(screen.getByText("No agents yet")).toBeInTheDocument();
     expect(screen.queryByTestId("skeleton")).not.toBeInTheDocument();
+  });
+});
+
+describe("AgentsPage status groups", () => {
+  it("puts agents that need a person first, under their own group", () => {
+    mocks.viewState.sortField = "name";
+    mocks.viewState.sortDirection = "asc";
+    // Beta has no runtime; Alpha is idle.
+    mocks.agents = [ALPHA, makeAgent({ id: "a-beta", name: "Beta Agent", runtime_id: "" })];
+
+    renderPage();
+
+    const attention = screen.getByRole("rowheader", { name: /Needs attention/ });
+    const idle = screen.getByRole("rowheader", { name: /Idle/ });
+    expect(
+      attention.compareDocumentPosition(idle) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(betaPrecedesAlpha()).toBe(true);
+    expect(screen.getByText("Needs a runtime")).toBeInTheDocument();
+  });
+
+  it("lists rows without group dividers when grouping is off", () => {
+    mocks.viewState.groupBy = "none";
+
+    renderPage();
+
+    expect(screen.queryByRole("rowheader")).not.toBeInTheDocument();
+    expect(screen.getByText("Alpha Agent")).toBeInTheDocument();
   });
 });
 

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { summarizeActivityWindow } from "@multica/core/agents";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -77,9 +78,11 @@ function makeRow(
     agent: agent as AgentListRow["agent"],
     runtime: null,
     presence: null,
-    activity: null,
-    runCount: 0,
+    status: { status: "idle", reason: null },
+    activity: summarizeActivityWindow(undefined, 7),
     lastActiveDays: null,
+    lastDoneAt: null,
+    currentIssueId: null,
     owner: ownerId
       ? ({ user_id: ownerId, name: `Owner ${ownerId}`, email: "" } as AgentListRow["owner"])
       : null,
