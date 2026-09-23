@@ -130,36 +130,87 @@ func applyCommentSupplements(resp *CommentResponse, receipts []CommentSupplement
 	resp.SupplementDeliveredAt = receipts[0].DeliveredAt
 }
 
-// steerCommentAgentTriggers binds a member comment to the running turn of
-// every trigger the author chose to steer. A bound agent leaves the enqueue
-// list: its running turn receives the comment instead of a follow-up run. A
-// trigger whose turn ended, has not started, or cannot take additional input
-// keeps its normal queued / coalesced / deferred handling, so losing a race
-// never drops the comment.
-func (h *Handler) steerCommentAgentTriggers(ctx context.Context, issue db.Issue, comment db.Comment, actorType string, triggers []commentAgentTrigger, steerAgentIDs []pgtype.UUID) ([]commentAgentTrigger, map[string]commentEnqueueResult) {
-	if len(steerAgentIDs) == 0 || len(triggers) == 0 || actorType != "member" {
+// commentSteer is what a member asked to steer: the exact running turns they
+// saw, and the logical send that makes a retry idempotent.
+type commentSteer struct {
+	TaskIDs         []pgtype.UUID
+	ClientRequestID pgtype.UUID
+}
+
+// replaySteeredComment answers a retried steering send whose first attempt
+// was saved but whose response was lost: the chosen turn already holds a
+// receipt for this request, so the original comment is returned as-is.
+func (h *Handler) replaySteeredComment(ctx context.Context, issue db.Issue, authorID pgtype.UUID, steer commentSteer) (CommentResponse, bool) {
+	if !steer.ClientRequestID.Valid {
+		return CommentResponse{}, false
+	}
+	for _, taskID := range steer.TaskIDs {
+		existing, err := h.Queries.GetTaskSupplementByRequest(ctx, db.GetTaskSupplementByRequestParams{
+			TaskID: taskID, WorkspaceID: issue.WorkspaceID, AuthorID: authorID, ClientRequestID: steer.ClientRequestID,
+		})
+		if err != nil || existing.IssueID != issue.ID {
+			continue
+		}
+		comment, err := h.Queries.GetCommentInWorkspace(ctx, db.GetCommentInWorkspaceParams{
+			ID: existing.CommentID, WorkspaceID: issue.WorkspaceID,
+		})
+		if err != nil || comment.DeletedAt.Valid {
+			continue
+		}
+		resp := commentToResponse(comment, nil, nil)
+		applyCommentSupplements(&resp, h.listCommentSupplements(ctx, issue.WorkspaceID, []pgtype.UUID{comment.ID})[uuidToString(comment.ID)])
+		return resp, true
+	}
+	return CommentResponse{}, false
+}
+
+// steerCommentAgentTriggers binds a member comment to the turn its author
+// chose for each recipient. A bound agent leaves the enqueue list: that turn
+// receives the comment instead of a follow-up run. A chosen turn that has
+// ended, has not started, or cannot take additional input is never swapped
+// for another turn of the same agent; that recipient keeps its normal
+// queued / coalesced / deferred handling, so losing a race never drops or
+// misdirects the comment.
+func (h *Handler) steerCommentAgentTriggers(ctx context.Context, issue db.Issue, comment db.Comment, actorType string, triggers []commentAgentTrigger, steer commentSteer) ([]commentAgentTrigger, map[string]commentEnqueueResult) {
+	if len(steer.TaskIDs) == 0 || len(triggers) == 0 || actorType != "member" {
 		return triggers, nil
 	}
-	wanted := make(map[string]struct{}, len(steerAgentIDs))
-	for _, id := range steerAgentIDs {
-		wanted[uuidToString(id)] = struct{}{}
+	// Each chosen turn names its agent; only a turn of this issue counts.
+	chosen := make(map[string]pgtype.UUID, len(steer.TaskIDs))
+	for _, taskID := range steer.TaskIDs {
+		task, err := h.Queries.GetAgentTask(ctx, taskID)
+		if err != nil || task.IssueID != issue.ID {
+			continue
+		}
+		chosen[uuidToString(task.AgentID)] = task.ID
+	}
+	requestID := steer.ClientRequestID
+	if !requestID.Valid {
+		requestID = comment.ID
 	}
 	kept := make([]commentAgentTrigger, 0, len(triggers))
 	steered := make(map[string]commentEnqueueResult)
 	for _, trigger := range triggers {
 		agentID := uuidToString(trigger.Agent.ID)
-		if _, ok := wanted[agentID]; !ok {
+		taskID, ok := chosen[agentID]
+		if !ok {
 			kept = append(kept, trigger)
 			continue
 		}
 		bound, err := h.Queries.BindCommentTaskSupplement(ctx, db.BindCommentTaskSupplementParams{
-			IssueID: issue.ID, AgentID: trigger.Agent.ID, WorkspaceID: issue.WorkspaceID,
-			CommentID: comment.ID, AuthorID: comment.AuthorID,
+			TaskID: taskID, IssueID: issue.ID, AgentID: trigger.Agent.ID, WorkspaceID: issue.WorkspaceID,
+			CommentID: comment.ID, AuthorID: comment.AuthorID, ClientRequestID: requestID,
 		})
+		if isUniqueViolation(err) {
+			// A concurrent twin of this send already put the same input into
+			// this turn: neither deliver it twice nor start a follow-up for it.
+			steered[agentID] = commentEnqueueResult{status: DispatchSteered, reason: ReasonSteered}
+			continue
+		}
 		if err != nil {
 			if !errors.Is(err, pgx.ErrNoRows) {
 				slog.Warn("steer comment into running turn failed",
-					"issue_id", uuidToString(issue.ID), "comment_id", uuidToString(comment.ID), "agent_id", agentID, "error", err)
+					"issue_id", uuidToString(issue.ID), "comment_id", uuidToString(comment.ID), "task_id", uuidToString(taskID), "error", err)
 			}
 			kept = append(kept, trigger)
 			continue

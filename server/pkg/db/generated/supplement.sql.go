@@ -98,22 +98,21 @@ WITH locked_task AS MATERIALIZED (
     FROM agent_task_queue t
     JOIN agent_runtime r ON r.id = t.runtime_id
     JOIN task_supplement_capability cap ON cap.task_id = t.id
-    WHERE t.issue_id = $1
-      AND t.agent_id = $2
-      AND r.workspace_id = $3
+    WHERE t.id = $1
+      AND t.issue_id = $2
+      AND t.agent_id = $3
+      AND r.workspace_id = $4
       AND t.status = 'running'
       AND cap.capability = 'task-supplement-v1'
       AND r.provider IN ('codex', 'claude')
-    ORDER BY t.started_at DESC, t.id
-    LIMIT 1
     FOR UPDATE OF t
 ), inserted AS (
     INSERT INTO task_supplement (
         task_id, workspace_id, issue_id, comment_id, author_id,
         client_request_id, status
     )
-    SELECT t.id, $3, t.issue_id, $4, $5,
-           $4, 'pending'
+    SELECT t.id, $4, t.issue_id, $5, $6,
+           $7, 'pending'
     FROM locked_task t
     RETURNING task_id, workspace_id, issue_id, comment_id, author_id, client_request_id, status, failure_reason, attempt_count, created_at, updated_at, delivered_at
 )
@@ -123,11 +122,13 @@ JOIN locked_task ON locked_task.id = inserted.task_id
 `
 
 type BindCommentTaskSupplementParams struct {
-	IssueID     pgtype.UUID `json:"issue_id"`
-	AgentID     pgtype.UUID `json:"agent_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	CommentID   pgtype.UUID `json:"comment_id"`
-	AuthorID    pgtype.UUID `json:"author_id"`
+	TaskID          pgtype.UUID `json:"task_id"`
+	IssueID         pgtype.UUID `json:"issue_id"`
+	AgentID         pgtype.UUID `json:"agent_id"`
+	WorkspaceID     pgtype.UUID `json:"workspace_id"`
+	CommentID       pgtype.UUID `json:"comment_id"`
+	AuthorID        pgtype.UUID `json:"author_id"`
+	ClientRequestID pgtype.UUID `json:"client_request_id"`
 }
 
 type BindCommentTaskSupplementRow struct {
@@ -147,16 +148,20 @@ type BindCommentTaskSupplementRow struct {
 }
 
 // Binds an ordinary member comment, already created through the normal comment
-// path, to one agent's running turn on the same issue. Locking the task
-// serializes against terminal transitions: when the turn ended first nothing is
-// bound, and the caller keeps the comment's normal trigger instead.
+// path, to the exact running turn its author chose. Locking the task
+// serializes against terminal transitions: when that turn ended first nothing
+// is bound — never a later turn of the same agent — and the caller keeps the
+// comment's normal trigger instead. The (task, client_request_id) key makes a
+// retried send bind at most once.
 func (q *Queries) BindCommentTaskSupplement(ctx context.Context, arg BindCommentTaskSupplementParams) (BindCommentTaskSupplementRow, error) {
 	row := q.db.QueryRow(ctx, bindCommentTaskSupplement,
+		arg.TaskID,
 		arg.IssueID,
 		arg.AgentID,
 		arg.WorkspaceID,
 		arg.CommentID,
 		arg.AuthorID,
+		arg.ClientRequestID,
 	)
 	var i BindCommentTaskSupplementRow
 	err := row.Scan(

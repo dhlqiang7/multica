@@ -13,9 +13,9 @@ func agentMention(name, id string) string {
 	return fmt.Sprintf("[@%s](mention://agent/%s)", name, id)
 }
 
-func postSteeredComment(t *testing.T, issueID, parentID, content string, steerAgentIDs ...string) *testutil.Response {
+func postSteeredComment(t *testing.T, issueID, parentID, content string, steerTaskIDs ...string) *testutil.Response {
 	t.Helper()
-	body := map[string]any{"content": content, "steer_agent_ids": steerAgentIDs}
+	body := map[string]any{"content": content, "steer_task_ids": steerTaskIDs}
 	if parentID != "" {
 		body["parent_id"] = parentID
 	}
@@ -63,7 +63,7 @@ func TestCreateCommentSteersTheThreadAgentsRunningTurn(t *testing.T) {
 	dbfx.Cleanup(t, `DELETE FROM agent_task_queue WHERE issue_id = $1`, f.issueID)
 
 	var created CommentResponse
-	postSteeredComment(t, f.issueID, f.triggerID, "Only fix web.", f.agentID).Want(http.StatusCreated).JSON(&created)
+	postSteeredComment(t, f.issueID, f.triggerID, "Only fix web.", f.taskID).Want(http.StatusCreated).JSON(&created)
 	if len(created.Supplements) != 1 {
 		t.Fatalf("receipts = %+v, want one for the running turn", created.Supplements)
 	}
@@ -101,7 +101,7 @@ func TestCreateCommentSteerKeepsTheNormalTriggerWhenTheTurnCannotTakeInput(t *te
 			dbfx.Cleanup(t, `DELETE FROM agent_task_queue WHERE issue_id = $1`, f.issueID)
 
 			var created CommentResponse
-			postSteeredComment(t, f.issueID, f.triggerID, "Only fix web.", f.agentID).Want(http.StatusCreated).JSON(&created)
+			postSteeredComment(t, f.issueID, f.triggerID, "Only fix web.", f.taskID).Want(http.StatusCreated).JSON(&created)
 			if len(created.Supplements) != 0 {
 				t.Fatalf("bound a turn that cannot take input: %+v", created.Supplements)
 			}
@@ -129,9 +129,8 @@ func TestCreateCommentSteersOnlyRunningRecipients(t *testing.T) {
 	idleAgentID := dbfx.Agent(t, "Idle recipient", f.runtimeID)
 	content := agentMention("Supplement", f.agentID) + " only web; " + agentMention("Idle recipient", idleAgentID) + " check desktop"
 
-	// Asking to steer an agent without a running turn starts it normally.
 	var created CommentResponse
-	postSteeredComment(t, f.issueID, "", content, f.agentID, idleAgentID).Want(http.StatusCreated).JSON(&created)
+	postSteeredComment(t, f.issueID, "", content, f.taskID).Want(http.StatusCreated).JSON(&created)
 	if len(created.Supplements) != 1 || created.Supplements[0].AgentID != f.agentID {
 		t.Fatalf("receipts = %+v, want the running agent only", created.Supplements)
 	}
@@ -155,7 +154,7 @@ func TestCreateCommentSteersSeveralRunningTurns(t *testing.T) {
 	content := agentMention("Supplement", f.agentID) + " and " + agentMention("Second runner", otherAgentID) + " stop touching desktop"
 
 	var created CommentResponse
-	postSteeredComment(t, f.issueID, "", content, f.agentID, otherAgentID).Want(http.StatusCreated).JSON(&created)
+	postSteeredComment(t, f.issueID, "", content, f.taskID, otherTaskID).Want(http.StatusCreated).JSON(&created)
 	got := map[string]string{}
 	for _, receipt := range created.Supplements {
 		got[receipt.AgentID] = receipt.TaskID
@@ -182,7 +181,7 @@ func TestCompletionReplaysASteeredCommentOnlyForAgentsItDidNotSteer(t *testing.T
 	content := agentMention("Supplement", f.agentID) + " only web; " + agentMention("Waits its turn", otherAgentID) + " next round"
 
 	var created CommentResponse
-	postSteeredComment(t, f.issueID, "", content, f.agentID).Want(http.StatusCreated).JSON(&created)
+	postSteeredComment(t, f.issueID, "", content, f.taskID).Want(http.StatusCreated).JSON(&created)
 	if len(created.Supplements) != 1 || created.Supplements[0].AgentID != f.agentID {
 		t.Fatalf("receipts = %+v, want the steered agent only", created.Supplements)
 	}
@@ -194,5 +193,58 @@ func TestCompletionReplaysASteeredCommentOnlyForAgentsItDidNotSteer(t *testing.T
 	completeTaskViaDaemon(t, f.taskID)
 	if n := dbfx.Count(t, `SELECT count(*) FROM agent_task_queue WHERE agent_id = $1`, f.agentID); n != 1 {
 		t.Fatalf("steered recipient has %d runs, want no follow-up", n)
+	}
+}
+
+func TestCreateCommentSteerNeverRetargetsAnotherTurn(t *testing.T) {
+	f := newSupplementFixture(t, "codex", "running", true)
+	dbfx.Exec(t, `UPDATE comment SET content = $2 WHERE id = $1`, f.triggerID, agentMention("A", f.agentID)+" original thread")
+	dbfx.Cleanup(t, `DELETE FROM agent_task_queue WHERE issue_id = $1`, f.issueID)
+	// The chosen turn ends before the send arrives, and the same agent has
+	// meanwhile started a turn for another thread.
+	dbfx.Exec(t, `UPDATE agent_task_queue SET status = 'completed', completed_at = now() WHERE id = $1`, f.taskID)
+	otherRoot := dbfx.Comment(t, f.issueID, agentMention("A", f.agentID)+" unrelated thread")
+	successor := dbfx.Task(t, f.agentID, testutil.Cols{
+		"issue_id": f.issueID, "runtime_id": f.runtimeID, "trigger_comment_id": otherRoot,
+		"status": "running", "started_at": testutil.Raw("now()"),
+	})
+	dbfx.Exec(t, `INSERT INTO task_supplement_capability (task_id, workspace_id, issue_id, capability) VALUES ($1, $2, $3, $4)`,
+		successor, testWorkspaceID, f.issueID, protocol.DaemonCapabilityTaskSupplementV1)
+	dbfx.Cleanup(t, `DELETE FROM task_supplement_capability WHERE task_id = $1`, successor)
+	dbfx.Cleanup(t, `DELETE FROM task_supplement WHERE task_id = $1`, successor)
+
+	var sent CommentResponse
+	postSteeredComment(t, f.issueID, f.triggerID, "Only change the original task", f.taskID).Want(http.StatusCreated).JSON(&sent)
+	if len(sent.Supplements) != 0 {
+		t.Fatalf("the chosen turn ended, but the send steered another turn: %+v", sent.Supplements)
+	}
+	if n := dbfx.Count(t, `SELECT count(*) FROM task_supplement WHERE task_id = $1`, successor); n != 0 {
+		t.Fatalf("successor turn received %d steered messages", n)
+	}
+}
+
+func TestCreateCommentSteerRetryAfterLostResponseIsIdempotent(t *testing.T) {
+	f := newSupplementFixture(t, "codex", "running", true)
+	dbfx.Exec(t, `UPDATE comment SET content = $2 WHERE id = $1`, f.triggerID, agentMention("A", f.agentID)+" original")
+	body := map[string]any{
+		"content": "Apply this once", "parent_id": f.triggerID,
+		"steer_task_ids": []string{f.taskID}, "client_request_id": "0199a4e8-22ce-7b01-bba5-111111111111",
+	}
+	send := func() *testutil.Response {
+		return testutil.Call(t, testHandler.CreateComment, withURLParam(
+			newRequest(http.MethodPost, "/api/issues/"+f.issueID+"/comments", body), "id", f.issueID))
+	}
+	var first, retried CommentResponse
+	send().Want(http.StatusCreated).JSON(&first)
+	// The same logical send again: its first response never reached the client.
+	send().Want(http.StatusOK).JSON(&retried)
+	if retried.ID != first.ID || len(retried.Supplements) != 1 || retried.Supplements[0].TaskID != f.taskID {
+		t.Fatalf("retry = %s %+v, want the original comment %s and its receipt", retried.ID, retried.Supplements, first.ID)
+	}
+	if n := dbfx.Count(t, `SELECT count(*) FROM task_supplement WHERE task_id = $1`, f.taskID); n != 1 {
+		t.Fatalf("retransmission queued %d injections, want one", n)
+	}
+	if n := dbfx.Count(t, `SELECT count(*) FROM comment WHERE issue_id = $1 AND content = 'Apply this once'`, f.issueID); n != 1 {
+		t.Fatalf("retransmission created %d comments, want one", n)
 	}
 }

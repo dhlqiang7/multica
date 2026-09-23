@@ -1490,10 +1490,14 @@ type CreateCommentRequest struct {
 	ParentID         *string  `json:"parent_id"`
 	AttachmentIDs    []string `json:"attachment_ids"`
 	SuppressAgentIDs []string `json:"suppress_agent_ids"`
-	// SteerAgentIDs are recipients whose running turn should receive this
-	// comment instead of a follow-up run. A recipient that is not running, or
-	// whose turn cannot take additional input, keeps its normal trigger.
-	SteerAgentIDs []string `json:"steer_agent_ids"`
+	// SteerTaskIDs are the running turns the author chose to add this comment
+	// to, instead of starting a follow-up run for their agents. A turn that
+	// has ended, or cannot take additional input, is never swapped for another
+	// one: its agent keeps the normal trigger.
+	SteerTaskIDs []string `json:"steer_task_ids"`
+	// ClientRequestID identifies one logical steering send, so a retry after
+	// a lost response returns the original comment instead of a second one.
+	ClientRequestID *string `json:"client_request_id"`
 }
 
 type CommentTriggerPreviewRequest struct {
@@ -1769,18 +1773,32 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	steerAgentIDs, ok := parseUUIDSliceOrBadRequest(w, req.SteerAgentIDs, "steer_agent_ids")
+	var steer commentSteer
+	steer.TaskIDs, ok = parseUUIDSliceOrBadRequest(w, req.SteerTaskIDs, "steer_task_ids")
 	if !ok {
 		return
+	}
+	if req.ClientRequestID != nil && *req.ClientRequestID != "" {
+		steer.ClientRequestID, ok = parseUUIDOrBadRequest(w, *req.ClientRequestID, "client_request_id")
+		if !ok {
+			return
+		}
 	}
 	// A running turn receives text only, so a comment that carries files is
 	// always a normal trigger.
 	if len(attachmentIDs) > 0 {
-		steerAgentIDs = nil
+		steer = commentSteer{}
 	}
 
 	// Determine author identity: agent (via X-Agent-ID header) or member.
 	authorType, authorID := h.resolveActor(r, userID, uuidToString(issue.WorkspaceID))
+	if authorType != "member" {
+		steer = commentSteer{}
+	}
+	if replayed, ok := h.replaySteeredComment(r.Context(), issue, parseUUID(authorID), steer); ok {
+		writeJSON(w, http.StatusOK, replayed)
+		return
+	}
 
 	// sourceTaskID captures the agent's currently-executing task when it posts
 	// via the CLI (X-Task-ID header). Stamping it on the comment row keeps the
@@ -1983,8 +2001,8 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	// The comment is already saved; a blocked mention must not fail the whole
 	// request. Surface the per-target outcomes so the client can show partial
 	// success instead of a silent no-op (MUL-4525 §2).
-	resp.TriggerOutcomes = h.triggerTasksForComment(r.Context(), issue, comment, parentComment, authorType, authorID, originatorUserID, suppressAgentIDs, steerAgentIDs...)
-	if len(steerAgentIDs) > 0 {
+	resp.TriggerOutcomes = h.triggerTasksForComment(r.Context(), issue, comment, parentComment, authorType, authorID, originatorUserID, suppressAgentIDs, steer)
+	if len(steer.TaskIDs) > 0 {
 		applyCommentSupplements(&resp, h.listCommentSupplements(r.Context(), issue.WorkspaceID, []pgtype.UUID{comment.ID})[uuidToString(comment.ID)])
 	}
 
@@ -2028,9 +2046,9 @@ func isNoteComment(content string) bool {
 // deferred / blocked from enqueue. UI-suppressed triggers (the user unchecked
 // them) are removed before enqueue and produce no outcome.
 //
-// steerAgentIDs are recipients the author chose to steer: each one whose turn
-// is running receives this comment in that turn instead of a follow-up run.
-func (h *Handler) triggerTasksForComment(ctx context.Context, issue db.Issue, comment db.Comment, parentComment *db.Comment, actorType, actorID, originatorUserID string, suppressAgentIDs []pgtype.UUID, steerAgentIDs ...pgtype.UUID) []CommentTriggerOutcome {
+// steer names the running turns the author chose: a recipient whose chosen
+// turn is still running receives this comment there instead of a follow-up run.
+func (h *Handler) triggerTasksForComment(ctx context.Context, issue db.Issue, comment db.Comment, parentComment *db.Comment, actorType, actorID, originatorUserID string, suppressAgentIDs []pgtype.UUID, steer commentSteer) []CommentTriggerOutcome {
 	if isNoteComment(comment.Content) {
 		return nil
 	}
@@ -2041,7 +2059,7 @@ func (h *Handler) triggerTasksForComment(ctx context.Context, issue db.Issue, co
 	})
 	triggers = filterSuppressedCommentAgentTriggers(triggers, suppressAgentIDs)
 	h.noteBlockedRuntimeTargets(ctx, issue, targets)
-	triggers, steered := h.steerCommentAgentTriggers(ctx, issue, comment, actorType, triggers, steerAgentIDs)
+	triggers, steered := h.steerCommentAgentTriggers(ctx, issue, comment, actorType, triggers, steer)
 	enqueued := h.enqueueCommentAgentTriggers(ctx, issue, comment.ID, triggers)
 	for agentID, result := range steered {
 		enqueued[agentID] = result
@@ -3607,7 +3625,7 @@ func (h *Handler) UpdateComment(w http.ResponseWriter, r *http.Request) {
 		}
 
 		h.retriggerCancelledTaskSurvivors(r.Context(), issue, cancelled, existing.ID)
-		return h.triggerTasksForComment(r.Context(), issue, comment, parentComment, actorType, actorID, h.invokeOriginatorFromRequest(r, actorType, actorID), suppressAgentIDs)
+		return h.triggerTasksForComment(r.Context(), issue, comment, parentComment, actorType, actorID, h.invokeOriginatorFromRequest(r, actorType, actorID), suppressAgentIDs, commentSteer{})
 	}
 
 	// Fetch reactions and attachments for the updated comment.

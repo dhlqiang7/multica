@@ -94,22 +94,23 @@ WHERE s.task_id = @task_id
 
 -- name: BindCommentTaskSupplement :one
 -- Binds an ordinary member comment, already created through the normal comment
--- path, to one agent's running turn on the same issue. Locking the task
--- serializes against terminal transitions: when the turn ended first nothing is
--- bound, and the caller keeps the comment's normal trigger instead.
+-- path, to the exact running turn its author chose. Locking the task
+-- serializes against terminal transitions: when that turn ended first nothing
+-- is bound — never a later turn of the same agent — and the caller keeps the
+-- comment's normal trigger instead. The (task, client_request_id) key makes a
+-- retried send bind at most once.
 WITH locked_task AS MATERIALIZED (
     SELECT t.id, t.issue_id, t.runtime_id
     FROM agent_task_queue t
     JOIN agent_runtime r ON r.id = t.runtime_id
     JOIN task_supplement_capability cap ON cap.task_id = t.id
-    WHERE t.issue_id = @issue_id
+    WHERE t.id = @task_id
+      AND t.issue_id = @issue_id
       AND t.agent_id = @agent_id
       AND r.workspace_id = @workspace_id
       AND t.status = 'running'
       AND cap.capability = 'task-supplement-v1'
       AND r.provider IN ('codex', 'claude')
-    ORDER BY t.started_at DESC, t.id
-    LIMIT 1
     FOR UPDATE OF t
 ), inserted AS (
     INSERT INTO task_supplement (
@@ -117,7 +118,7 @@ WITH locked_task AS MATERIALIZED (
         client_request_id, status
     )
     SELECT t.id, @workspace_id, t.issue_id, @comment_id, @author_id,
-           @comment_id, 'pending'
+           @client_request_id, 'pending'
     FROM locked_task t
     RETURNING *
 )
