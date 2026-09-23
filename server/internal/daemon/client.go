@@ -471,14 +471,30 @@ const startTaskTimeout = 30 * time.Second
 var errStartClaimRejected = errors.New("task start claim rejected")
 
 func (c *Client) StartTask(ctx context.Context, task Task, capabilities ...string) (bool, error) {
-	var response struct {
-		SupplementCapability string `json:"supplement_capability"`
+	var negotiated bool
+	decodeResponse := func(r io.Reader) error {
+		data, err := io.ReadAll(r)
+		if err != nil {
+			return err
+		}
+		var response struct {
+			SupplementCapability string `json:"supplement_capability"`
+		}
+		// Empty acknowledgements start the task without negotiating supplements.
+		// Read failures and nonempty invalid JSON must still fail the attempt.
+		if len(data) != 0 {
+			if err := json.Unmarshal(data, &response); err != nil {
+				return err
+			}
+		}
+		negotiated = response.SupplementCapability == protocol.DaemonCapabilityTaskSupplementV1
+		return nil
 	}
 	path := fmt.Sprintf("/api/daemon/tasks/%s/start", task.ID)
 	if !task.StartClaimSupported {
 		// Old servers have no safe replay contract. Preserve one attempt.
-		err := c.postJSON(ctx, path, map[string]any{"capabilities": capabilities}, &response)
-		return err == nil && response.SupplementCapability == protocol.DaemonCapabilityTaskSupplementV1, err
+		err := c.postJSON(ctx, path, map[string]any{"capabilities": capabilities}, decodeResponse)
+		return err == nil && negotiated, err
 	}
 	if task.RuntimeID == "" || task.DispatchedAt == "" {
 		return false, fmt.Errorf("start task: claim is missing runtime_id or dispatched_at")
@@ -489,12 +505,12 @@ func (c *Client) StartTask(ctx context.Context, task Task, capabilities ...strin
 		"runtime_id":    task.RuntimeID,
 		"capabilities":  capabilities,
 		"dispatched_at": task.DispatchedAt,
-	}, &response, startTaskRetrySchedule)
+	}, decodeResponse, startTaskRetrySchedule)
 	var reqErr *requestError
 	if errors.As(err, &reqErr) && reqErr.StatusCode == http.StatusConflict {
 		return false, fmt.Errorf("%w: %w", errStartClaimRejected, err)
 	}
-	return err == nil && response.SupplementCapability == protocol.DaemonCapabilityTaskSupplementV1, err
+	return err == nil && negotiated, err
 }
 
 // MarkTaskWaitingLocalDirectory parks a freshly-dispatched task in the
@@ -1236,6 +1252,8 @@ func (c *Client) postJSON(ctx context.Context, path string, reqBody any, respBod
 // postJSONVia is postJSON over an explicit http.Client. Callers pick the client
 // to control the timeout regime: c.client (fixed 30s) for control-plane calls,
 // c.bundleClient (deadline from ctx) for large skill-bundle downloads.
+// respBody can be a JSON destination or a func(io.Reader) error that decodes a
+// successful response inside each attempt, before retry decisions are made.
 func (c *Client) postJSONVia(ctx context.Context, httpClient *http.Client, path string, reqBody any, respBody any) error {
 	return c.postJSONViaObserved(ctx, httpClient, path, reqBody, respBody, nil)
 }
@@ -1278,6 +1296,9 @@ func (c *Client) postJSONViaObserved(ctx context.Context, httpClient *http.Clien
 	if respBody == nil {
 		io.Copy(io.Discard, respReader)
 		return nil
+	}
+	if decode, ok := respBody.(func(io.Reader) error); ok {
+		return decode(respReader)
 	}
 	return json.NewDecoder(respReader).Decode(respBody)
 }

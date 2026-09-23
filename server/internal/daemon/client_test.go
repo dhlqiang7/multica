@@ -101,41 +101,61 @@ func TestClient_IdentityHeaders_GetJSON(t *testing.T) {
 }
 
 func TestStartTaskCapabilityNegotiationMixedVersions(t *testing.T) {
+	defer noSleepRetry(t)()
 	for _, tc := range []struct {
-		name       string
-		response   string
-		negotiated bool
-		wantError  bool
+		name          string
+		response      string
+		contentLength string
+		negotiated    bool
+		wantError     bool
 	}{
-		{name: "empty response", response: "", wantError: true},
+		{name: "empty response", response: ""},
+		{name: "truncated HTTP body", contentLength: "8", wantError: true},
 		{name: "truncated response", response: `{"supplement_capability":`, wantError: true},
+		{name: "trailing garbage", response: `{"supplement_capability":"task-supplement-v1"}garbage`, wantError: true},
 		{name: "old server task response", response: `{"id":"task-1","status":"running"}`, negotiated: false},
 		{name: "new server explicit capability", response: `{"supplement_capability":"task-supplement-v1"}`, negotiated: true},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				var body struct {
-					Capabilities []string `json:"capabilities"`
-				}
-				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-					t.Errorf("decode start request: %v", err)
-				}
-				if len(body.Capabilities) != 1 || body.Capabilities[0] != protocol.DaemonCapabilityTaskSupplementV1 {
-					t.Errorf("capabilities = %#v", body.Capabilities)
-				}
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(tc.response))
-			}))
-			defer srv.Close()
+		for _, mode := range []string{"legacy", "claim-fenced"} {
+			t.Run(tc.name+"/"+mode, func(t *testing.T) {
+				var calls atomic.Int32
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls.Add(1)
+					var body struct {
+						Capabilities []string `json:"capabilities"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Errorf("decode start request: %v", err)
+					}
+					if len(body.Capabilities) != 1 || body.Capabilities[0] != protocol.DaemonCapabilityTaskSupplementV1 {
+						t.Errorf("capabilities = %#v", body.Capabilities)
+					}
+					w.Header().Set("Content-Type", "application/json")
+					if tc.contentLength != "" {
+						w.Header().Set("Content-Length", tc.contentLength)
+					}
+					_, _ = w.Write([]byte(tc.response))
+				}))
+				defer srv.Close()
 
-			got, err := NewClient(srv.URL).StartTask(context.Background(), Task{ID: "task-1"}, protocol.DaemonCapabilityTaskSupplementV1)
-			if (err != nil) != tc.wantError {
-				t.Fatalf("StartTask: %v", err)
-			}
-			if got != tc.negotiated {
-				t.Fatalf("negotiated = %v, want %v", got, tc.negotiated)
-			}
-		})
+				task := startTestClaim()
+				task.StartClaimSupported = mode == "claim-fenced"
+				got, err := NewClient(srv.URL).StartTask(context.Background(), task, protocol.DaemonCapabilityTaskSupplementV1)
+				if (err != nil) != tc.wantError {
+					t.Errorf("StartTask: %v", err)
+				}
+				if got != tc.negotiated {
+					t.Errorf("negotiated = %v, want %v", got, tc.negotiated)
+				}
+				wantCalls := 1
+				if tc.wantError && task.StartClaimSupported {
+					wantCalls += len(startTaskRetrySchedule)
+				}
+				if got := int(calls.Load()); got != wantCalls {
+					t.Errorf("requests = %d, want %d", got, wantCalls)
+				}
+			})
+		}
 	}
 }
 
