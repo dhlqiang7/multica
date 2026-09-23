@@ -15,6 +15,14 @@ import (
 	"time"
 )
 
+func (s *claudeSupplementSession) handleHook(msg claudeSDKMessage, w io.Writer) (bool, error) {
+	reply, handled := s.prepareHook(msg)
+	if !handled {
+		return false, nil
+	}
+	return true, reply(w)
+}
+
 func claudeSupplementHook(event, agentID string) claudeSDKMessage {
 	request, _ := json.Marshal(map[string]any{
 		"subtype": "hook_callback", "callback_id": "multica-supplement-" + event,
@@ -62,7 +70,7 @@ func queueClaudeSupplement(t *testing.T, s *claudeSupplementSession, ctx context
 }
 
 func TestClaudeSupplementDeliveredAtProviderBoundary(t *testing.T) {
-	for _, event := range []string{"PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop"} {
+	for _, event := range claudeSupplementEvents {
 		t.Run(event, func(t *testing.T) {
 			s := activeClaudeSupplementSession(t)
 			first := queueClaudeSupplement(t, s, t.Context(), "Keep the original goal; add A.", 1)
@@ -261,7 +269,11 @@ func runFakeClaudeSupplement() {
 				"subtype": "error", "request_id": init["request_id"], "error": "hooks unsupported",
 			}})
 		}
-		// A failed handshake must never be followed by a user prompt.
+		// Unsupported hooks disable supplements, but the original goal still runs.
+		if prompt := read(); prompt["type"] != "user" {
+			os.Exit(19)
+		}
+		fmt.Println(`{"type":"result","subtype":"success","result":"original goal completed"}`)
 		if _, err := reader.ReadBytes('\n'); err != io.EOF {
 			os.Exit(19)
 		}
@@ -274,6 +286,13 @@ func runFakeClaudeSupplement() {
 	}
 	hook := func(event string) map[string]any {
 		_ = json.NewEncoder(os.Stdout).Encode(claudeSupplementHook(event, ""))
+		if event == "PostToolUse" {
+			// Fill stdout before reading a hook reply larger than stdin's pipe
+			// buffer. A synchronous reply on the stdout reader deadlocks here.
+			for range 8 {
+				_ = writeClaudeFrame(os.Stdout, map[string]any{"type": "system", "subtype": "backpressure", "padding": strings.Repeat("x", 32*1024)})
+			}
+		}
 		frame := read()
 		if frame["type"] != "control_response" {
 			os.Exit(15)
@@ -285,7 +304,7 @@ func runFakeClaudeSupplement() {
 	for {
 		out := hook("PostToolUse")
 		if specific, ok := out["hookSpecificOutput"].(map[string]any); ok {
-			if specific["additionalContext"] != "also include tests" {
+			if specific["additionalContext"] != strings.Repeat("context ", 8192) {
 				os.Exit(16)
 			}
 			break
@@ -301,7 +320,7 @@ func runFakeClaudeSupplement() {
 	}
 }
 
-func TestClaudeSupplementExecuteUsesSameProcessAndPrompt(t *testing.T) {
+func TestClaudeSupplementExecuteUsesSamePromptUnderBackpressure(t *testing.T) {
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -325,7 +344,7 @@ func TestClaudeSupplementExecuteUsesSameProcessAndPrompt(t *testing.T) {
 		case <-time.After(time.Millisecond):
 		}
 	}
-	if err := session.Supplement(ctx, "also include tests"); err != nil {
+	if err := session.Supplement(ctx, strings.Repeat("context ", 8192)); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -356,14 +375,14 @@ func TestClaudeSupplementInitializeFailure(t *testing.T) {
 			}}}
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
-			session, err := b.Execute(ctx, "must not run", ExecOptions{EnableTaskSupplement: true, HandshakeTimeout: 500 * time.Millisecond})
+			session, err := b.Execute(ctx, "original goal", ExecOptions{EnableTaskSupplement: true, HandshakeTimeout: time.Hour})
 			if err != nil {
 				t.Fatal(err)
 			}
 			select {
 			case result := <-session.Result:
-				if result.Status != "failed" || !strings.Contains(result.Error, "claude supplement initialization") {
-					t.Fatalf("handshake failure must remain actionable: %+v", result)
+				if result.Status != "completed" || result.Output != "original goal completed" {
+					t.Fatalf("handshake failure must preserve ordinary execution: %+v", result)
 				}
 			case <-ctx.Done():
 				t.Fatal(ctx.Err())

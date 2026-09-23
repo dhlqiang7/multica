@@ -44,6 +44,71 @@ func TestStableTaskSupplementFailureReason(t *testing.T) {
 	}
 }
 
+func TestTaskSupplementClaimStartReplay(t *testing.T) {
+	f := newSupplementFixture(t, "codex", "dispatched", false)
+	dbfx.Cleanup(t, `DELETE FROM task_supplement_capability WHERE task_id=$1`, f.taskID)
+	generation := time.Date(2026, 9, 23, 0, 0, 0, 0, time.UTC)
+	dbfx.Exec(t, `UPDATE agent_task_queue SET dispatched_at=$2 WHERE id=$1`, f.taskID, generation)
+	for range 2 {
+		req := withURLParam(newDaemonTokenRequest(http.MethodPost, "/start", map[string]any{
+			"runtime_id": f.runtimeID, "dispatched_at": generation.Format(time.RFC3339Nano),
+			"capabilities": []string{protocol.DaemonCapabilityTaskSupplementV1},
+		}, testWorkspaceID, "start-claim-test"), "taskId", f.taskID)
+		var started AgentTaskResponse
+		testutil.Call(t, testHandler.StartTask, req).Want(http.StatusOK).JSON(&started)
+		if started.SupplementCapability != protocol.DaemonCapabilityTaskSupplementV1 {
+			t.Fatalf("lost negotiated capability on start replay: %+v", started)
+		}
+	}
+	if n := dbfx.Count(t, `SELECT count(*) FROM task_supplement_capability WHERE task_id=$1`, f.taskID); n != 1 {
+		t.Fatalf("start replay wrote %d capabilities", n)
+	}
+}
+
+func TestTaskSupplementLateDeliveryAndDeletion(t *testing.T) {
+	f := newSupplementFixture(t, "claude", "running", true)
+	var sent, pending CommentResponse
+	supplementRequest(t, f, "0199a4e8-22ce-7b01-bba5-111111111111", "already injected").Want(http.StatusCreated).JSON(&sent)
+	if _, err := testHandler.Queries.ClaimNextTaskSupplement(t.Context(), parseUUID(f.taskID)); err != nil {
+		t.Fatal(err)
+	}
+	supplementRequest(t, f, "0199a4e8-22ce-7b01-bba5-222222222222", "never injected").Want(http.StatusCreated).JSON(&pending)
+	deleteRequest := func() *http.Request {
+		return withURLParam(newRequest(http.MethodDelete, "/comments/"+sent.ID, nil), "commentId", sent.ID)
+	}
+	testutil.Call(t, testHandler.DeleteComment, deleteRequest()).Want(http.StatusConflict)
+	dbfx.Exec(t, `UPDATE agent_task_queue SET status='completed' WHERE id=$1`, f.taskID)
+	for _, c := range []CommentResponse{sent, pending} {
+		req := withURLParams(newDaemonTokenRequest(http.MethodPost, "/ack", map[string]any{"delivered": true}, testWorkspaceID, "legit-daemon"), "taskId", f.taskID, "commentId", c.ID)
+		want := http.StatusOK
+		if c.ID == pending.ID {
+			want = http.StatusConflict
+		}
+		testutil.Call(t, testHandler.AckTaskSupplement, req).Want(want)
+	}
+	testutil.Call(t, testHandler.DeleteComment, deleteRequest()).Want(http.StatusNoContent)
+	if n := dbfx.Count(t, `SELECT count(*) FROM task_supplement WHERE comment_id=$1`, sent.ID); n != 0 {
+		t.Fatal("deleted comment retained its receipt")
+	}
+}
+
+func TestTaskSupplementSubmissionBoundsAndConflicts(t *testing.T) {
+	f := newSupplementFixture(t, "codex", "running", true)
+	const requestID = "0199a4e8-22ce-7b01-bba5-111111111111"
+	supplementRequest(t, f, requestID, strings.Repeat("x", maxCommentContentBytes+1)).Want(http.StatusBadRequest)
+	if n := dbfx.Count(t, `SELECT count(*) FROM task_supplement WHERE task_id=$1`, f.taskID); n != 0 {
+		t.Fatal("oversized input was persisted")
+	}
+	supplementRequest(t, f, requestID, "original").Want(http.StatusCreated)
+	// Another author's request key is unique within the task but invisible to
+	// the current author's idempotency lookup. This is a conflict, not a 500.
+	dbfx.Exec(t, `UPDATE task_supplement SET author_id=$2 WHERE task_id=$1`, f.taskID, "0199a4e8-22ce-7b01-bba5-333333333333")
+	supplementRequest(t, f, requestID, "collision").Want(http.StatusConflict)
+	if n := dbfx.Count(t, `SELECT count(*) FROM comment WHERE issue_id=$1 AND content='collision'`, f.issueID); n != 0 {
+		t.Fatal("conflict left an orphan comment")
+	}
+}
+
 func newSupplementFixture(t *testing.T, provider, status string, negotiated bool) supplementFixture {
 	t.Helper()
 	if testHandler == nil {

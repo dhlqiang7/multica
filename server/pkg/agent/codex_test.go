@@ -3783,6 +3783,27 @@ func TestCodexThreadTokenUsageUpdatedDeduplicatesSnapshot(t *testing.T) {
 	}
 }
 
+func TestCodexTokenUsageArrivingAfterTurnCompleted(t *testing.T) {
+	c, _, _ := newTestCodexClient(t)
+	c.threadID = "thread-1"
+	c.setActiveTurnID("turn-current")
+	c.handleRawNotification("turn/completed", map[string]any{
+		"threadId": "thread-1", "turn": map[string]any{"id": "turn-current", "status": "completed"},
+	})
+	if c.activeTurnID() != "" {
+		t.Fatal("completed turn still accepts supplements")
+	}
+	for _, turn := range []string{"turn-old", "turn-current", "turn-current"} {
+		c.handleRawNotification("thread/tokenUsage/updated", codexThreadTokenUsageParams(
+			"thread-1", turn, map[string]any{"inputTokens": float64(110)},
+			map[string]any{"inputTokens": float64(100), "cachedInputTokens": float64(30), "outputTokens": float64(10)},
+		))
+	}
+	if want := (TokenUsage{InputTokens: 70, CacheReadTokens: 30, OutputTokens: 10}); c.usage != want {
+		t.Fatalf("late usage = %+v, want %+v", c.usage, want)
+	}
+}
+
 func TestCodexThreadTokenUsageUpdatedAccumulatesCurrentTurnResponses(t *testing.T) {
 	c := &codexClient{}
 	c.setActiveTurnID("turn-current")

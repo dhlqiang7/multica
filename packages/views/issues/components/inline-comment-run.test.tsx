@@ -54,6 +54,16 @@ function setup(initialTask: AgentTask, hasReply = false, presentation: "inline" 
 }
 
 describe("InlineCommentRun", () => {
+  it("creates no receipt observers for ordinary or delivered comments", () => {
+    const client = new QueryClient();
+    const entry = { id: "comment", type: "comment" } as TimelineEntry;
+    renderWithI18n(<QueryClientProvider client={client}>
+      <SupplementReceipt issueId="issue" entry={entry} />
+      <SupplementReceipt issueId="issue" entry={{ ...entry, supplement_task_id: id, supplement_status: "delivered" }} />
+    </QueryClientProvider>);
+    expect(client.getQueryCache().getAll()).toHaveLength(0);
+  });
+
   it.each(["toggle", "cancel", "escape"])("closes and clears a running draft with %s", (action) => {
     vi.mocked(api.listTaskMessages).mockResolvedValue([]);
     setup(task({ supplement_capability: "task-supplement-v1", can_supplement: true }));

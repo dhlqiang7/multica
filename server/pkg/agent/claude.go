@@ -157,13 +157,13 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 	// timeout.
 	writeDone := make(chan error, 1)
 	go func() {
-		var err error
 		if supplements != nil {
-			err = supplements.initialize(inputWriter, opts.HandshakeTimeout)
+			if initErr := supplements.initialize(inputWriter, claudeSupplementHandshakeTimeout); initErr != nil {
+				b.cfg.Logger.Warn("Claude additional messages unavailable; continuing normally", "error", initErr)
+				supplements.end()
+			}
 		}
-		if err == nil {
-			err = writeClaudeInput(inputWriter, prompt)
-		}
+		err := writeClaudeInput(inputWriter, prompt)
 		if err != nil {
 			closeStdin()
 			if supplements != nil {
@@ -196,7 +196,8 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		assistantEventCount := 0
 		toolUseCount := 0
 		unreadableAssistantCount := 0
-		var controlErr error
+		controlErrors := make(chan error, 1)
+		var controlWrites sync.WaitGroup
 
 		// On cancellation / timeout, terminate claude (and every MCP server and
 		// tool subprocess it spawned) BEFORE unblocking the scanner. EOF stdin
@@ -282,17 +283,25 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 					})
 				}
 			case "control_request":
+				var reply func(io.Writer) error
 				if supplements != nil {
-					handled, err := supplements.handleHook(msg, inputWriter)
-					if err != nil {
-						controlErr = err
+					reply, _ = supplements.prepareHook(msg)
+				}
+				controlWrites.Add(1)
+				go func(msg claudeSDKMessage, reply func(io.Writer) error) {
+					defer controlWrites.Done()
+					if reply == nil {
+						b.handleControlRequest(msg, inputWriter)
+						return
+					}
+					if err := reply(inputWriter); err != nil {
+						select {
+						case controlErrors <- err:
+						default:
+						}
 						cancel()
 					}
-					if handled {
-						continue
-					}
-				}
-				b.handleControlRequest(msg, inputWriter)
+				}(msg, reply)
 			case "control_response":
 				if supplements != nil {
 					supplements.handleResponse(msg.Response)
@@ -321,8 +330,12 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		// time cmd has exited, the prompt write has either succeeded, hit a
 		// broken pipe, or been unblocked by the kill that ended cmd.
 		writeErr := <-writeDone
+		controlWrites.Wait()
 		if writeErr == nil {
-			writeErr = controlErr
+			select {
+			case writeErr = <-controlErrors:
+			default:
+			}
 		}
 		// Internal protocol failures cancel the process to unblock its pipes.
 		// Preserve the actual failure instead of reporting a user cancellation.

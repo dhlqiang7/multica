@@ -434,18 +434,6 @@ func (c *Client) ExtendTaskPrepareLease(ctx context.Context, runtimeID, taskID s
 	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/tasks/%s/prepare-lease", runtimeID, taskID), map[string]any{}, nil)
 }
 
-func (c *Client) StartTask(ctx context.Context, taskID string, capabilities ...string) (bool, error) {
-	var response struct {
-		SupplementCapability string `json:"supplement_capability"`
-	}
-	if err := c.postJSON(ctx, fmt.Sprintf("/api/daemon/tasks/%s/start", taskID), map[string]any{
-		"capabilities": capabilities,
-	}, &response); err != nil && !errors.Is(err, io.EOF) {
-		return false, err
-	}
-	return response.SupplementCapability == protocol.DaemonCapabilityTaskSupplementV1, nil
-}
-
 type TaskSupplement struct {
 	CommentID  string `json:"comment_id"`
 	AuthorName string `json:"author_name"`
@@ -468,6 +456,45 @@ func (c *Client) AckTaskSupplement(ctx context.Context, taskID, commentID string
 		fmt.Sprintf("/api/daemon/tasks/%s/supplements/%s/ack", taskID, commentID),
 		map[string]any{"delivered": delivered, "error": errText}, nil,
 		[]time.Duration{0, 100 * time.Millisecond, 300 * time.Millisecond})
+}
+
+// startTaskRetrySchedule allows two short reconnects without the terminal
+// callbacks' 124s backoff. The whole start has a 30s budget (not 3 x the HTTP
+// client's 30s timeout). Preparation keeps renewing its 45s lease every 15s
+// throughout requests and backoff; its own deadline can end this sooner.
+// runTask calls this once. Task-level retries are separate executions, with
+// fresh claims, and cannot reuse this acknowledgement.
+var startTaskRetrySchedule = []time.Duration{500 * time.Millisecond, 2 * time.Second}
+
+const startTaskTimeout = 30 * time.Second
+
+var errStartClaimRejected = errors.New("task start claim rejected")
+
+func (c *Client) StartTask(ctx context.Context, task Task, capabilities ...string) (bool, error) {
+	var response struct {
+		SupplementCapability string `json:"supplement_capability"`
+	}
+	path := fmt.Sprintf("/api/daemon/tasks/%s/start", task.ID)
+	if !task.StartClaimSupported {
+		// Old servers have no safe replay contract. Preserve one attempt.
+		err := c.postJSON(ctx, path, map[string]any{"capabilities": capabilities}, &response)
+		return err == nil && response.SupplementCapability == protocol.DaemonCapabilityTaskSupplementV1, err
+	}
+	if task.RuntimeID == "" || task.DispatchedAt == "" {
+		return false, fmt.Errorf("start task: claim is missing runtime_id or dispatched_at")
+	}
+	ctx, cancel := context.WithTimeout(ctx, startTaskTimeout)
+	defer cancel()
+	err := c.postJSONWithRetry(ctx, path, map[string]any{
+		"runtime_id":    task.RuntimeID,
+		"capabilities":  capabilities,
+		"dispatched_at": task.DispatchedAt,
+	}, &response, startTaskRetrySchedule)
+	var reqErr *requestError
+	if errors.As(err, &reqErr) && reqErr.StatusCode == http.StatusConflict {
+		return false, fmt.Errorf("%w: %w", errStartClaimRejected, err)
+	}
+	return err == nil && response.SupplementCapability == protocol.DaemonCapabilityTaskSupplementV1, err
 }
 
 // MarkTaskWaitingLocalDirectory parks a freshly-dispatched task in the

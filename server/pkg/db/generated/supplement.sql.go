@@ -12,20 +12,19 @@ import (
 )
 
 const ackTaskSupplementDelivered = `-- name: AckTaskSupplementDelivered :one
-WITH active_task AS MATERIALIZED (
-    SELECT id FROM agent_task_queue
-    WHERE id = $2 AND status = 'running'
-    FOR UPDATE
+WITH task AS MATERIALIZED (
+    SELECT id FROM agent_task_queue WHERE id = $2 FOR UPDATE
 )
 UPDATE task_supplement s
 SET status = 'delivered',
     delivered_at = COALESCE(delivered_at, now()),
     failure_reason = NULL,
     updated_at = now()
-FROM active_task t
+FROM task t
 WHERE s.task_id = t.id
   AND s.comment_id = $1
-  AND s.status IN ('delivering', 'delivered')
+  AND (s.status IN ('delivering', 'delivered')
+       OR (s.status = 'failed' AND s.failure_reason = 'turn_ended' AND s.attempt_count > 0))
 RETURNING s.task_id, s.workspace_id, s.issue_id, s.comment_id, s.author_id, s.client_request_id, s.status, s.failure_reason, s.attempt_count, s.created_at, s.updated_at, s.delivered_at
 `
 
@@ -34,6 +33,8 @@ type AckTaskSupplementDeliveredParams struct {
 	TaskID    pgtype.UUID `json:"task_id"`
 }
 
+// The provider can accept input before completion while its HTTP acknowledgement
+// arrives afterward. Serialize with settlement and preserve that successful write.
 func (q *Queries) AckTaskSupplementDelivered(ctx context.Context, arg AckTaskSupplementDeliveredParams) (TaskSupplement, error) {
 	row := q.db.QueryRow(ctx, ackTaskSupplementDelivered, arg.CommentID, arg.TaskID)
 	var i TaskSupplement
@@ -269,6 +270,21 @@ func (q *Queries) CreateTaskSupplement(ctx context.Context, arg CreateTaskSupple
 	return i, err
 }
 
+const deleteTaskSupplementByComment = `-- name: DeleteTaskSupplementByComment :exec
+DELETE FROM task_supplement
+WHERE comment_id = $1 AND workspace_id = $2
+`
+
+type DeleteTaskSupplementByCommentParams struct {
+	CommentID   pgtype.UUID `json:"comment_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) DeleteTaskSupplementByComment(ctx context.Context, arg DeleteTaskSupplementByCommentParams) error {
+	_, err := q.db.Exec(ctx, deleteTaskSupplementByComment, arg.CommentID, arg.WorkspaceID)
+	return err
+}
+
 const getTaskSupplementByComment = `-- name: GetTaskSupplementByComment :one
 SELECT task_id, workspace_id, issue_id, comment_id, author_id, client_request_id, status, failure_reason, attempt_count, created_at, updated_at, delivered_at FROM task_supplement
 WHERE comment_id = $1 AND workspace_id = $2
@@ -443,12 +459,48 @@ func (q *Queries) ListTaskSupplementsByCommentIDs(ctx context.Context, arg ListT
 	return items, nil
 }
 
+const lockTaskSupplementByComment = `-- name: LockTaskSupplementByComment :one
+SELECT task_id, workspace_id, issue_id, comment_id, author_id, client_request_id, status, failure_reason, attempt_count, created_at, updated_at, delivered_at FROM task_supplement
+WHERE comment_id = $1 AND workspace_id = $2
+FOR UPDATE
+`
+
+type LockTaskSupplementByCommentParams struct {
+	CommentID   pgtype.UUID `json:"comment_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) LockTaskSupplementByComment(ctx context.Context, arg LockTaskSupplementByCommentParams) (TaskSupplement, error) {
+	row := q.db.QueryRow(ctx, lockTaskSupplementByComment, arg.CommentID, arg.WorkspaceID)
+	var i TaskSupplement
+	err := row.Scan(
+		&i.TaskID,
+		&i.WorkspaceID,
+		&i.IssueID,
+		&i.CommentID,
+		&i.AuthorID,
+		&i.ClientRequestID,
+		&i.Status,
+		&i.FailureReason,
+		&i.AttemptCount,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeliveredAt,
+	)
+	return i, err
+}
+
 const retryTaskSupplement = `-- name: RetryTaskSupplement :one
-WITH active_task AS MATERIALIZED (
+WITH comment AS MATERIALIZED (
+    SELECT id FROM comment
+    WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL
+    FOR UPDATE
+), active_task AS MATERIALIZED (
     SELECT agent_task_queue.id FROM agent_task_queue
     WHERE agent_task_queue.id = $3
       AND agent_task_queue.issue_id = $4
       AND agent_task_queue.status = 'running'
+      AND EXISTS (SELECT 1 FROM comment)
       AND EXISTS (
           SELECT 1 FROM task_supplement_capability cap
           WHERE cap.task_id = agent_task_queue.id
@@ -515,6 +567,7 @@ WITH candidate AS MATERIALIZED (
     WHERE $2::boolean
       AND provider IN ('codex', 'claude')
       AND issue_id IS NOT NULL
+    ON CONFLICT DO NOTHING
     RETURNING task_id
 )
 UPDATE agent_task_queue t

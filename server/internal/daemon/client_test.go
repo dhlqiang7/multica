@@ -105,8 +105,10 @@ func TestStartTaskCapabilityNegotiationMixedVersions(t *testing.T) {
 		name       string
 		response   string
 		negotiated bool
+		wantError  bool
 	}{
-		{name: "old server empty response", response: "", negotiated: false},
+		{name: "empty response", response: "", wantError: true},
+		{name: "truncated response", response: `{"supplement_capability":`, wantError: true},
 		{name: "old server task response", response: `{"id":"task-1","status":"running"}`, negotiated: false},
 		{name: "new server explicit capability", response: `{"supplement_capability":"task-supplement-v1"}`, negotiated: true},
 	} {
@@ -126,8 +128,8 @@ func TestStartTaskCapabilityNegotiationMixedVersions(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			got, err := NewClient(srv.URL).StartTask(context.Background(), "task-1", protocol.DaemonCapabilityTaskSupplementV1)
-			if err != nil {
+			got, err := NewClient(srv.URL).StartTask(context.Background(), Task{ID: "task-1"}, protocol.DaemonCapabilityTaskSupplementV1)
+			if (err != nil) != tc.wantError {
 				t.Fatalf("StartTask: %v", err)
 			}
 			if got != tc.negotiated {

@@ -612,6 +612,11 @@ export function SupplementReceipt({ issueId, entry }: {
   issueId: string;
   entry: TimelineEntry;
 }) {
+  if (!entry.supplement_task_id || !entry.supplement_status || entry.supplement_status === "delivered") return null;
+  return <ActiveSupplementReceipt issueId={issueId} entry={entry} />;
+}
+
+function ActiveSupplementReceipt({ issueId, entry }: { issueId: string; entry: TimelineEntry }) {
   const { t } = useT("issues");
   const retry = useRetryTaskSupplement(issueId);
   // Run placement belongs to one card, but every bound supplement must observe
@@ -697,7 +702,8 @@ function CommentRow({
 
   const isOwn = entry.actor_type === "member" && entry.actor_id === currentUserId;
   const canEditEntry = !entry.supplement_task_id && (isOwn || (canModerate && entry.actor_type === "member"));
-  const canDeleteEntry = !entry.supplement_task_id && (isOwn || canModerate);
+  const supplementInFlight = entry.supplement_task_id && (entry.supplement_status === "pending" || entry.supplement_status === "delivering");
+  const canDeleteEntry = !supplementInFlight && (isOwn || canModerate);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const reactions = entry.reactions ?? [];
@@ -1048,8 +1054,9 @@ function CommentCardImpl({
   const edit = useEditAttachmentState(issueId, entry, onEdit);
 
   const isOwn = entry.actor_type === "member" && entry.actor_id === currentUserId;
-  const canEditEntry = isOwn || (canModerate && entry.actor_type === "member");
-  const canDeleteEntry = isOwn || canModerate;
+  const canEditEntry = !entry.supplement_task_id && (isOwn || (canModerate && entry.actor_type === "member"));
+  const supplementInFlight = entry.supplement_status === "pending" || entry.supplement_status === "delivering";
+  const canDeleteEntry = !supplementInFlight && (isOwn || canModerate);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const allNestedReplies = replies;

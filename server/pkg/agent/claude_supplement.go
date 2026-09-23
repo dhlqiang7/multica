@@ -12,8 +12,13 @@ import (
 	"time"
 )
 
-const claudeSupplementInitializeID = "multica-supplement-initialize"
+const (
+	claudeSupplementInitializeID     = "multica-supplement-initialize"
+	claudeSupplementHandshakeTimeout = 3 * time.Second
+)
 
+// All four context events support additionalContext; Stop uses decision/reason.
+// https://code.claude.com/docs/en/hooks#add-context-for-claude
 var claudeSupplementEvents = []string{"UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop"}
 
 // Claude has no conditional, current-turn-only user input request. SDK hooks
@@ -32,9 +37,10 @@ type claudeSupplementSession struct {
 }
 
 type claudeSupplementInput struct {
-	ctx  context.Context
-	text string
-	done chan error
+	ctx     context.Context
+	text    string
+	done    chan error
+	writing bool
 }
 
 func newClaudeSupplementSession(ctx context.Context) *claudeSupplementSession {
@@ -120,6 +126,12 @@ func (s *claudeSupplementSession) supplement(ctx context.Context, text string) e
 	// Serialize cancellation with hook delivery. If delivery won, preserve its
 	// outcome; otherwise remove the message so a later hook cannot replay it.
 	s.mu.Lock()
+	if input.writing {
+		// Once a hook owns the frame, its write decides delivery. Cancellation
+		// closes the process pipe; it must not report failure before that write.
+		s.mu.Unlock()
+		return <-input.done
+	}
 	defer s.mu.Unlock()
 	select {
 	case err := <-input.done:
@@ -152,7 +164,9 @@ func (s *claudeSupplementSession) end() {
 	}
 }
 
-func (s *claudeSupplementSession) handleHook(msg claudeSDKMessage, w io.Writer) (bool, error) {
+// prepareHook claims pending input synchronously, but leaves pipe I/O to the
+// caller's writer goroutine so stdout can keep draining under backpressure.
+func (s *claudeSupplementSession) prepareHook(msg claudeSDKMessage) (func(io.Writer) error, bool) {
 	var req struct {
 		Subtype    string `json:"subtype"`
 		CallbackID string `json:"callback_id"`
@@ -162,11 +176,10 @@ func (s *claudeSupplementSession) handleHook(msg claudeSDKMessage, w io.Writer) 
 		} `json:"input"`
 	}
 	if json.Unmarshal(msg.Request, &req) != nil || req.Subtype != "hook_callback" {
-		return false, nil
+		return nil, false
 	}
 	output := map[string]any{}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	// Hook registrations are inherited by subagents. Only the main loop may
 	// consume instructions addressed to this Multica task.
 	owned := slices.Contains(claudeSupplementEvents, req.Input.Event) && req.CallbackID == "multica-supplement-"+req.Input.Event
@@ -180,6 +193,7 @@ func (s *claudeSupplementSession) handleHook(msg claudeSDKMessage, w io.Writer) 
 				continue
 			}
 			delivered = append(delivered, input)
+			input.writing = true
 			texts = append(texts, input.text)
 		}
 		s.pending = nil
@@ -193,14 +207,18 @@ func (s *claudeSupplementSession) handleHook(msg claudeSDKMessage, w io.Writer) 
 			}
 		}
 	}
-	err := writeClaudeFrame(w, map[string]any{
+	frame := map[string]any{
 		"type":     "control_response",
 		"response": map[string]any{"subtype": "success", "request_id": msg.RequestID, "response": output},
-	})
-	for _, input := range delivered {
-		input.done <- err
 	}
-	return true, err
+	s.mu.Unlock()
+	return func(w io.Writer) error {
+		err := writeClaudeFrame(w, frame)
+		for _, input := range delivered {
+			input.done <- err
+		}
+		return err
+	}, true
 }
 
 func writeClaudeFrame(w io.Writer, frame any) error {

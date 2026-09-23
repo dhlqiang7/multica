@@ -18,9 +18,14 @@ func (h *Handler) hydrateTaskSupplementMetadata(ctx context.Context, r *http.Req
 	if len(tasks) == 0 || len(tasks) != len(resp) {
 		return
 	}
-	taskIDs := make([]pgtype.UUID, len(tasks))
+	taskIDs := make([]pgtype.UUID, 0, len(tasks))
 	for i := range tasks {
-		taskIDs[i] = tasks[i].ID
+		if tasks[i].IssueID.Valid {
+			taskIDs = append(taskIDs, tasks[i].ID)
+		}
+	}
+	if len(taskIDs) == 0 {
+		return
 	}
 	rows, err := h.Queries.ListTaskSupplementMetadata(ctx, db.ListTaskSupplementMetadataParams{
 		WorkspaceID: workspaceID,
@@ -129,11 +134,15 @@ func (h *Handler) CreateTaskSupplement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req createTaskSupplementRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8*maxCommentContentBytes)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	req.Content = sanitizeNullBytes(req.Content)
+	if len(req.Content) > maxCommentContentBytes {
+		writeError(w, http.StatusBadRequest, "content is too long")
+		return
+	}
 	if strings.TrimSpace(req.Content) == "" {
 		writeError(w, http.StatusBadRequest, "content is required")
 		return
@@ -176,7 +185,12 @@ func (h *Handler) CreateTaskSupplement(w http.ResponseWriter, r *http.Request) {
 			h.notifyTaskSupplementAvailable(task)
 			h.writeExistingTaskSupplement(w, r, existing)
 			return
+		} else if !errors.Is(loadErr, pgx.ErrNoRows) {
+			writeError(w, http.StatusInternalServerError, "failed to check additional message")
+			return
 		}
+		writeError(w, http.StatusConflict, "client_request_id is already in use")
+		return
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeErrorCode(w, http.StatusConflict, "task_supplement_turn_ended", "this run has ended")

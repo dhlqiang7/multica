@@ -24,6 +24,8 @@ func TestTaskSupplementMigrationsUpDownUpInIsolatedSchema(t *testing.T) {
 			"537_task_supplement_request_index",
 			"538_task_supplement_capability_index",
 			"539_task_supplement_comment_index",
+			"540_task_supplement_primary_key",
+			"541_task_supplement_teardown_guard",
 		}
 		if direction == "down" {
 			slices.Reverse(versions)
@@ -51,9 +53,32 @@ func TestTaskSupplementMigrationsUpDownUpInIsolatedSchema(t *testing.T) {
 				JOIN pg_class c ON c.oid = i.indexrelid
 				JOIN pg_namespace n ON n.oid = c.relnamespace
 				WHERE n.nspname = $1 AND i.indisvalid AND c.relname = ANY($2::text[])
-			`, schema, []string{"task_supplement_task_request_uidx", "task_supplement_capability_task_uidx", "task_supplement_comment_uidx"}).Scan(&indexes)
+			`, schema, []string{"task_supplement_task_request_uidx", "task_supplement_capability_task_uidx", "task_supplement_pkey"}).Scan(&indexes)
 			if err != nil || indexes != 3 {
 				t.Fatalf("valid supplement indexes = %d, want 3: %v", indexes, err)
+			}
+			var primary bool
+			if err := pool.QueryRow(ctx, `SELECT indisprimary FROM pg_index WHERE indexrelid = 'task_supplement_pkey'::regclass`).Scan(&primary); err != nil || !primary {
+				t.Fatalf("receipt primary key missing: %v", err)
+			}
+			// Teardown owns dependent deletion and must not run receipt settlement.
+			tx, err := pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = tx.Exec(ctx, `
+				INSERT INTO agent_task_queue VALUES ('00000000-0000-0000-0000-000000000001', 'running');
+				INSERT INTO task_supplement (task_id, workspace_id, issue_id, comment_id, author_id, client_request_id, status)
+				VALUES ('00000000-0000-0000-0000-000000000001', gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 'pending');
+				SET LOCAL multica.workspace_teardown = 'on';
+				UPDATE agent_task_queue SET status='cancelled';`)
+			var status string
+			if err == nil {
+				err = tx.QueryRow(ctx, `SELECT status FROM task_supplement`).Scan(&status)
+			}
+			_ = tx.Rollback(ctx)
+			if err != nil || status != "pending" {
+				t.Fatalf("teardown ran receipt settlement: %s, %v", status, err)
 			}
 		}
 	}

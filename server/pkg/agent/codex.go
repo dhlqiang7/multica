@@ -2390,6 +2390,7 @@ type codexClient struct {
 	threadIDMu             sync.RWMutex
 	threadID               string
 	turnIDMu               sync.RWMutex
+	lastTurnID             string
 	turnID                 string
 	onMessage              func(Message)
 	// onAgentMessageChunk reports whether a text chunk was handed to the
@@ -2545,8 +2546,18 @@ func (c *codexClient) getThreadID() string {
 
 func (c *codexClient) setActiveTurnID(turnID string) {
 	c.turnIDMu.Lock()
+	if turnID != "" {
+		c.lastTurnID = turnID
+	}
 	c.turnID = turnID
 	c.turnIDMu.Unlock()
+}
+
+// usageTurnID retains attribution after the turn closes its steering window.
+func (c *codexClient) usageTurnID() string {
+	c.turnIDMu.RLock()
+	defer c.turnIDMu.RUnlock()
+	return c.lastTurnID
 }
 
 func (c *codexClient) activeTurnID() string {
@@ -3801,13 +3812,14 @@ func (c *codexClient) handleItemNotification(method string, params map[string]an
 
 // updateThreadTokenUsage consumes the v2 app-server's real usage notification.
 // Resume can replay a historical snapshot after thread/resume returns, so only
-// notifications attributed to the active turn are eligible. The first current-
+// notifications attributed to this run's active or just-completed turn are eligible.
+// A late final snapshot must survive closing supplement admission. The first current-
 // turn snapshot contributes `last`; later snapshots contribute the monotonic
 // delta from `total`. This retains multi-response tool loops without charging
 // replayed history or duplicate snapshots twice.
 func (c *codexClient) updateThreadTokenUsage(params map[string]any) {
 	turnID, _ := params["turnId"].(string)
-	if turnID == "" || turnID != c.activeTurnID() {
+	if turnID == "" || turnID != c.usageTurnID() {
 		return
 	}
 

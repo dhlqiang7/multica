@@ -16,6 +16,7 @@ WITH candidate AS MATERIALIZED (
     WHERE @enable_task_supplement::boolean
       AND provider IN ('codex', 'claude')
       AND issue_id IS NOT NULL
+    ON CONFLICT DO NOTHING
     RETURNING task_id
 )
 UPDATE agent_task_queue t
@@ -143,20 +144,21 @@ JOIN comment c ON c.id = claimed.comment_id
 LEFT JOIN "user" u ON u.id = claimed.author_id;
 
 -- name: AckTaskSupplementDelivered :one
-WITH active_task AS MATERIALIZED (
-    SELECT id FROM agent_task_queue
-    WHERE id = @task_id AND status = 'running'
-    FOR UPDATE
+-- The provider can accept input before completion while its HTTP acknowledgement
+-- arrives afterward. Serialize with settlement and preserve that successful write.
+WITH task AS MATERIALIZED (
+    SELECT id FROM agent_task_queue WHERE id = @task_id FOR UPDATE
 )
 UPDATE task_supplement s
 SET status = 'delivered',
     delivered_at = COALESCE(delivered_at, now()),
     failure_reason = NULL,
     updated_at = now()
-FROM active_task t
+FROM task t
 WHERE s.task_id = t.id
   AND s.comment_id = @comment_id
-  AND s.status IN ('delivering', 'delivered')
+  AND (s.status IN ('delivering', 'delivered')
+       OR (s.status = 'failed' AND s.failure_reason = 'turn_ended' AND s.attempt_count > 0))
 RETURNING s.*;
 
 -- name: AckTaskSupplementFailed :one
@@ -170,11 +172,16 @@ WHERE task_id = @task_id
 RETURNING *;
 
 -- name: RetryTaskSupplement :one
-WITH active_task AS MATERIALIZED (
+WITH comment AS MATERIALIZED (
+    SELECT id FROM comment
+    WHERE id = @comment_id AND workspace_id = @workspace_id AND deleted_at IS NULL
+    FOR UPDATE
+), active_task AS MATERIALIZED (
     SELECT agent_task_queue.id FROM agent_task_queue
     WHERE agent_task_queue.id = @task_id
       AND agent_task_queue.issue_id = @issue_id
       AND agent_task_queue.status = 'running'
+      AND EXISTS (SELECT 1 FROM comment)
       AND EXISTS (
           SELECT 1 FROM task_supplement_capability cap
           WHERE cap.task_id = agent_task_queue.id
@@ -192,3 +199,12 @@ WHERE s.task_id = t.id
   AND s.workspace_id = @workspace_id
   AND s.status = 'failed'
 RETURNING s.*;
+
+-- name: LockTaskSupplementByComment :one
+SELECT * FROM task_supplement
+WHERE comment_id = @comment_id AND workspace_id = @workspace_id
+FOR UPDATE;
+
+-- name: DeleteTaskSupplementByComment :exec
+DELETE FROM task_supplement
+WHERE comment_id = @comment_id AND workspace_id = @workspace_id;
