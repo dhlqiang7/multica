@@ -95,10 +95,16 @@ export function formatActivity(
     // Duplicate marks (MUL-7349); copy mirrors packages/views/locales/en.
     case "duplicate_marked":
       return `marked this issue as a duplicate of ${details.original_identifier ?? "?"}`;
-    case "duplicate_unmarked":
-      return details.reason === "original_deleted"
-        ? `removed the duplicate mark, ${details.original_identifier ?? "?"} was deleted`
-        : `unmarked this issue as a duplicate of ${details.original_identifier ?? "?"}`;
+    case "duplicate_unmarked": {
+      const identifier = details.original_identifier ?? "?";
+      if (details.reason === "original_deleted") {
+        return `removed the duplicate mark, ${identifier} was deleted`;
+      }
+      if (details.to) {
+        return `unmarked this issue as a duplicate of ${identifier} and moved it to ${statusName(details.to, resolveStatusLabel)}`;
+      }
+      return `unmarked this issue as a duplicate of ${identifier}`;
+    }
     case "duplicate_added":
       return `marked ${details.duplicate_identifier ?? "?"} as a duplicate of this issue`;
     case "duplicate_removed":

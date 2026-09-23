@@ -34,6 +34,8 @@ interface IssuePickerModalProps {
   onSelect: (issue: Issue) => void;
   /** Shown while the query is empty; groups without issues are skipped. */
   suggestions?: IssuePickerSuggestionGroup[];
+  /** Drops issues from results and suggestions alike; excludeIds always applies. */
+  isSelectable?: (issue: Issue) => boolean;
 }
 
 export function IssuePickerModal({
@@ -44,6 +46,7 @@ export function IssuePickerModal({
   excludeIds,
   onSelect,
   suggestions,
+  isSelectable,
 }: IssuePickerModalProps) {
   const { t } = useT("modals");
   const { colorOf, iconOf } = useIssueStatuses(useWorkspaceId());
@@ -52,11 +55,12 @@ export function IssuePickerModal({
   const [isLoading, setIsLoading] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const abortRef = useRef<AbortController>(undefined);
+  const selectable = useCallback(
+    (issue: Issue) => !excludeIds.includes(issue.id) && (isSelectable?.(issue) ?? true),
+    [excludeIds, isSelectable],
+  );
   const suggestionGroups = (suggestions ?? [])
-    .map((group) => ({
-      ...group,
-      issues: group.issues.filter((issue) => !excludeIds.includes(issue.id)),
-    }))
+    .map((group) => ({ ...group, issues: group.issues.filter(selectable) }))
     .filter((group) => group.issues.length > 0);
 
   useEffect(() => {
@@ -90,7 +94,7 @@ export function IssuePickerModal({
             signal: controller.signal,
           });
           if (!controller.signal.aborted) {
-            setResults(res.issues.filter((i) => !excludeIds.includes(i.id)));
+            setResults(res.issues.filter(selectable));
             setIsLoading(false);
           }
         } catch {
@@ -100,7 +104,7 @@ export function IssuePickerModal({
         }
       }, 300);
     },
-    [excludeIds],
+    [selectable],
   );
 
   const row = (issue: Issue) => (

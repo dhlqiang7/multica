@@ -496,6 +496,7 @@
     "show_more_activities_other": "Afficher {{count}} activités de plus",
     "duplicate_marked": "a marqué cette tâche comme doublon de {{identifier}}",
     "duplicate_unmarked": "a retiré la marque de doublon de {{identifier}} sur cette tâche",
+    "duplicate_unmarked_to": "a retiré la marque de doublon de {{identifier}} sur cette tâche et l'a passée en {{status}}",
     "duplicate_unmarked_original_deleted": "a retiré la marque de doublon, {{identifier}} a été supprimée",
     "duplicate_added": "a marqué {{identifier}} comme doublon de cette tâche",
     "duplicate_removed": "a retiré la marque de doublon de {{identifier}}"

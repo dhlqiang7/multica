@@ -379,6 +379,11 @@ WHERE workspace_id = sqlc.arg('workspace_id')
   AND status = 'cancelled'
 ORDER BY created_at ASC, id ASC;
 
+-- name: GetIssueRefInWorkspace :one
+-- The summary a duplicate's response carries for its original (MUL-7349).
+SELECT id, number, title, status FROM issue
+WHERE id = $1 AND workspace_id = $2;
+
 -- name: ClearIssueDuplicatesOf :many
 -- Deleting an issue clears the pointers of its duplicates, the way deleting a
 -- parent detaches its children. They stay cancelled. Issues deleted in the

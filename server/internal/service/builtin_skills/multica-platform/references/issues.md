@@ -277,7 +277,9 @@ archived statuses remain readable via an explicit status filter.
   flight — a run in progress keeps going. To stop a running task, cancel the
   task itself.
   A cancelled issue may also be marked as a **duplicate** of another issue
-  (`GET /api/issues/<id>/duplicates` shows both sides). Moving it to any
+  (`GET /api/issues/<id>/duplicates` shows both sides; issue responses carry
+  the original as `duplicate_of` with its id, identifier, title and status
+  while the mark counts). Moving it to any
   status other than `cancelled` removes the mark, so reopen a duplicate only
   when it is really separate work. Marking logs `duplicate_marked` on the
   duplicate and `duplicate_added` on the original; removing the mark logs

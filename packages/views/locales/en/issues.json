@@ -496,6 +496,7 @@
     "show_more_activities_other": "Show {{count}} more activities",
     "duplicate_marked": "marked this issue as a duplicate of {{identifier}}",
     "duplicate_unmarked": "unmarked this issue as a duplicate of {{identifier}}",
+    "duplicate_unmarked_to": "unmarked this issue as a duplicate of {{identifier}} and moved it to {{status}}",
     "duplicate_unmarked_original_deleted": "removed the duplicate mark, {{identifier}} was deleted",
     "duplicate_added": "marked {{identifier}} as a duplicate of this issue",
     "duplicate_removed": "unmarked {{identifier}} as a duplicate of this issue"

@@ -487,6 +487,7 @@
     "show_more_activities_other": "展开更早 {{count}} 条动态",
     "duplicate_marked": "把这个任务标记为 {{identifier}} 的重复",
     "duplicate_unmarked": "取消了这个任务对 {{identifier}} 的重复标记",
+    "duplicate_unmarked_to": "取消了这个任务对 {{identifier}} 的重复标记，并移至{{status}}",
     "duplicate_unmarked_original_deleted": "移除了重复标记，{{identifier}} 已被删除",
     "duplicate_added": "把 {{identifier}} 标记为这个任务的重复",
     "duplicate_removed": "取消了 {{identifier}} 对这个任务的重复标记"

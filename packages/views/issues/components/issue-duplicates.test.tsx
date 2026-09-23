@@ -9,13 +9,11 @@ import type { Issue, IssueDuplicates } from "@multica/core/types";
 import { renderWithI18n } from "../../test/i18n";
 
 const listIssueDuplicates = vi.fn<(id: string) => Promise<IssueDuplicates>>();
-const getIssue = vi.fn<(id: string) => Promise<Issue>>();
 const navigate = vi.fn();
 
 vi.mock("@multica/core/api", () => ({
   api: {
     listIssueDuplicates: (id: string) => listIssueDuplicates(id),
-    getIssue: (id: string) => getIssue(id),
   },
 }));
 vi.mock("@multica/core/hooks", () => ({
@@ -31,12 +29,30 @@ vi.mock("../../common/actor-avatar", () => ({
   ActorAvatar: ({ actorId }: { actorId: string }) => <span data-testid="avatar">{actorId}</span>,
 }));
 vi.mock("../../navigation", () => ({
-  AppLink: ({ href, children, className }: { href: string; children: ReactNode; className?: string }) => (
-    <a href={href} className={className}>
+  AppLink: ({
+    href,
+    children,
+    className,
+    title,
+    onClick,
+    onAuxClick,
+  }: {
+    href: string;
+    children: ReactNode;
+    className?: string;
+    title?: string;
+    onClick?: (e: React.MouseEvent<HTMLAnchorElement>) => void;
+    onAuxClick?: (e: React.MouseEvent<HTMLAnchorElement>) => void;
+  }) => (
+    <a href={href} className={className} title={title} onClick={onClick} onAuxClick={onAuxClick}>
       {children}
     </a>
   ),
   resolveClickIntent: () => "push",
+  rowLinkInteractiveProps: {
+    onClick: (e: React.MouseEvent) => e.stopPropagation(),
+    onAuxClick: (e: React.MouseEvent) => e.stopPropagation(),
+  },
   useIntentNavigate: () => (...args: unknown[]) => navigate(...args),
 }));
 
@@ -66,7 +82,7 @@ const DUPLICATE = issue({
   title: "Status picker is hard to tap",
   status: "cancelled",
   creator_id: "user-2",
-  duplicate_of_issue_id: "original",
+  duplicate_of: { id: "original", identifier: "MUL-6980", title: "Tap targets are too small", status: "in_progress" },
 });
 
 function renderWithQuery(ui: ReactNode) {
@@ -77,7 +93,6 @@ function renderWithQuery(ui: ReactNode) {
 afterEach(() => {
   cleanup();
   listIssueDuplicates.mockReset();
-  getIssue.mockReset();
   navigate.mockReset();
 });
 
@@ -85,7 +100,7 @@ describe("isDuplicateIssue", () => {
   it("only counts a pointer while the issue is cancelled", () => {
     expect(isDuplicateIssue(DUPLICATE)).toBe(true);
     expect(isDuplicateIssue({ ...DUPLICATE, status: "todo" })).toBe(false);
-    expect(isDuplicateIssue({ ...DUPLICATE, duplicate_of_issue_id: null })).toBe(false);
+    expect(isDuplicateIssue({ ...DUPLICATE, duplicate_of: null })).toBe(false);
     expect(isDuplicateIssue({ status: "cancelled" } as Issue)).toBe(false);
   });
 });
@@ -144,18 +159,33 @@ describe("IssueDuplicatesSection", () => {
 });
 
 describe("IssueDuplicateOfMarker", () => {
-  it("names the original and opens it without triggering the row", async () => {
-    getIssue.mockResolvedValue(ORIGINAL);
+  it("is a real link to the original where the row is not one", () => {
+    const rowClick = vi.fn();
+    renderWithQuery(
+      <div onClick={rowClick}>
+        {DUPLICATE.title} <IssueDuplicateOfMarker issue={DUPLICATE} />
+      </div>,
+    );
+
+    const marker = screen.getByRole("link", { name: "MUL-6980" });
+    expect(marker.tagName).toBe("A");
+    expect(marker.getAttribute("href")).toBe("/acme/issues/original");
+    expect(marker.getAttribute("title")).toBe("Duplicate of MUL-6980 Tap targets are too small");
+
+    fireEvent.click(marker);
+    expect(rowClick).not.toHaveBeenCalled();
+  });
+
+  it("navigates without an anchor when nested inside the row's link", () => {
     const rowClick = vi.fn();
     renderWithQuery(
       <a href="/acme/issues/duplicate" onClick={rowClick}>
-        {DUPLICATE.title} <IssueDuplicateOfMarker issue={DUPLICATE} />
+        {DUPLICATE.title} <IssueDuplicateOfMarker issue={DUPLICATE} insideLink />
       </a>,
     );
 
-    const marker = await screen.findByRole("link", { name: "MUL-6980" });
-    expect(marker.getAttribute("title")).toBe("Duplicate of MUL-6980 Tap targets are too small");
-
+    const marker = screen.getByRole("link", { name: "MUL-6980" });
+    expect(marker.tagName).toBe("SPAN");
     fireEvent.click(marker);
     expect(navigate).toHaveBeenCalledWith("/acme/issues/original", "push", "MUL-6980");
     expect(rowClick).not.toHaveBeenCalled();
@@ -164,6 +194,5 @@ describe("IssueDuplicateOfMarker", () => {
   it("renders nothing for an issue that is not a duplicate", () => {
     const { container } = renderWithQuery(<IssueDuplicateOfMarker issue={ORIGINAL} />);
     expect(container.textContent).toBe("");
-    expect(getIssue).not.toHaveBeenCalled();
   });
 });

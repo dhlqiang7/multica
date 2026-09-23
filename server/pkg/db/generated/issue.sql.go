@@ -1013,6 +1013,36 @@ func (q *Queries) GetIssueMetadataInWorkspace(ctx context.Context, arg GetIssueM
 	return i, err
 }
 
+const getIssueRefInWorkspace = `-- name: GetIssueRefInWorkspace :one
+SELECT id, number, title, status FROM issue
+WHERE id = $1 AND workspace_id = $2
+`
+
+type GetIssueRefInWorkspaceParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+type GetIssueRefInWorkspaceRow struct {
+	ID     pgtype.UUID `json:"id"`
+	Number int32       `json:"number"`
+	Title  string      `json:"title"`
+	Status string      `json:"status"`
+}
+
+// The summary a duplicate's response carries for its original (MUL-7349).
+func (q *Queries) GetIssueRefInWorkspace(ctx context.Context, arg GetIssueRefInWorkspaceParams) (GetIssueRefInWorkspaceRow, error) {
+	row := q.db.QueryRow(ctx, getIssueRefInWorkspace, arg.ID, arg.WorkspaceID)
+	var i GetIssueRefInWorkspaceRow
+	err := row.Scan(
+		&i.ID,
+		&i.Number,
+		&i.Title,
+		&i.Status,
+	)
+	return i, err
+}
+
 const getIssueTriageState = `-- name: GetIssueTriageState :one
 SELECT triage_state FROM issue WHERE id = $1
 `

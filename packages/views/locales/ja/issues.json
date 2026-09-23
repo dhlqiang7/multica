@@ -487,6 +487,7 @@
     "show_more_activities_other": "アクティビティをさらに {{count}} 件表示",
     "duplicate_marked": "このタスクを {{identifier}} の重複としてマークしました",
     "duplicate_unmarked": "このタスクの {{identifier}} との重複マークを解除しました",
+    "duplicate_unmarked_to": "このタスクの {{identifier}} との重複マークを解除し、{{status}} に移動しました",
     "duplicate_unmarked_original_deleted": "重複マークを解除しました（{{identifier}} は削除されました）",
     "duplicate_added": "{{identifier}} をこのタスクの重複としてマークしました",
     "duplicate_removed": "{{identifier}} の重複マークを解除しました"

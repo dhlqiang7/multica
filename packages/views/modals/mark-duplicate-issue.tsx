@@ -22,6 +22,8 @@ import { useT } from "../i18n";
 
 const SUGGESTION_LIMIT = 6;
 
+const notDuplicate = (candidate: Issue) => !isDuplicateIssue(candidate);
+
 /**
  * Marks an issue as a duplicate of the picked one (MUL-7349). A duplicate is a
  * cancelled issue that remembers its original, so the write also cancels it.
@@ -30,7 +32,7 @@ const SUGGESTION_LIMIT = 6;
  * title matches this one's (the same bug filed twice) and the issues viewed
  * most recently, since the original is usually the one that prompted the
  * mark. Issues that are duplicates themselves cannot be originals and are
- * left out.
+ * left out of candidates and search results alike.
  */
 export function MarkDuplicateIssueModal({
   onClose,
@@ -76,15 +78,14 @@ export function MarkDuplicateIssueModal({
   );
 
   const suggestions = useMemo<IssuePickerSuggestionGroup[]>(() => {
-    const usable = (candidate: Issue) => !isDuplicateIssue(candidate);
-    const similar = (sameTitle?.issues ?? []).filter(usable);
+    const similar = sameTitle?.issues ?? [];
     const seen = new Set(similar.map((i) => i.id));
     return [
       { key: "similar", heading: t(($) => $.issue_picker.suggested_similar), issues: similar },
       {
         key: "recent",
         heading: t(($) => $.issue_picker.suggested_recent),
-        issues: recent.filter((i) => usable(i) && !seen.has(i.id)),
+        issues: recent.filter((i) => !seen.has(i.id)),
       },
     ];
   }, [sameTitle, recent, t]);
@@ -99,6 +100,7 @@ export function MarkDuplicateIssueModal({
       description={t(($) => $.mark_duplicate.description)}
       excludeIds={excludeIds}
       suggestions={suggestions}
+      isSelectable={notDuplicate}
       onSelect={(selected) => {
         updateIssue.mutate(
           {

@@ -63,6 +63,12 @@ func registerActivityListeners(bus *events.Bus, queries *db.Queries) {
 		}
 
 		statusChanged, _ := payload["status_changed"].(bool)
+		// A duplicate mark change is a status change with a better name: the
+		// duplicate row names the other issue and where the status went, so
+		// the generic status row would only repeat it (MUL-7349).
+		if duplicateMarkChanged(payload) {
+			statusChanged = false
+		}
 		priorityChanged, _ := payload["priority_changed"].(bool)
 		assigneeChanged, _ := payload["assignee_changed"].(bool)
 		descriptionChanged, _ := payload["description_changed"].(bool)
@@ -337,11 +343,12 @@ func publishActivityEvent(bus *events.Bus, original events.Event, activity db.Ac
 // prev_duplicate_of_issue_id. Details name the other issue by id, for
 // linking, and by identifier, so the row still reads once that issue is gone.
 func recordDuplicateMarkActivities(ctx context.Context, bus *events.Bus, queries *db.Queries, e events.Event, issue handler.IssueResponse, payload map[string]any) {
-	next := derefPayloadString(payload["duplicate_of_issue_id"])
-	prev := derefPayloadString(payload["prev_duplicate_of_issue_id"])
-	if next == prev {
+	if !duplicateMarkChanged(payload) {
 		return
 	}
+	next := derefPayloadString(payload["duplicate_of_issue_id"])
+	prev := derefPayloadString(payload["prev_duplicate_of_issue_id"])
+	statusChanged, _ := payload["status_changed"].(bool)
 	record := func(issueID, action string, details map[string]string) {
 		body, _ := json.Marshal(details)
 		activity, err := queries.CreateActivity(ctx, db.CreateActivityParams{
@@ -364,7 +371,13 @@ func recordDuplicateMarkActivities(ctx context.Context, bus *events.Bus, queries
 
 	if prev != "" {
 		if identifier, ok := lookupIssueIdentifier(ctx, queries, issue.WorkspaceID, prev); ok {
-			record(issue.ID, "duplicate_unmarked", map[string]string{"original_id": prev, "original_identifier": identifier})
+			details := map[string]string{"original_id": prev, "original_identifier": identifier}
+			if statusChanged {
+				// Removing a mark by reopening moved the status too; this row
+				// stands in for the status row, so it says where.
+				details["to"] = issue.Status
+			}
+			record(issue.ID, "duplicate_unmarked", details)
 			record(prev, "duplicate_removed", self)
 		} else if identifier, _ := payload["prev_duplicate_of_identifier"].(string); identifier != "" {
 			// The original was deleted and took its own log with it; the delete
@@ -380,6 +393,12 @@ func recordDuplicateMarkActivities(ctx context.Context, bus *events.Bus, queries
 			record(next, "duplicate_added", self)
 		}
 	}
+}
+
+// duplicateMarkChanged reports whether an issue:updated payload carries a
+// duplicate mark change: both ends ride as *string fields.
+func duplicateMarkChanged(payload map[string]any) bool {
+	return derefPayloadString(payload["duplicate_of_issue_id"]) != derefPayloadString(payload["prev_duplicate_of_issue_id"])
 }
 
 // derefPayloadString reads a *string payload field; nil and absent read as "".

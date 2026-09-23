@@ -67,12 +67,13 @@ type IssueResponse struct {
 	CreatorType   string  `json:"creator_type"`
 	CreatorID     string  `json:"creator_id"`
 	ParentIssueID *string `json:"parent_issue_id"`
-	// DuplicateOfIssueID is the original this issue duplicates (MUL-7349).
-	// Set only while the issue is cancelled; the mark means nothing outside
-	// that state and the server clears it when the status leaves cancelled.
-	DuplicateOfIssueID *string `json:"duplicate_of_issue_id"`
-	ProjectID          *string `json:"project_id"`
-	Position           float64 `json:"position"`
+	// DuplicateOf is the original this issue duplicates (MUL-7349), set only
+	// while the mark counts: the issue is cancelled and the original still
+	// exists. newStatusCategoryFiller resolves it from duplicateOfIssueID;
+	// an endpoint that skips the filler emits null rather than a bare pointer.
+	DuplicateOf *IssueRefResponse `json:"duplicate_of"`
+	ProjectID   *string           `json:"project_id"`
+	Position    float64           `json:"position"`
 	// Stage groups sub-issues under the same parent into ordered barrier
 	// groups (null = unstaged). See issue_child_done.go for how a closed
 	// stage gates the child-done -> parent wake.
@@ -104,6 +105,17 @@ type IssueResponse struct {
 	// SourceContext is detail-only. List, board, search, and children responses
 	// deliberately omit the potentially large immutable snapshot.
 	SourceContext *sourceContextDetailResponse `json:"source_context,omitempty"`
+	// duplicateOfIssueID is the raw mark, kept off the wire; see DuplicateOf.
+	duplicateOfIssueID pgtype.UUID
+}
+
+// IssueRefResponse names another issue inside a response: enough to render
+// a link and its status without a second request.
+type IssueRefResponse struct {
+	ID         string `json:"id"`
+	Identifier string `json:"identifier"`
+	Title      string `json:"title"`
+	Status     string `json:"status"`
 }
 
 // validIssuePriorities mirrors the CHECK constraint on the issue table. Write
@@ -355,8 +367,15 @@ func (h *Handler) fillStatusCategories(ctx context.Context, wsID pgtype.UUID, re
 // this exists to avoid. (MUL-6243)
 func (h *Handler) newStatusCategoryFiller(ctx context.Context, wsID pgtype.UUID) func(*IssueResponse) {
 	resolver := issuestatus.NewResolver(wsID)
+	originals := map[pgtype.UUID]*IssueRefResponse{}
 	return func(resp *IssueResponse) {
-		if resp == nil || resp.StatusCategory != "" {
+		if resp == nil {
+			return
+		}
+		// Every response that resolves its status also resolves its duplicate
+		// mark, so the two never disagree about which endpoints carry them.
+		h.fillDuplicateOf(ctx, wsID, resp, originals)
+		if resp.StatusCategory != "" {
 			return
 		}
 		resp.StatusCategory = issuestatus.WireCategory(resp.Status, resolver.Category(ctx, h.Queries, resp.Status))
@@ -372,14 +391,51 @@ func (h *Handler) fillStatusCategory(ctx context.Context, wsID pgtype.UUID, resp
 	h.newStatusCategoryFiller(ctx, wsID)(resp)
 }
 
-// duplicateOfPtr exposes a duplicate mark only while it counts: the issue is
-// cancelled. Reads apply the rule themselves (see IssueHasDuplicates in
-// issue.sql) so a pointer an older server left behind never surfaces.
-func duplicateOfPtr(status string, id pgtype.UUID) *string {
+// duplicateOfPointer keeps a duplicate mark only while the issue is
+// cancelled. Whether the original still exists is checked when the response
+// is filled (fillDuplicateOf), so a pointer an older server left behind
+// never surfaces. Same rule as IssueHasDuplicates in issue.sql.
+func duplicateOfPointer(status string, id pgtype.UUID) pgtype.UUID {
 	if status != issuestatus.Cancelled {
-		return nil
+		return pgtype.UUID{}
 	}
-	return uuidToPtr(id)
+	return id
+}
+
+// fillDuplicateOf resolves a duplicate mark to its original (MUL-7349): a
+// primary-key read per distinct original, memoised in memo across one
+// response so many duplicates of one issue cost one read. A missing original
+// (memoised as nil) leaves DuplicateOf unset.
+func (h *Handler) fillDuplicateOf(ctx context.Context, wsID pgtype.UUID, resp *IssueResponse, memo map[pgtype.UUID]*IssueRefResponse) {
+	if !resp.duplicateOfIssueID.Valid {
+		return
+	}
+	ref, seen := memo[resp.duplicateOfIssueID]
+	if !seen {
+		row, err := h.Queries.GetIssueRefInWorkspace(ctx, db.GetIssueRefInWorkspaceParams{
+			ID:          resp.duplicateOfIssueID,
+			WorkspaceID: wsID,
+		})
+		switch {
+		case err == nil:
+			// The response already rendered its own identifier with the
+			// workspace prefix; the original shares it.
+			prefix := strings.TrimSuffix(resp.Identifier, "-"+strconv.Itoa(int(resp.Number)))
+			ref = &IssueRefResponse{
+				ID:         uuidToString(row.ID),
+				Identifier: prefix + "-" + strconv.Itoa(int(row.Number)),
+				Title:      row.Title,
+				Status:     row.Status,
+			}
+		case !isNotFound(err):
+			slog.Warn("resolve duplicate original failed", "error", err, "issue_id", resp.ID)
+		}
+		memo[resp.duplicateOfIssueID] = ref
+	}
+	if ref != nil {
+		copied := *ref
+		resp.DuplicateOf = &copied
+	}
 }
 
 func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
@@ -405,7 +461,7 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 		CreatorType:        i.CreatorType,
 		CreatorID:          uuidToString(i.CreatorID),
 		ParentIssueID:      uuidToPtr(i.ParentIssueID),
-		DuplicateOfIssueID: duplicateOfPtr(i.Status, i.DuplicateOfIssueID),
+		duplicateOfIssueID: duplicateOfPointer(i.Status, i.DuplicateOfIssueID),
 		ProjectID:          uuidToPtr(i.ProjectID),
 		Position:           i.Position,
 		Stage:              int4ToPtr(i.Stage),
@@ -443,7 +499,7 @@ func issueListRowToResponse(i db.ListIssuesRow, issuePrefix string) IssueRespons
 		CreatorType:        i.CreatorType,
 		CreatorID:          uuidToString(i.CreatorID),
 		ParentIssueID:      uuidToPtr(i.ParentIssueID),
-		DuplicateOfIssueID: duplicateOfPtr(i.Status, i.DuplicateOfIssueID),
+		duplicateOfIssueID: duplicateOfPointer(i.Status, i.DuplicateOfIssueID),
 		ProjectID:          uuidToPtr(i.ProjectID),
 		Position:           i.Position,
 		Stage:              int4ToPtr(i.Stage),
@@ -513,7 +569,7 @@ func openIssueRowToResponse(i db.ListOpenIssuesRow, issuePrefix string) IssueRes
 		CreatorType:        i.CreatorType,
 		CreatorID:          uuidToString(i.CreatorID),
 		ParentIssueID:      uuidToPtr(i.ParentIssueID),
-		DuplicateOfIssueID: duplicateOfPtr(i.Status, i.DuplicateOfIssueID),
+		duplicateOfIssueID: duplicateOfPointer(i.Status, i.DuplicateOfIssueID),
 		ProjectID:          uuidToPtr(i.ProjectID),
 		Position:           i.Position,
 		Stage:              int4ToPtr(i.Stage),

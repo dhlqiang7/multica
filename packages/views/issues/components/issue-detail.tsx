@@ -348,14 +348,21 @@ function formatActivity(
       return t(($) => $.activity.duplicate_marked, {
         identifier: details.original_identifier || "?",
       });
-    case "duplicate_unmarked":
-      return details.reason === "original_deleted"
-        ? t(($) => $.activity.duplicate_unmarked_original_deleted, {
-            identifier: details.original_identifier || "?",
-          })
-        : t(($) => $.activity.duplicate_unmarked, {
-            identifier: details.original_identifier || "?",
-          });
+    case "duplicate_unmarked": {
+      const identifier = details.original_identifier || "?";
+      if (details.reason === "original_deleted") {
+        return t(($) => $.activity.duplicate_unmarked_original_deleted, { identifier });
+      }
+      // The row stands in for the status row of the reopen, so it says where
+      // the status went.
+      if (details.to) {
+        return t(($) => $.activity.duplicate_unmarked_to, {
+          identifier,
+          status: statusLabel(details.to, t, resolveStatusLabel),
+        });
+      }
+      return t(($) => $.activity.duplicate_unmarked, { identifier });
+    }
     case "duplicate_added":
       return t(($) => $.activity.duplicate_added, {
         identifier: details.duplicate_identifier || "?",
@@ -684,19 +691,24 @@ function ActivityBlock({
       )}
       {visibleEntries.map((entry) => {
         const details = (entry.details ?? {}) as Record<string, string>;
+        // Duplicate rows replace the status rows of the same write, so they
+        // carry the status glyph those rows would have had.
         const isStatusChange = entry.action === "status_changed";
+        const markedDuplicate = entry.action === "duplicate_marked";
+        const unmarkedDuplicate = entry.action === "duplicate_unmarked" && !!details.to;
         const isPriorityChange = entry.action === "priority_changed";
         const isStartDateChange = entry.action === "start_date_changed";
         const isDueDateChange = entry.action === "due_date_changed";
 
         let leadIcon: React.ReactNode;
-        if (isStatusChange && details.to) {
+        if ((isStatusChange && details.to) || markedDuplicate || unmarkedDuplicate) {
+          const to = markedDuplicate ? "cancelled" : details.to;
           leadIcon = (
             <StatusIcon
-              status={details.to as IssueStatus}
-              category={resolveStatusCategory(details.to ?? "")}
-              color={resolveStatusColor(details.to ?? "")}
-              icon={resolveStatusIcon(details.to ?? "")}
+              status={to as IssueStatus}
+              category={resolveStatusCategory(to ?? "")}
+              color={resolveStatusColor(to ?? "")}
+              icon={resolveStatusIcon(to ?? "")}
               className="h-4 w-4 shrink-0"
             />
           );

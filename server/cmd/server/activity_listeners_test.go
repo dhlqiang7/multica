@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"testing"
 
 	"github.com/multica-ai/multica/server/internal/events"
@@ -407,17 +408,18 @@ func TestActivityTaskFailed(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Duplicate marks (MUL-7349) log on both issues. Every publisher of a mark
-// change carries both ends of it, the way UpdateIssue does.
+// change carries both ends of it, the way UpdateIssue does, and the mark row
+// stands in for the status row the same write would otherwise log.
 // ---------------------------------------------------------------------------
 
-func duplicateMarkEvent(issueID, identifier string, prev, next *string, extra map[string]any) events.Event {
+func duplicateMarkEvent(issueID, identifier, status string, prev, next *string, extra map[string]any) events.Event {
 	payload := map[string]any{
 		"issue": handler.IssueResponse{
 			ID:          issueID,
 			WorkspaceID: testWorkspaceID,
 			Identifier:  identifier,
 			Title:       "duplicate activity test issue",
-			Status:      "cancelled",
+			Status:      status,
 			Priority:    "medium",
 			CreatorType: "member",
 			CreatorID:   testUserID,
@@ -457,6 +459,15 @@ func activityDetails(t *testing.T, queries *db.Queries, issueID, action string) 
 	return details
 }
 
+func activityActions(t *testing.T, queries *db.Queries, issueID string) []string {
+	t.Helper()
+	var actions []string
+	for _, a := range listActivitiesForIssue(t, queries, issueID) {
+		actions = append(actions, a.Action)
+	}
+	return actions
+}
+
 func testIssueIdentifier(t *testing.T, queries *db.Queries, issueID string) string {
 	t.Helper()
 	ctx := context.Background()
@@ -486,11 +497,16 @@ func newDuplicateTestIssues(t *testing.T, queries *db.Queries) (bus *events.Bus,
 	return bus, duplicateID, originalID
 }
 
+// Marking is a status write to cancelled; the mark row replaces the status
+// row rather than sitting beside it.
 func TestActivityIssueUpdated_DuplicateMarked(t *testing.T) {
 	queries := db.New(testPool)
 	bus, duplicateID, originalID := newDuplicateTestIssues(t, queries)
 
-	bus.Publish(duplicateMarkEvent(duplicateID, "MUL-7624", nil, &originalID, nil))
+	bus.Publish(duplicateMarkEvent(duplicateID, "MUL-7624", "cancelled", nil, &originalID, map[string]any{
+		"status_changed": true,
+		"prev_status":    "todo",
+	}))
 
 	marked := activityDetails(t, queries, duplicateID, "duplicate_marked")
 	if marked["original_id"] != originalID {
@@ -503,29 +519,37 @@ func TestActivityIssueUpdated_DuplicateMarked(t *testing.T) {
 	if added["duplicate_id"] != duplicateID || added["duplicate_identifier"] != "MUL-7624" {
 		t.Fatalf("duplicate_added details = %v", added)
 	}
-	if got := len(listActivitiesForIssue(t, queries, duplicateID)); got != 1 {
-		t.Fatalf("expected 1 activity on the duplicate, got %d", got)
+	if got := activityActions(t, queries, duplicateID); len(got) != 1 {
+		t.Fatalf("expected only the duplicate_marked row on the duplicate, got %v", got)
 	}
 }
 
+// Reopening removes the mark; the unmarked row carries the new status the
+// suppressed status row would have named.
 func TestActivityIssueUpdated_DuplicateUnmarked(t *testing.T) {
 	queries := db.New(testPool)
 	bus, duplicateID, originalID := newDuplicateTestIssues(t, queries)
 
-	bus.Publish(duplicateMarkEvent(duplicateID, "MUL-7624", &originalID, nil, nil))
+	bus.Publish(duplicateMarkEvent(duplicateID, "MUL-7624", "todo", &originalID, nil, map[string]any{
+		"status_changed": true,
+		"prev_status":    "cancelled",
+	}))
 
 	unmarked := activityDetails(t, queries, duplicateID, "duplicate_unmarked")
-	if unmarked["original_id"] != originalID || unmarked["reason"] != "" {
+	if unmarked["original_id"] != originalID || unmarked["reason"] != "" || unmarked["to"] != "todo" {
 		t.Fatalf("duplicate_unmarked details = %v", unmarked)
 	}
 	removed := activityDetails(t, queries, originalID, "duplicate_removed")
 	if removed["duplicate_id"] != duplicateID {
 		t.Fatalf("duplicate_removed details = %v", removed)
 	}
+	if got := activityActions(t, queries, duplicateID); len(got) != 1 {
+		t.Fatalf("expected only the duplicate_unmarked row on the duplicate, got %v", got)
+	}
 }
 
 // Moving a mark from one original to another reads as leaving the first and
-// joining the second, on all three issues.
+// joining the second, on all three issues. The status did not move.
 func TestActivityIssueUpdated_DuplicateRepointed(t *testing.T) {
 	queries := db.New(testPool)
 	bus, duplicateID, firstID := newDuplicateTestIssues(t, queries)
@@ -535,10 +559,11 @@ func TestActivityIssueUpdated_DuplicateRepointed(t *testing.T) {
 		cleanupTestIssue(t, secondID)
 	})
 
-	bus.Publish(duplicateMarkEvent(duplicateID, "MUL-7624", &firstID, &secondID, nil))
+	bus.Publish(duplicateMarkEvent(duplicateID, "MUL-7624", "cancelled", &firstID, &secondID, nil))
 
-	if got := activityDetails(t, queries, duplicateID, "duplicate_unmarked"); got["original_id"] != firstID {
-		t.Fatalf("duplicate_unmarked original_id = %q, want %q", got["original_id"], firstID)
+	unmarked := activityDetails(t, queries, duplicateID, "duplicate_unmarked")
+	if unmarked["original_id"] != firstID || unmarked["to"] != "" {
+		t.Fatalf("duplicate_unmarked details = %v", unmarked)
 	}
 	if got := activityDetails(t, queries, duplicateID, "duplicate_marked"); got["original_id"] != secondID {
 		t.Fatalf("duplicate_marked original_id = %q, want %q", got["original_id"], secondID)
@@ -554,12 +579,12 @@ func TestActivityIssueUpdated_DuplicateOriginalDeleted(t *testing.T) {
 	bus, duplicateID, _ := newDuplicateTestIssues(t, queries)
 	gone := "00000000-0000-4000-8000-00000000dead"
 
-	bus.Publish(duplicateMarkEvent(duplicateID, "MUL-7624", &gone, nil, map[string]any{
+	bus.Publish(duplicateMarkEvent(duplicateID, "MUL-7624", "cancelled", &gone, nil, map[string]any{
 		"prev_duplicate_of_identifier": "MUL-7349",
 	}))
 
 	unmarked := activityDetails(t, queries, duplicateID, "duplicate_unmarked")
-	if unmarked["original_identifier"] != "MUL-7349" || unmarked["reason"] != "original_deleted" {
+	if unmarked["original_identifier"] != "MUL-7349" || unmarked["reason"] != "original_deleted" || unmarked["to"] != "" {
 		t.Fatalf("duplicate_unmarked details = %v", unmarked)
 	}
 }
@@ -569,12 +594,71 @@ func TestActivityIssueUpdated_DuplicateUnchanged(t *testing.T) {
 	bus, duplicateID, originalID := newDuplicateTestIssues(t, queries)
 
 	// Re-marking the same original is a no-op on the server and must not log.
-	bus.Publish(duplicateMarkEvent(duplicateID, "MUL-7624", &originalID, &originalID, nil))
+	bus.Publish(duplicateMarkEvent(duplicateID, "MUL-7624", "cancelled", &originalID, &originalID, nil))
 
-	if got := len(listActivitiesForIssue(t, queries, duplicateID)); got != 0 {
-		t.Fatalf("expected no activities on the duplicate, got %d", got)
+	if got := activityActions(t, queries, duplicateID); len(got) != 0 {
+		t.Fatalf("expected no activities on the duplicate, got %v", got)
 	}
-	if got := len(listActivitiesForIssue(t, queries, originalID)); got != 0 {
-		t.Fatalf("expected no activities on the original, got %d", got)
+	if got := activityActions(t, queries, originalID); len(got) != 0 {
+		t.Fatalf("expected no activities on the original, got %v", got)
+	}
+}
+
+// A plain cancel with no mark still logs its status row: only a mark change
+// replaces it.
+func TestActivityIssueUpdated_PlainCancelKeepsStatusRow(t *testing.T) {
+	queries := db.New(testPool)
+	bus, issueID, _ := newDuplicateTestIssues(t, queries)
+
+	bus.Publish(duplicateMarkEvent(issueID, "MUL-7624", "cancelled", nil, nil, map[string]any{
+		"status_changed": true,
+		"prev_status":    "todo",
+	}))
+
+	if got := activityActions(t, queries, issueID); len(got) != 1 || got[0] != "status_changed" {
+		t.Fatalf("expected only status_changed, got %v", got)
+	}
+}
+
+// The real write path: marking and reopening through UpdateIssue produce one
+// duplicate row per side and no generic status row.
+func TestActivityDuplicateMarkThroughUpdateIssue(t *testing.T) {
+	queries := db.New(testPool)
+	duplicateID := createTestIssue(t, testWorkspaceID, testUserID)
+	originalID := createTestIssue(t, testWorkspaceID, testUserID)
+	t.Cleanup(func() {
+		cleanupActivities(t, duplicateID)
+		cleanupActivities(t, originalID)
+		cleanupTestIssue(t, duplicateID)
+		cleanupTestIssue(t, originalID)
+	})
+
+	resp := authRequest(t, "PUT", "/api/issues/"+duplicateID, map[string]any{
+		"duplicate_of_issue_id": originalID,
+	})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("mark: expected 200, got %d", resp.StatusCode)
+	}
+	if got := activityActions(t, queries, duplicateID); len(got) != 1 || got[0] != "duplicate_marked" {
+		t.Fatalf("after mark, duplicate activities = %v, want [duplicate_marked]", got)
+	}
+	if got := activityActions(t, queries, originalID); len(got) != 1 || got[0] != "duplicate_added" {
+		t.Fatalf("after mark, original activities = %v, want [duplicate_added]", got)
+	}
+
+	resp = authRequest(t, "PUT", "/api/issues/"+duplicateID, map[string]any{"status": "todo"})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("reopen: expected 200, got %d", resp.StatusCode)
+	}
+	if got := activityActions(t, queries, duplicateID); len(got) != 2 || got[1] != "duplicate_unmarked" {
+		t.Fatalf("after reopen, duplicate activities = %v, want [duplicate_marked duplicate_unmarked]", got)
+	}
+	if got := activityDetails(t, queries, duplicateID, "duplicate_unmarked"); got["to"] != "todo" {
+		t.Fatalf("duplicate_unmarked to = %q, want todo", got["to"])
+	}
+	if got := activityActions(t, queries, originalID); len(got) != 2 || got[1] != "duplicate_removed" {
+		t.Fatalf("after reopen, original activities = %v, want [duplicate_added duplicate_removed]", got)
 	}
 }

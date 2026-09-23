@@ -1774,14 +1774,26 @@ describe("IssueDetail (shared)", () => {
         details: { original_id: "issue-8", original_identifier: "MUL-8", reason: "original_deleted" },
         created_at: "2026-01-16T00:00:30Z",
       },
+      {
+        type: "activity",
+        id: "act-dup-reopened",
+        actor_type: "member",
+        actor_id: "user-1",
+        action: "duplicate_unmarked",
+        details: { original_id: "issue-9", original_identifier: "MUL-9", to: "todo" },
+        created_at: "2026-01-16T00:01:00Z",
+      },
     ]);
     renderIssueDetail();
 
-    const link = await screen.findByRole("link", { name: "MUL-9" });
-    expect(link.getAttribute("href")).toBe("/test/issues/issue-9");
-    expect(screen.getByText(/marked this issue as a duplicate of/i)).toBeInTheDocument();
+    const links = await screen.findAllByRole("link", { name: "MUL-9" });
+    expect(links[0]?.getAttribute("href")).toBe("/test/issues/issue-9");
+    expect(screen.getByText(/^marked this issue as a duplicate of/i)).toBeInTheDocument();
     expect(screen.getByText(/removed the duplicate mark, MUL-8 was deleted/i)).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "MUL-8" })).not.toBeInTheDocument();
+    // Reopening replaces the status row, so the unmarked row says where it went.
+    expect(screen.getByText(/and moved it to Todo/i)).toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "MUL-9" })).toHaveLength(2);
   });
 
   it("renders activity rows with unknown status values without crashing", async () => {

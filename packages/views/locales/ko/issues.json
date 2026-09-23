@@ -487,6 +487,7 @@
     "show_more_activities_other": "활동 {{count}}개 더 보기",
     "duplicate_marked": "이 태스크를 {{identifier}}의 중복으로 표시했습니다",
     "duplicate_unmarked": "이 태스크의 {{identifier}} 중복 표시를 해제했습니다",
+    "duplicate_unmarked_to": "이 태스크의 {{identifier}} 중복 표시를 해제하고 {{status}}(으)로 이동했습니다",
     "duplicate_unmarked_original_deleted": "중복 표시를 해제했습니다 ({{identifier}} 삭제됨)",
     "duplicate_added": "{{identifier}}을(를) 이 태스크의 중복으로 표시했습니다",
     "duplicate_removed": "{{identifier}}의 중복 표시를 해제했습니다"

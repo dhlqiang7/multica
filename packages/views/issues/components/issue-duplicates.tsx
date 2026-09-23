@@ -3,15 +3,15 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, ChevronRight } from "lucide-react";
-import type { Issue } from "@multica/core/types";
+import type { Issue, IssueDuplicateOf } from "@multica/core/types";
 import { issueStatusCategory } from "@multica/core/issues";
-import { issueDetailOptions, issueDuplicatesOptions } from "@multica/core/issues/queries";
+import { issueDuplicatesOptions } from "@multica/core/issues/queries";
 import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";
 import { ActorAvatar } from "../../common/actor-avatar";
-import { AppLink, resolveClickIntent, useIntentNavigate } from "../../navigation";
+import { AppLink, resolveClickIntent, rowLinkInteractiveProps, useIntentNavigate } from "../../navigation";
 import { StatusIcon } from "./status-icon";
 import { useT } from "../../i18n";
 
@@ -19,11 +19,9 @@ import { useT } from "../../i18n";
 // its original; the server clears the mark whenever the status leaves
 // cancelled, so every surface below also keys off the status.
 
-/** True while the mark counts: the issue is cancelled and points somewhere. */
-export function isDuplicateIssue(
-  issue: Pick<Issue, "status" | "duplicate_of_issue_id">,
-): boolean {
-  return issue.status === "cancelled" && !!issue.duplicate_of_issue_id;
+/** True while the mark counts: the issue is cancelled and the server resolved its original. */
+export function isDuplicateIssue(issue: Pick<Issue, "status" | "duplicate_of">): boolean {
+  return issue.status === "cancelled" && !!issue.duplicate_of;
 }
 
 /**
@@ -138,45 +136,79 @@ export function IssueDuplicatesSection({ issueId }: { issueId: string }) {
 
 /**
  * "→ MUL-123" beside a duplicate in list rows, board cards and table cells,
- * so the original is one click away instead of two. Rows that are not
- * duplicates render nothing and subscribe to nothing: the query and
- * navigation hooks live in the inner component, which only mounts once the
- * issue carries a mark.
+ * so the original is one click away instead of two. The server resolves the
+ * original into `issue.duplicate_of`, so this needs no request of its own,
+ * and rows that are not duplicates render nothing.
+ *
+ * It is a real link wherever the row is not one itself (the table's rows are
+ * plain elements). List rows and board cards are anchors, and an anchor may
+ * not contain another, so there it is a keyboard-operable control that
+ * navigates like a link and stops the row from also opening the duplicate.
  */
 export function IssueDuplicateOfMarker({
   issue,
   className,
+  insideLink = false,
 }: {
   issue: Issue;
   className?: string;
+  /** The row containing this marker is itself an anchor. */
+  insideLink?: boolean;
 }) {
   if (!isDuplicateIssue(issue)) return null;
-  return <DuplicateOfLink originalId={issue.duplicate_of_issue_id!} className={className} />;
+  const original = issue.duplicate_of!;
+  return insideLink ? (
+    <DuplicateOfControl original={original} className={className} />
+  ) : (
+    <DuplicateOfAnchor original={original} className={className} />
+  );
 }
 
-/**
- * The marker's link. Those rows are anchors, so this is a nested control: it
- * navigates on its own and stops the row from also opening the duplicate.
- * The original is resolved through the detail query, shared with every other
- * row pointing at the same issue.
- */
-function DuplicateOfLink({
-  originalId,
+const MARKER_CLASS =
+  "inline-flex shrink-0 cursor-pointer items-center gap-0.5 text-caption text-muted-foreground underline-offset-4 hover:text-foreground hover:underline";
+
+function useMarkerTooltip(original: IssueDuplicateOf) {
+  const { t } = useT("issues");
+  return `${t(($) => $.duplicates.banner_prefix)} ${original.identifier} ${original.title}`;
+}
+
+const stopPress = (e: React.SyntheticEvent) => e.stopPropagation();
+
+function DuplicateOfAnchor({
+  original,
   className,
 }: {
-  originalId: string;
+  original: IssueDuplicateOf;
   className?: string;
 }) {
-  const { t } = useT("issues");
-  const wsId = useWorkspaceId();
+  const paths = useWorkspacePaths();
+  const tooltip = useMarkerTooltip(original);
+  return (
+    <AppLink
+      href={paths.issueDetail(original.id)}
+      newTabTitle={original.identifier}
+      title={tooltip}
+      {...rowLinkInteractiveProps}
+      onMouseDown={stopPress}
+      onPointerDown={stopPress}
+      className={`${MARKER_CLASS} ${className ?? ""}`}
+    >
+      <ArrowRight className="size-3" />
+      {original.identifier}
+    </AppLink>
+  );
+}
+
+function DuplicateOfControl({
+  original,
+  className,
+}: {
+  original: IssueDuplicateOf;
+  className?: string;
+}) {
   const paths = useWorkspacePaths();
   const navigate = useIntentNavigate();
-  const { data: original } = useQuery({
-    ...issueDetailOptions(wsId, originalId),
-    staleTime: 60_000,
-  });
-  if (!original) return null;
-
+  const tooltip = useMarkerTooltip(original);
   const href = paths.issueDetail(original.id);
   const stop = (e: React.SyntheticEvent) => {
     e.preventDefault();
@@ -186,9 +218,9 @@ function DuplicateOfLink({
     <span
       role="link"
       tabIndex={0}
-      title={`${t(($) => $.duplicates.banner_prefix)} ${original.identifier} ${original.title}`}
-      onMouseDown={(e) => e.stopPropagation()}
-      onPointerDown={(e) => e.stopPropagation()}
+      title={tooltip}
+      onMouseDown={stopPress}
+      onPointerDown={stopPress}
       onClick={(e) => {
         stop(e);
         navigate(href, resolveClickIntent(e), original.identifier);
@@ -203,7 +235,7 @@ function DuplicateOfLink({
         stop(e);
         navigate(href, "push", original.identifier);
       }}
-      className={`inline-flex shrink-0 cursor-pointer items-center gap-0.5 text-caption text-muted-foreground underline-offset-4 hover:text-foreground hover:underline ${className ?? ""}`}
+      className={`${MARKER_CLASS} ${className ?? ""}`}
     >
       <ArrowRight className="size-3" />
       {original.identifier}
