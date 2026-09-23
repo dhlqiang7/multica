@@ -493,7 +493,12 @@
     "activity_count_one": "{{count}} activité",
     "activity_count_other": "{{count}} activités",
     "show_more_activities_one": "Afficher {{count}} activité de plus",
-    "show_more_activities_other": "Afficher {{count}} activités de plus"
+    "show_more_activities_other": "Afficher {{count}} activités de plus",
+    "duplicate_marked": "a marqué cette tâche comme doublon de {{identifier}}",
+    "duplicate_unmarked": "a retiré la marque de doublon de {{identifier}} sur cette tâche",
+    "duplicate_unmarked_original_deleted": "a retiré la marque de doublon, {{identifier}} a été supprimée",
+    "duplicate_added": "a marqué {{identifier}} comme doublon de cette tâche",
+    "duplicate_removed": "a retiré la marque de doublon de {{identifier}}"
   },
   "comment": {
     "add_reaction": "Ajouter une réaction",
@@ -820,7 +825,8 @@
       "create_failed": "Échec de la création de l'étiquette"
     },
     "status": {
-      "mark_duplicate": "Marquer comme doublon"
+      "mark_duplicate": "Marquer comme doublon",
+      "change_original": "Changer la tâche d'origine"
     }
   },
   "labels_panel": {
@@ -1076,7 +1082,8 @@
   },
   "duplicates": {
     "banner_prefix": "Doublon de",
-    "unmark": "Retirer la marque et repasser en À faire",
-    "section_title": "Doublons"
+    "unmark": "Pas un doublon",
+    "section_title": "Doublons",
+    "unmark_toast": "Rouverte en À faire"
   }
 }

@@ -92,6 +92,17 @@ export function formatActivity(
       return `renamed: "${details.from ?? "?"}" → "${details.to ?? "?"}"`;
     case "description_updated":
       return "updated description";
+    // Duplicate marks (MUL-7349); copy mirrors packages/views/locales/en.
+    case "duplicate_marked":
+      return `marked this issue as a duplicate of ${details.original_identifier ?? "?"}`;
+    case "duplicate_unmarked":
+      return details.reason === "original_deleted"
+        ? `removed the duplicate mark, ${details.original_identifier ?? "?"} was deleted`
+        : `unmarked this issue as a duplicate of ${details.original_identifier ?? "?"}`;
+    case "duplicate_added":
+      return `marked ${details.duplicate_identifier ?? "?"} as a duplicate of this issue`;
+    case "duplicate_removed":
+      return `unmarked ${details.duplicate_identifier ?? "?"} as a duplicate of this issue`;
     case "task_completed": {
       const n = entry.coalesced_count ?? 1;
       return n > 1 ? `completed ${n} tasks` : "completed a task";

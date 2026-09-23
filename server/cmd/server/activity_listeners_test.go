@@ -404,3 +404,177 @@ func TestActivityTaskFailed(t *testing.T) {
 		t.Fatalf("expected action 'task_failed', got %q", activities[0].Action)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Duplicate marks (MUL-7349) log on both issues. Every publisher of a mark
+// change carries both ends of it, the way UpdateIssue does.
+// ---------------------------------------------------------------------------
+
+func duplicateMarkEvent(issueID, identifier string, prev, next *string, extra map[string]any) events.Event {
+	payload := map[string]any{
+		"issue": handler.IssueResponse{
+			ID:          issueID,
+			WorkspaceID: testWorkspaceID,
+			Identifier:  identifier,
+			Title:       "duplicate activity test issue",
+			Status:      "cancelled",
+			Priority:    "medium",
+			CreatorType: "member",
+			CreatorID:   testUserID,
+		},
+		"duplicate_of_issue_id":      next,
+		"prev_duplicate_of_issue_id": prev,
+	}
+	for k, v := range extra {
+		payload[k] = v
+	}
+	return events.Event{
+		Type:        protocol.EventIssueUpdated,
+		WorkspaceID: testWorkspaceID,
+		ActorType:   "member",
+		ActorID:     testUserID,
+		Payload:     payload,
+	}
+}
+
+// activityDetails returns the details of the one activity with this action on
+// the issue, failing when there are none or several.
+func activityDetails(t *testing.T, queries *db.Queries, issueID, action string) map[string]string {
+	t.Helper()
+	var found []db.ActivityLog
+	for _, a := range listActivitiesForIssue(t, queries, issueID) {
+		if a.Action == action {
+			found = append(found, a)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("expected exactly 1 %q activity on %s, got %d", action, issueID, len(found))
+	}
+	var details map[string]string
+	if err := json.Unmarshal(found[0].Details, &details); err != nil {
+		t.Fatalf("failed to unmarshal details: %v", err)
+	}
+	return details
+}
+
+func testIssueIdentifier(t *testing.T, queries *db.Queries, issueID string) string {
+	t.Helper()
+	ctx := context.Background()
+	issue, err := queries.GetIssue(ctx, util.MustParseUUID(issueID))
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	ws, err := queries.GetWorkspace(ctx, issue.WorkspaceID)
+	if err != nil {
+		t.Fatalf("GetWorkspace: %v", err)
+	}
+	return service.IssueIdentifier(ws.IssuePrefix, issue.Number)
+}
+
+func newDuplicateTestIssues(t *testing.T, queries *db.Queries) (bus *events.Bus, duplicateID, originalID string) {
+	t.Helper()
+	bus = events.New()
+	registerActivityListeners(bus, queries)
+	duplicateID = createTestIssue(t, testWorkspaceID, testUserID)
+	originalID = createTestIssue(t, testWorkspaceID, testUserID)
+	t.Cleanup(func() {
+		cleanupActivities(t, duplicateID)
+		cleanupActivities(t, originalID)
+		cleanupTestIssue(t, duplicateID)
+		cleanupTestIssue(t, originalID)
+	})
+	return bus, duplicateID, originalID
+}
+
+func TestActivityIssueUpdated_DuplicateMarked(t *testing.T) {
+	queries := db.New(testPool)
+	bus, duplicateID, originalID := newDuplicateTestIssues(t, queries)
+
+	bus.Publish(duplicateMarkEvent(duplicateID, "MUL-7624", nil, &originalID, nil))
+
+	marked := activityDetails(t, queries, duplicateID, "duplicate_marked")
+	if marked["original_id"] != originalID {
+		t.Fatalf("original_id = %q, want %q", marked["original_id"], originalID)
+	}
+	if want := testIssueIdentifier(t, queries, originalID); marked["original_identifier"] != want {
+		t.Fatalf("original_identifier = %q, want %q", marked["original_identifier"], want)
+	}
+	added := activityDetails(t, queries, originalID, "duplicate_added")
+	if added["duplicate_id"] != duplicateID || added["duplicate_identifier"] != "MUL-7624" {
+		t.Fatalf("duplicate_added details = %v", added)
+	}
+	if got := len(listActivitiesForIssue(t, queries, duplicateID)); got != 1 {
+		t.Fatalf("expected 1 activity on the duplicate, got %d", got)
+	}
+}
+
+func TestActivityIssueUpdated_DuplicateUnmarked(t *testing.T) {
+	queries := db.New(testPool)
+	bus, duplicateID, originalID := newDuplicateTestIssues(t, queries)
+
+	bus.Publish(duplicateMarkEvent(duplicateID, "MUL-7624", &originalID, nil, nil))
+
+	unmarked := activityDetails(t, queries, duplicateID, "duplicate_unmarked")
+	if unmarked["original_id"] != originalID || unmarked["reason"] != "" {
+		t.Fatalf("duplicate_unmarked details = %v", unmarked)
+	}
+	removed := activityDetails(t, queries, originalID, "duplicate_removed")
+	if removed["duplicate_id"] != duplicateID {
+		t.Fatalf("duplicate_removed details = %v", removed)
+	}
+}
+
+// Moving a mark from one original to another reads as leaving the first and
+// joining the second, on all three issues.
+func TestActivityIssueUpdated_DuplicateRepointed(t *testing.T) {
+	queries := db.New(testPool)
+	bus, duplicateID, firstID := newDuplicateTestIssues(t, queries)
+	secondID := createTestIssue(t, testWorkspaceID, testUserID)
+	t.Cleanup(func() {
+		cleanupActivities(t, secondID)
+		cleanupTestIssue(t, secondID)
+	})
+
+	bus.Publish(duplicateMarkEvent(duplicateID, "MUL-7624", &firstID, &secondID, nil))
+
+	if got := activityDetails(t, queries, duplicateID, "duplicate_unmarked"); got["original_id"] != firstID {
+		t.Fatalf("duplicate_unmarked original_id = %q, want %q", got["original_id"], firstID)
+	}
+	if got := activityDetails(t, queries, duplicateID, "duplicate_marked"); got["original_id"] != secondID {
+		t.Fatalf("duplicate_marked original_id = %q, want %q", got["original_id"], secondID)
+	}
+	activityDetails(t, queries, firstID, "duplicate_removed")
+	activityDetails(t, queries, secondID, "duplicate_added")
+}
+
+// Deleting the original clears the mark. The original's log goes with it, so
+// only the duplicate gets a row, naming the identifier the delete path passed.
+func TestActivityIssueUpdated_DuplicateOriginalDeleted(t *testing.T) {
+	queries := db.New(testPool)
+	bus, duplicateID, _ := newDuplicateTestIssues(t, queries)
+	gone := "00000000-0000-4000-8000-00000000dead"
+
+	bus.Publish(duplicateMarkEvent(duplicateID, "MUL-7624", &gone, nil, map[string]any{
+		"prev_duplicate_of_identifier": "MUL-7349",
+	}))
+
+	unmarked := activityDetails(t, queries, duplicateID, "duplicate_unmarked")
+	if unmarked["original_identifier"] != "MUL-7349" || unmarked["reason"] != "original_deleted" {
+		t.Fatalf("duplicate_unmarked details = %v", unmarked)
+	}
+}
+
+func TestActivityIssueUpdated_DuplicateUnchanged(t *testing.T) {
+	queries := db.New(testPool)
+	bus, duplicateID, originalID := newDuplicateTestIssues(t, queries)
+
+	// Re-marking the same original is a no-op on the server and must not log.
+	bus.Publish(duplicateMarkEvent(duplicateID, "MUL-7624", &originalID, &originalID, nil))
+
+	if got := len(listActivitiesForIssue(t, queries, duplicateID)); got != 0 {
+		t.Fatalf("expected no activities on the duplicate, got %d", got)
+	}
+	if got := len(listActivitiesForIssue(t, queries, originalID)); got != 0 {
+		t.Fatalf("expected no activities on the original, got %d", got)
+	}
+}

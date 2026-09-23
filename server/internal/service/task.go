@@ -7607,25 +7607,35 @@ func IssueToMap(issue db.Issue, issuePrefix string) map[string]any {
 		// — clients localize those from the key — and a CUSTOM one is filled in
 		// by IssueToMapResolved, which has the catalog. Emitted unconditionally
 		// so this rendering cannot lose a key the HTTP one carries. (MUL-6749)
-		"status_name":      "",
-		"priority":         issue.Priority,
-		"assignee_type":    util.TextToPtr(issue.AssigneeType),
-		"assignee_id":      util.UUIDToPtr(issue.AssigneeID),
-		"creator_type":     issue.CreatorType,
-		"creator_id":       util.UUIDToString(issue.CreatorID),
-		"parent_issue_id":  util.UUIDToPtr(issue.ParentIssueID),
-		"project_id":       util.UUIDToPtr(issue.ProjectID),
-		"position":         issue.Position,
-		"stage":            util.Int4ToPtr(issue.Stage),
-		"start_date":       util.DateToPtr(issue.StartDate),
-		"due_date":         util.DateToPtr(issue.DueDate),
-		"created_at":       util.TimestampToString(issue.CreatedAt),
-		"updated_at":       util.TimestampToString(issue.UpdatedAt),
-		"last_activity_at": util.TimestampToNanoPtr(issue.LastActivityAt),
-		"revision":         issue.Revision,
-		"metadata":         util.JSONObjectOrEmpty(issue.Metadata),
-		"properties":       util.JSONObjectOrEmpty(issue.Properties),
+		"status_name":           "",
+		"priority":              issue.Priority,
+		"assignee_type":         util.TextToPtr(issue.AssigneeType),
+		"assignee_id":           util.UUIDToPtr(issue.AssigneeID),
+		"creator_type":          issue.CreatorType,
+		"creator_id":            util.UUIDToString(issue.CreatorID),
+		"parent_issue_id":       util.UUIDToPtr(issue.ParentIssueID),
+		"duplicate_of_issue_id": duplicateOfIssueID(issue),
+		"project_id":            util.UUIDToPtr(issue.ProjectID),
+		"position":              issue.Position,
+		"stage":                 util.Int4ToPtr(issue.Stage),
+		"start_date":            util.DateToPtr(issue.StartDate),
+		"due_date":              util.DateToPtr(issue.DueDate),
+		"created_at":            util.TimestampToString(issue.CreatedAt),
+		"updated_at":            util.TimestampToString(issue.UpdatedAt),
+		"last_activity_at":      util.TimestampToNanoPtr(issue.LastActivityAt),
+		"revision":              issue.Revision,
+		"metadata":              util.JSONObjectOrEmpty(issue.Metadata),
+		"properties":            util.JSONObjectOrEmpty(issue.Properties),
 	}
+}
+
+// duplicateOfIssueID mirrors handler.IssueResponse.DuplicateOfIssueID: a
+// duplicate mark only counts while the issue is cancelled. (MUL-7349)
+func duplicateOfIssueID(issue db.Issue) *string {
+	if issue.Status != issuestatus.Cancelled {
+		return nil
+	}
+	return util.UUIDToPtr(issue.DuplicateOfIssueID)
 }
 
 // IssueIdentifier renders the human-facing issue key ("MUL-42"). Callers that

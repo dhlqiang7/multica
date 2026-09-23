@@ -2,26 +2,37 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, CircleEqual } from "lucide-react";
+import { ArrowRight, ChevronRight } from "lucide-react";
 import type { Issue } from "@multica/core/types";
 import { issueStatusCategory } from "@multica/core/issues";
-import { issueDuplicatesOptions } from "@multica/core/issues/queries";
+import { issueDetailOptions, issueDuplicatesOptions } from "@multica/core/issues/queries";
 import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";
-import { AppLink } from "../../navigation";
+import { ActorAvatar } from "../../common/actor-avatar";
+import { AppLink, resolveClickIntent, useIntentNavigate } from "../../navigation";
 import { StatusIcon } from "./status-icon";
 import { useT } from "../../i18n";
 
 // Duplicate marks (MUL-7349). A duplicate is a cancelled issue that remembers
 // its original; the server clears the mark whenever the status leaves
-// cancelled, so both surfaces below also key off the status.
+// cancelled, so every surface below also keys off the status.
+
+/** True while the mark counts: the issue is cancelled and points somewhere. */
+export function isDuplicateIssue(
+  issue: Pick<Issue, "status" | "duplicate_of_issue_id">,
+): boolean {
+  return issue.status === "cancelled" && !!issue.duplicate_of_issue_id;
+}
 
 /**
- * Banner shown above a duplicate's title, pointing at its original. Removing
- * the mark is a plain status change to todo, done through the caller so it
- * shares the detail page's status write path.
+ * Banner above a duplicate's title. Its one job is to send the reader on:
+ * the whole strip links to the original and shows the original's own status,
+ * so "is that one done yet?" is answered before the click. Removing the mark
+ * is the rare correction, so it stays a quiet secondary action; the write is a
+ * plain status change to todo, done through the caller so it shares the
+ * detail page's status path.
  */
 export function IssueDuplicateBanner({
   issue,
@@ -33,35 +44,56 @@ export function IssueDuplicateBanner({
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
+  const { colorOf, iconOf } = useIssueStatuses(wsId);
   const { data } = useQuery(issueDuplicatesOptions(wsId, issue.id));
   const original = data?.duplicate_of;
   if (issue.status !== "cancelled" || !original) return null;
 
   return (
-    <div className="mb-4 flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2 text-body">
-      <CircleEqual className="h-4 w-4 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 flex-1 truncate">
-        {t(($) => $.duplicates.banner_prefix)}{" "}
-        <AppLink
-          href={paths.issueDetail(original.id)}
-          className="font-medium underline-offset-4 hover:underline"
-        >
-          {original.identifier} {original.title}
-        </AppLink>
-      </span>
-      <Button type="button" variant="ghost" size="sm" onClick={onUnmark}>
+    <div className="mb-4 flex items-center gap-1 rounded-md border bg-muted/40 py-1 pl-3 pr-1 text-body">
+      <AppLink
+        href={paths.issueDetail(original.id)}
+        newTabTitle={original.identifier}
+        className="group flex min-w-0 flex-1 items-center gap-2 py-1"
+      >
+        <span className="shrink-0 text-muted-foreground">
+          {t(($) => $.duplicates.banner_prefix)}
+        </span>{" "}
+        <StatusIcon
+          status={original.status}
+          color={colorOf(original.status)}
+          icon={iconOf(original.status)}
+          category={issueStatusCategory(original) ?? undefined}
+          className="h-3.5 w-3.5 shrink-0"
+        />
+        <span className="shrink-0 text-muted-foreground">{original.identifier}</span>{" "}
+        <span className="truncate font-medium underline-offset-4 group-hover:underline">
+          {original.title}
+        </span>
+        <ArrowRight className="ml-auto h-4 w-4 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground" />
+      </AppLink>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="shrink-0 text-muted-foreground"
+        onClick={onUnmark}
+      >
         {t(($) => $.duplicates.unmark)}
       </Button>
     </div>
   );
 }
 
-/** Sidebar list of the issues marked as duplicates of this one. */
+/**
+ * Sidebar list of the issues marked as duplicates of this one. Every entry is
+ * cancelled, so a status icon would say the same thing on each row; the
+ * reporter is the signal — several faces means several people hit this.
+ */
 export function IssueDuplicatesSection({ issueId }: { issueId: string }) {
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
-  const { colorOf, iconOf } = useIssueStatuses(wsId);
   const [open, setOpen] = useState(true);
   const { data } = useQuery(issueDuplicatesOptions(wsId, issueId));
   const duplicates = data?.duplicates ?? [];
@@ -74,7 +106,10 @@ export function IssueDuplicatesSection({ issueId }: { issueId: string }) {
         className={`flex w-full items-center gap-1 rounded-md px-2 py-1 text-caption font-medium transition-colors mb-2 hover:bg-accent/70 ${open ? "" : "text-muted-foreground hover:text-foreground"}`}
         onClick={() => setOpen(!open)}
       >
-        {t(($) => $.duplicates.section_title)}
+        {t(($) => $.duplicates.section_title)}{" "}
+        <span className="rounded-xs bg-muted px-1 text-micro font-medium tabular-nums text-muted-foreground">
+          {duplicates.length}
+        </span>
         <ChevronRight className={`!size-3 shrink-0 stroke-[2.5] text-muted-foreground transition-transform ${open ? "rotate-90" : ""}`} />
       </button>
       {open && (
@@ -85,12 +120,11 @@ export function IssueDuplicatesSection({ issueId }: { issueId: string }) {
               href={paths.issueDetail(duplicate.id)}
               className="group flex items-center gap-1.5 rounded-md px-2 -mx-2 py-1.5 text-caption hover:bg-accent/50 transition-colors"
             >
-              <StatusIcon
-                status={duplicate.status}
-                color={colorOf(duplicate.status)}
-                icon={iconOf(duplicate.status)}
-                category={issueStatusCategory(duplicate) ?? undefined}
-                className="h-3.5 w-3.5 shrink-0"
+              <ActorAvatar
+                actorType={duplicate.creator_type}
+                actorId={duplicate.creator_id}
+                size="xs"
+                profileLink={false}
               />
               <span className="text-muted-foreground shrink-0">{duplicate.identifier}</span>
               <span className="truncate group-hover:text-foreground">{duplicate.title}</span>
@@ -99,5 +133,65 @@ export function IssueDuplicatesSection({ issueId }: { issueId: string }) {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * "→ MUL-123" beside a duplicate in list rows, board cards and table cells,
+ * so the original is one click away instead of two. Those rows are anchors,
+ * so this is a nested control: it navigates on its own and stops the row from
+ * also opening the duplicate. The original is resolved through the detail
+ * query, shared with every other row pointing at the same issue.
+ */
+export function IssueDuplicateOfMarker({
+  issue,
+  className,
+}: {
+  issue: Issue;
+  className?: string;
+}) {
+  const { t } = useT("issues");
+  const wsId = useWorkspaceId();
+  const paths = useWorkspacePaths();
+  const navigate = useIntentNavigate();
+  const originalId = isDuplicateIssue(issue) ? issue.duplicate_of_issue_id! : "";
+  const { data: original } = useQuery({
+    ...issueDetailOptions(wsId, originalId),
+    enabled: originalId !== "",
+    staleTime: 60_000,
+  });
+  if (!originalId || !original) return null;
+
+  const href = paths.issueDetail(original.id);
+  const stop = (e: React.SyntheticEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+  return (
+    <span
+      role="link"
+      tabIndex={0}
+      title={`${t(($) => $.duplicates.banner_prefix)} ${original.identifier} ${original.title}`}
+      onMouseDown={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        stop(e);
+        navigate(href, resolveClickIntent(e), original.identifier);
+      }}
+      onAuxClick={(e) => {
+        if (e.button !== 1) return;
+        stop(e);
+        navigate(href, "background-tab", original.identifier);
+      }}
+      onKeyDown={(e) => {
+        if (e.key !== "Enter") return;
+        stop(e);
+        navigate(href, "push", original.identifier);
+      }}
+      className={`inline-flex shrink-0 cursor-pointer items-center gap-0.5 text-caption text-muted-foreground underline-offset-4 hover:text-foreground hover:underline ${className ?? ""}`}
+    >
+      <ArrowRight className="size-3" />
+      {original.identifier}
+    </span>
   );
 }

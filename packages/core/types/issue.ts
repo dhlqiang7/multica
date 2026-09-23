@@ -188,6 +188,12 @@ export interface Issue {
   creator_type: IssueAssigneeType;
   creator_id: string;
   parent_issue_id: string | null;
+  /**
+   * The original this issue duplicates (MUL-7349), set only while the issue
+   * is cancelled. Absent when connected to an older backend; the relation's
+   * full shape comes from `listIssueDuplicates`.
+   */
+  duplicate_of_issue_id?: string | null;
   project_id: string | null;
   position: number;
   // Ordered barrier group among sibling sub-issues (null = unstaged). The
