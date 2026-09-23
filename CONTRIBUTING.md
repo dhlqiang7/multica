@@ -421,12 +421,8 @@ Run the local daemon:
 make daemon
 ```
 
-This builds the CLI into `server/bin/multica` (`multica.exe` on Windows) and
-restarts the `local` profile's daemon with automatic CLI updates disabled.
-The daemon uses that profile's stored token (`multica login --profile local`)
-and registers runtimes for its watched workspaces. `make cli` and `make multica`
-also build and run this persistent binary, so background daemons can re-execute
-it to prepare tasks after the launcher exits.
+The daemon authenticates using the CLI's stored token (`multica login`).
+It registers runtimes for all watched workspaces from the CLI config.
 
 ## Full-Stack Isolated Testing
 
