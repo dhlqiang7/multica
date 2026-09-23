@@ -27,8 +27,8 @@ func TestTaskSupplementMigrationsUpDownUpInIsolatedSchema(t *testing.T) {
 			"542_task_supplement_primary_key",
 			"543_task_supplement_teardown_guard",
 			"544_task_supplement_application_settlement",
-			"545_task_supplement_comment_task_index",
-			"546_task_supplement_comment_task_primary_key",
+			"548_task_supplement_comment_task_index",
+			"549_task_supplement_comment_task_primary_key",
 		}
 		if direction == "down" {
 			slices.Reverse(versions)

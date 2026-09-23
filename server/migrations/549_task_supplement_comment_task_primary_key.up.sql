@@ -3,5 +3,5 @@
 ALTER TABLE task_supplement
     DROP CONSTRAINT IF EXISTS task_supplement_pkey,
     ADD CONSTRAINT task_supplement_pkey PRIMARY KEY USING INDEX task_supplement_comment_task_uidx;
--- Left behind by a previous rollback (545 down); it would keep one run per comment.
+-- Left behind by a previous rollback (548 down); it would keep one run per comment.
 DROP INDEX IF EXISTS task_supplement_comment_uidx;
