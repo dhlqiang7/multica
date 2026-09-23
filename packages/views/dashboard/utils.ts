@@ -1,7 +1,6 @@
 import type {
   DashboardUsageDaily,
   DashboardUsageByAgent,
-  DashboardAgentRunTime,
   DashboardRunTimeDaily,
   DashboardFailureDaily,
   DashboardFailureByAgent,
@@ -199,88 +198,11 @@ export function aggregateAgentTokens(rows: DashboardUsageByAgent[]): AgentCostRo
   return Array.from(map.values()).toSorted((a, b) => b.cost - a.cost);
 }
 
-export interface AgentDashboardRow {
-  agentId: string;
-  tokens: number;
-  cost: number;
-  seconds: number;
-  taskCount: number;
-  unreportedTaskCount: number;
-  hasReportedUsage: boolean;
-  // Token/cost totals come from the asynchronous hourly rollup. Keep their
-  // availability separate from real-time task_usage coverage so rollup lag
-  // never turns a reported run into either a fake zero or an unreported run.
-  hasUsageTotals: boolean;
-}
-
-// Merge per-agent token totals with per-agent run-time totals into one
-// row per agent.
-//
-// taskCount comes from `runTimeRows` when available — that rollup is a
-// true per-agent distinct count (`COUNT(*)` on (agent, terminal-task) in
-// SQL). The token rollup's per-(agent, model) counts double-count a task
-// when it spans multiple models, so we only fall back to it for agents
-// with no terminal run yet (in-flight tasks reported tokens but haven't
-// completed). Sorted by cost desc, then run time desc.
-export function mergeAgentDashboardRows(
-  tokenRows: AgentCostRow[],
-  runTimeRows: DashboardAgentRunTime[],
-): AgentDashboardRow[] {
-  const runTimeByAgent = new Map(
-    runTimeRows.map((r) => [r.agent_id, r] as const),
-  );
-  const merged = new Map<string, AgentDashboardRow>();
-  for (const r of tokenRows) {
-    const rt = runTimeByAgent.get(r.agentId);
-    const taskCount = rt ? rt.task_count : r.taskCount;
-    // An older server omits metered_task_count. A token row proves that some
-    // usage exists but cannot tell which of several runs produced it, so keep
-    // the old all-reported presentation until the exact coverage field is
-    // available. This avoids a new client inventing partial coverage while
-    // connected to an old backend.
-    const meteredTaskCount = rt?.metered_task_count ?? taskCount;
-    merged.set(r.agentId, {
-      agentId: r.agentId,
-      tokens: r.tokens,
-      cost: r.cost,
-      seconds: rt?.total_seconds ?? 0,
-      taskCount,
-      unreportedTaskCount: Math.max(0, taskCount - meteredTaskCount),
-      hasReportedUsage: true,
-      hasUsageTotals: true,
-    });
-  }
-  // Agents with run-time rows but zero tokens still belong on the list
-  // (a task that errored before producing usage). Their numeric token totals
-  // stay at 0 for sorting, while the leaderboard renders them as unavailable.
-  for (const r of runTimeRows) {
-    if (merged.has(r.agent_id)) continue;
-    // Old servers omit the coverage field. The missing token aggregate may
-    // merely be lagging, so do not reinterpret every run as unreported.
-    const coverageKnown = r.metered_task_count !== undefined;
-    const meteredTaskCount = r.metered_task_count ?? 0;
-    merged.set(r.agent_id, {
-      agentId: r.agent_id,
-      tokens: 0,
-      cost: 0,
-      seconds: r.total_seconds,
-      taskCount: r.task_count,
-      unreportedTaskCount: coverageKnown
-        ? Math.max(0, r.task_count - meteredTaskCount)
-        : 0,
-      hasReportedUsage: coverageKnown && meteredTaskCount > 0,
-      hasUsageTotals: false,
-    });
-  }
-  return Array.from(merged.values()).toSorted((a, b) => {
-    if (b.cost !== a.cost) return b.cost - a.cost;
-    return b.seconds - a.seconds;
-  });
-}
-
-// Synthetic agentId for the row that aggregates all hard-deleted agents.
-// Sentinel (not a real UUID) so the component can detect it and render a
-// placeholder instead of looking the id up in the agent list.
+// Synthetic agentId for the row that aggregates all hard-deleted agents (and
+// any agent the loaded list cannot name). Sentinel (not a real UUID) so the
+// scorecard can render a placeholder instead of looking the id up. Rows are
+// folded onto it rather than dropped so per-agent figures still add up to the
+// workspace totals (MUL-3776); see foldUnknownDeliveryAgents.
 export const DELETED_AGENTS_ROW_ID = "__deleted_agents__";
 
 // Synthetic agentId the SERVER sends for the bucket aggregating every agent it
@@ -293,71 +215,6 @@ export const DELETED_AGENTS_ROW_ID = "__deleted_agents__";
 // are alive and still running. Labelling them "Deleted agents" told the user
 // something false, which is why the bucket renders as a neutral "Other agents".
 export const RESTRICTED_AGENTS_ROW_ID = "__restricted_agents__";
-
-// Fold usage rows whose agent no longer exists in the workspace into a single
-// aggregated "Deleted agents" row instead of dropping them. The agent list is
-// fetched with `include_archived: true`, so archived agents keep their names
-// and stay on the leaderboard as themselves; only hard-deleted agents fall out
-// of `knownAgentIds` and collapse into the bucket.
-//
-// MUL-3771 (PR #4637) originally *dropped* these rows so they'd stop rendering
-// as a bare UUID — but the top-line Cost/Tokens KPIs still count their spend
-// (those totals aggregate `task_usage_hourly` without joining `agent`), so the
-// per-agent breakdown no longer reconciled with the totals (MUL-3776, #4640).
-// Aggregating instead of dropping keeps `sum(visible rows) == KPI total` while
-// still never exposing a UUID. The bucket carries tokens + cost and their
-// coverage metadata only; seconds and taskCount stay 0 because the run-time
-// rollups inner-join `agent`, so deleted agents already contribute nothing to
-// the Time/Tasks KPIs — the component renders those two columns as "—" for
-// this row. Preserving coverage also handles a cross-query deletion race where
-// a run-time row was read just before the agent disappeared.
-//
-// `knownAgentIds` is `null` while the agent list is still loading; callers
-// pass `null` in that case so the rows pass through untouched instead of the
-// whole leaderboard collapsing into one bucket on a slow fetch.
-//
-// The server's restricted bucket is NOT in `knownAgentIds` either (it is not an
-// agent), so it is passed through explicitly rather than swept into the deleted
-// bucket. It also keeps its seconds / taskCount: unlike a hard-deleted agent it
-// really did run, and the run-time rollup folds those numbers into it.
-export function bucketUnknownAgentRows(
-  rows: AgentDashboardRow[],
-  knownAgentIds: ReadonlySet<string> | null,
-): AgentDashboardRow[] {
-  if (!knownAgentIds) return rows;
-  const known: AgentDashboardRow[] = [];
-  const bucket: AgentDashboardRow = {
-    agentId: DELETED_AGENTS_ROW_ID,
-    tokens: 0,
-    cost: 0,
-    seconds: 0,
-    taskCount: 0,
-    unreportedTaskCount: 0,
-    hasReportedUsage: false,
-    hasUsageTotals: false,
-  };
-  let hasDeleted = false;
-  for (const r of rows) {
-    if (knownAgentIds.has(r.agentId) || r.agentId === RESTRICTED_AGENTS_ROW_ID) {
-      known.push(r);
-      continue;
-    }
-    hasDeleted = true;
-    bucket.tokens += r.tokens;
-    bucket.cost += r.cost;
-    bucket.unreportedTaskCount += r.unreportedTaskCount;
-    bucket.hasReportedUsage ||= r.hasReportedUsage;
-    bucket.hasUsageTotals ||= r.hasUsageTotals;
-  }
-  return hasDeleted ? [...known, bucket] : known;
-}
-
-// Rows the leaderboard renders as a synthetic bucket rather than an agent.
-// `deletedAgentCount` and the caption's agent count both have to exclude these,
-// or the card claims more agents (or more deletions) than it is showing.
-export function isSyntheticAgentRow(agentId: string): boolean {
-  return agentId === DELETED_AGENTS_ROW_ID || agentId === RESTRICTED_AGENTS_ROW_ID;
-}
 
 // ---------------------------------------------------------------------------
 // Weekly fold for run-time + tasks. Mirrors `aggregateByWeek` in

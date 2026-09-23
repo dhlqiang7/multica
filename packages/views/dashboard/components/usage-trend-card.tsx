@@ -61,7 +61,8 @@ export function UsageTrendCard({
   lessThanMinuteLabel: string;
 }) {
   const { t } = useT("usage");
-  const [metric, setMetric] = useState<UsageMetric>("tokens");
+  // Cost first: the card sits on the Cost tab, and tokens are one toggle away.
+  const [metric, setMetric] = useState<UsageMetric>("cost");
   const [dim, setDim] = useState<Dim>("daily");
   // Derived, never reset: when the range narrows to 1d the card simply draws
   // the one dimension that range allows, and a later widening restores the

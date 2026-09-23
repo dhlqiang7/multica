@@ -12,27 +12,33 @@ import {
   NumberFlow,
 } from "@multica/ui/components/ui/number-flow";
 import { useWorkspaceId } from "@multica/core/hooks";
-import type { Agent } from "@multica/core/types";
+import type {
+  Agent,
+  DashboardDelivery,
+  DashboardUsageBreakdown,
+} from "@multica/core/types";
 import { agentListOptions } from "@multica/core/workspace/queries";
 import { projectListOptions } from "@multica/core/projects/queries";
+import { runtimeDisplayLabel, runtimeListOptions } from "@multica/core/runtimes";
 import {
   dashboardKeys,
-  dashboardUsageDailyOptions,
-  dashboardUsageByAgentOptions,
-  dashboardAgentRunTimeOptions,
-  dashboardRunTimeDailyOptions,
-  dashboardFailuresDailyOptions,
+  dashboardDeliveryOptions,
   dashboardFailuresByAgentOptions,
+  dashboardFailuresDailyOptions,
+  dashboardRunTimeDailyOptions,
+  dashboardUsageBreakdownOptions,
+  dashboardUsageDailyOptions,
 } from "@multica/core/dashboard";
 import { useCustomPricingStore } from "@multica/core/runtimes/custom-pricing-store";
+import { cn } from "@multica/ui/lib/utils";
 import { useViewingTimezone } from "../../common/use-viewing-timezone";
 import { PAGE_GUTTER } from "../../layout/page-header";
 import { CollectionPageHeader } from "../../layout/collection-page";
-import { KpiCard } from "../../runtimes/components/shared";
 import { useNavigation } from "../../navigation";
 import {
   addDaysIso,
   aggregateByWeek,
+  estimateCost,
   formatTokens,
   todayIso,
 } from "../../runtimes/utils";
@@ -50,45 +56,70 @@ import {
   aggregateWeeklyErrors,
   aggregateWeeklyTasks,
   aggregateWeeklyTime,
-  bucketUnknownAgentRows,
   anonymizeUnresolvedAgentRows,
   computeDailyTotals,
   computeFailureTotals,
-  isSyntheticAgentRow,
-  mergeAgentDashboardRows,
+  DELETED_AGENTS_ROW_ID,
+  formatDuration,
+  RESTRICTED_AGENTS_ROW_ID,
 } from "../utils";
 import {
-  ALL_PROJECTS,
-  DurationNumberFlow,
-  dimsForDays,
-  type TimeRange,
-} from "./dashboard-shared";
+  aggregateDeliveryByAgent,
+  aggregateDeliverySources,
+  bucketDeliveries,
+  deriveDeliveryInsights,
+  filterDeliveryIssues,
+  foldUnknownDeliveryAgents,
+  median,
+  cycleSeconds,
+  pointChange,
+  relativeChange,
+  splitDeliveryPeriods,
+  summarizeDelivery,
+  trailingDailySeries,
+  type DeliveryInsight,
+  type DeliveryStage,
+  type DeliverySummary,
+} from "../delivery";
+import { ALL_PROJECTS, DurationNumberFlow, dimsForDays, type TimeRange } from "./dashboard-shared";
 import { ProjectFilter, TimeRangeFilter } from "./dashboard-filters";
 import { UsageTrendCard } from "./usage-trend-card";
-import { Leaderboard } from "./leaderboard";
 import { ErrorsTab } from "./errors-tab";
-import { cn } from "@multica/ui/lib/utils";
+import { AnalyticsKpi, KpiRow, KpiUnit, type KpiDelta } from "./analytics-kpi";
+import { FunnelCard, InsightsCard, useStageLabel } from "./overview-cards";
+import { Scorecard } from "./scorecard";
+import { DeliveredChartCard, SourcesCard, TimeBreakdownCard } from "./delivery-cards";
+import { CostBreakdownCard, UnitCostCard, type CostGroup } from "./cost-cards";
+import { DeliveryIssuesSheet, type DeliveryDrill } from "./delivery-issues-sheet";
 
-// Stable references — `data ?? []` would create a new empty array on
-// every render while the query is loading, which breaks useMemo's
-// reference-equality dep check and trips the exhaustive-deps lint rule.
+// Stable references — `data ?? []` would create a new empty array on every
+// render while a query is loading, which breaks useMemo's reference check.
 const EMPTY_DAILY: import("@multica/core/types").DashboardUsageDaily[] = [];
-const EMPTY_BY_AGENT: import("@multica/core/types").DashboardUsageByAgent[] = [];
-const EMPTY_RUNTIME: import("@multica/core/types").DashboardAgentRunTime[] = [];
 const EMPTY_RUNTIME_DAILY: import("@multica/core/types").DashboardRunTimeDaily[] = [];
 const EMPTY_FAILURE_DAILY: import("@multica/core/types").DashboardFailureDaily[] = [];
 const EMPTY_FAILURE_BY_AGENT: import("@multica/core/types").DashboardFailureByAgent[] =
   [];
+const EMPTY_BREAKDOWN: DashboardUsageBreakdown[] = [];
+const EMPTY_DELIVERY: DashboardDelivery = {
+  window_start: "",
+  previous_window_start: "",
+  issues: [],
+};
 const EMPTY_AGENTS: Agent[] = [];
 
-type DashboardTab = "usage" | "errors";
+type DashboardTab = "overview" | "delivery" | "cost" | "reliability";
+const DASHBOARD_TABS: readonly DashboardTab[] = ["overview", "delivery", "cost", "reliability"];
 const TAB_QUERY_KEY = "tab";
-const DEFAULT_TAB: DashboardTab = "usage";
+const DEFAULT_TAB: DashboardTab = "overview";
 
-/** Local time of the most recent successful fetch, in the viewer's timezone.
- *  Every number on this page is bucketed on that timezone, so the header says
- *  which one it is — the same figures under a different tz are a different
- *  answer, and nothing on the page used to admit that. */
+// `?tab=errors` links predate the redesign and are what people pasted at each
+// other; they keep landing on the same content under its new name.
+function tabFromParam(value: string | null): DashboardTab {
+  if (value === "errors") return "reliability";
+  return DASHBOARD_TABS.find((tab) => tab === value) ?? DEFAULT_TAB;
+}
+
+/** Local time of the most recent successful fetch, in the viewer's timezone. */
 function useDataFreshness(
   updatedAts: (number | undefined)[],
   viewTZ: string,
@@ -129,23 +160,26 @@ function useDataFreshness(
 }
 
 /**
- * Workspace + project usage dashboard.
+ * Workspace analytics at `/{slug}/usage`.
  *
- * Lives at `/{slug}/usage`. Two tabs, split by the question the reader arrived
- * with rather than by which rollup feeds them: Usage answers "what did this
- * cost", Errors answers "what broke". They used to share one scrolling page,
- * where the failure breakdown sat below a leaderboard that could itself run to
- * thirty rows, and the only way to chart failures was to hide spend.
+ * The page reads as a report on the AI team rather than a meter: what the
+ * agents delivered, whether it was worth what it cost, and where to look. Four
+ * tabs, split by the question the reader arrives with:
  *
- * Scope is expressed by where a control lives: the toolbar under the header
- * carries the tabs and the two page-scoped filters (time range, project),
- * every card carries its own view switches. All six rollups are fetched for
- * both tabs — they are small, and prefetching is what makes switching tabs
- * instant — but the loading and empty states are per tab, so Usage does not
- * wait on the failure queries.
+ *   Overview     the headline figures, the delivery funnel, what stands out,
+ *                and one scorecard row per agent
+ *   Delivery     throughput over time, where issues come from, and where the
+ *                time between pickup and done goes
+ *   Cost         spend with unit economics, regrouped by any dimension
+ *   Reliability  what broke (the former Errors tab)
  *
- * Cost math runs client-side via the runtimes utils — keeps the dashboard
- * and the runtime page using one pricing table.
+ * The unit is the issue, not the run: the Overview and Delivery tabs fold one
+ * cohort — issues agents picked up in the period — so their figures reconcile
+ * with each other. Every headline figure carries a period-over-period delta,
+ * and every count on those two tabs opens the issues it was made of.
+ *
+ * Cost math runs client-side via the runtimes utils, so this page and the
+ * runtime page price with one table.
  */
 export function DashboardPage() {
   const { t, i18n } = useT("usage");
@@ -155,14 +189,12 @@ export function DashboardPage() {
   const locales = i18n.resolvedLanguage ?? i18n.language;
   const [days, setDays] = useState<TimeRange>(30);
   const [projectValue, setProjectValue] = useState<string>(ALL_PROJECTS);
+  const [drill, setDrill] = useState<DeliveryDrill | null>(null);
+  const stageLabel = useStageLabel();
 
-  // The tab lives in the URL because the Errors view is the half of this page
-  // people paste at each other ("this agent failed 54 times, see for
-  // yourself"); component state cannot be linked to. `replace`, not `push`, so
-  // flipping tabs does not stack up history entries. An unknown ?tab= value
-  // falls back to Usage rather than rendering nothing.
-  const tabFromUrl = navigation.searchParams.get(TAB_QUERY_KEY);
-  const tab: DashboardTab = tabFromUrl === "errors" ? "errors" : DEFAULT_TAB;
+  // The tab lives in the URL so a view can be linked to. `replace`, not
+  // `push`, so flipping tabs does not stack up history entries.
+  const tab = tabFromParam(navigation.searchParams.get(TAB_QUERY_KEY));
   const handleTabChange = (next: string) => {
     const params = new URLSearchParams(navigation.searchParams);
     if (next === DEFAULT_TAB) params.delete(TAB_QUERY_KEY);
@@ -171,226 +203,136 @@ export function DashboardPage() {
     navigation.replace(query ? `${navigation.pathname}?${query}` : navigation.pathname);
   };
 
-  // The user can save model prices from the runtimes page; re-render when
-  // they do so the dashboard reflects the new rates.
+  // Re-render when the user saves a model price on the runtimes page.
   useCustomPricingStore((s) => s.pricings);
 
   const { data: projects = [] } = useQuery(projectListOptions(wsId));
+  const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
   const agentsQuery = useQuery(agentListOptions(wsId));
   const agents = agentsQuery.data ?? EMPTY_AGENTS;
 
-  // Validate the picked project against the current workspace's list. A
-  // stale UUID — left over from a project that's been deleted, or from the
-  // previous workspace after a switch — would silently filter every query to
-  // empty rows while the header still reads "All projects". Derive the
-  // effective filter so the API call matches the user-visible selection.
+  // A stale project UUID (deleted project, previous workspace) would filter
+  // every query to nothing while the header still reads "All projects".
   const projectId = useMemo(() => {
     if (projectValue === ALL_PROJECTS) return null;
     return projects.some((p) => p.id === projectValue) ? projectValue : null;
   }, [projectValue, projects]);
 
-  // The weekly charts paint `ceil(days / 7)` trailing calendar weeks anchored
-  // at today-in-UTC. In the worst case (today = Sunday) the leftmost Monday
-  // sits `weekCount * 7 - 1` days back, so a vanilla `days=30` request would
-  // silently truncate the leftmost bucket. Over-fetch the per-date queries to
-  // cover the full first week.
-  //
-  // Unconditionally, not only when a chart is weekly: the dimension is now a
-  // card-level control, so the page cannot know which grain is on screen — and
-  // fetching for the wider of the two means flipping a card between Daily and
-  // Weekly never refetches. Daily aggregations trim back to exactly `days`
-  // client-side via `dailyCutoffIso` below, so the extra rows change nothing
-  // they show. The per-agent rollups stay at `days` so KPI/leaderboard labels
-  // (e.g. "Tasks · 30D") keep their advertised window.
+  // The weekly charts paint `ceil(days / 7)` trailing calendar weeks, whose
+  // leftmost Monday can sit `weekCount * 7 - 1` days back; the headline deltas
+  // need the whole previous period. The per-date series fetch the wider of the
+  // two, and every daily figure trims back to its own window client-side.
   const weekCount = Math.max(1, Math.ceil(days / 7));
   const chartFetchDays = weekCount * 7;
+  const compareFetchDays = Math.min(365, Math.max(chartFetchDays, days * 2));
 
   const dailyQuery = useQuery(
-    dashboardUsageDailyOptions(wsId, chartFetchDays, projectId, viewTZ),
-  );
-  // The three per-agent rollups carry no date, so `dailyCutoffIso` below
-  // cannot trim them — their window is closed server-side at exactly `days`
-  // calendar buckets (parseExactSinceParamInTZ). Anything derived from these
-  // three is therefore already on the same span as the trimmed daily series;
-  // do NOT put a per-agent rollup back on the N+1 cutoff, or the leaderboard
-  // and the Run time / Tasks KPIs silently widen by one day while the chart
-  // and the Cost / Tokens KPIs beside them do not (MUL-5551).
-  const byAgentQuery = useQuery(
-    dashboardUsageByAgentOptions(wsId, days, projectId, viewTZ),
-  );
-  const runTimeQuery = useQuery(
-    dashboardAgentRunTimeOptions(wsId, days, projectId, viewTZ),
+    dashboardUsageDailyOptions(wsId, compareFetchDays, projectId, viewTZ),
   );
   const runTimeDailyQuery = useQuery(
-    dashboardRunTimeDailyOptions(wsId, chartFetchDays, projectId, viewTZ),
+    dashboardRunTimeDailyOptions(wsId, compareFetchDays, projectId, viewTZ),
   );
   const failuresDailyQuery = useQuery(
     dashboardFailuresDailyOptions(wsId, chartFetchDays, projectId, viewTZ),
   );
+  // Rows without a date are closed server-side to exactly `days` (MUL-5551).
   const failuresByAgentQuery = useQuery(
     dashboardFailuresByAgentOptions(wsId, days, projectId, viewTZ),
   );
+  const breakdownQuery = useQuery(
+    dashboardUsageBreakdownOptions(wsId, days, projectId, viewTZ),
+  );
+  const deliveryQuery = useQuery(dashboardDeliveryOptions(wsId, days, projectId, viewTZ));
 
   const dailyUsage = dailyQuery.data ?? EMPTY_DAILY;
-  const byAgentUsage = byAgentQuery.data ?? EMPTY_BY_AGENT;
-  const runTimeRows = runTimeQuery.data ?? EMPTY_RUNTIME;
   const runTimeDailyRows = runTimeDailyQuery.data ?? EMPTY_RUNTIME_DAILY;
   const failureDailyRows = failuresDailyQuery.data ?? EMPTY_FAILURE_DAILY;
   const failureByAgentRows = failuresByAgentQuery.data ?? EMPTY_FAILURE_BY_AGENT;
+  const breakdownRows = breakdownQuery.data ?? EMPTY_BREAKDOWN;
+  const delivery = deliveryQuery.data ?? EMPTY_DELIVERY;
 
   const queryClient = useQueryClient();
-  // "Refreshing" covers any of the six rollups being in flight, whichever
-  // trigger started it (button, interval, mount) — the header spinner and the
-  // timestamp describe the same set of queries.
-  const isRefreshing =
-    dailyQuery.isFetching ||
-    byAgentQuery.isFetching ||
-    runTimeQuery.isFetching ||
-    runTimeDailyQuery.isFetching ||
-    failuresDailyQuery.isFetching ||
-    failuresByAgentQuery.isFetching;
+  const allQueries = [
+    dailyQuery,
+    runTimeDailyQuery,
+    failuresDailyQuery,
+    failuresByAgentQuery,
+    breakdownQuery,
+    deliveryQuery,
+  ];
+  const isRefreshing = allQueries.some((q) => q.isFetching);
   const handleRefresh = () => {
     void queryClient.invalidateQueries({ queryKey: dashboardKeys.all(wsId) });
   };
-
   const { tzLabel, updatedLabel } = useDataFreshness(
-    [
-      dailyQuery.dataUpdatedAt,
-      byAgentQuery.dataUpdatedAt,
-      runTimeQuery.dataUpdatedAt,
-      runTimeDailyQuery.dataUpdatedAt,
-      failuresDailyQuery.dataUpdatedAt,
-      failuresByAgentQuery.dataUpdatedAt,
-    ],
+    allQueries.map((q) => q.dataUpdatedAt),
     viewTZ,
     locales,
   );
 
-  // Daily-aggregation surfaces re-scope to the user-selected `days` even
-  // though the per-date queries over-fetch for the weekly charts. The cutoff is
-  // anchored on the viewer's timezone — the same axis the backend slices
-  // `bucket_hour` on — so it lands on the same calendar boundary. Applied in
-  // both dims so 1d strictly means "today" even at the midnight edge where a
-  // wall-clock cutoff would otherwise include yesterday.
-  const dailyCutoffIso = useMemo(
-    () => addDaysIso(todayIso(viewTZ), -(days - 1)),
-    [days, viewTZ],
-  );
+  // Day windows in the viewer's timezone — the same axis the backend slices
+  // on. `today` is read per render so the page rolls over at midnight.
+  const today = todayIso(viewTZ);
+  const windowStartIso = addDaysIso(today, -(days - 1));
+  const previousStartIso = addDaysIso(windowStartIso, -days);
+  const inWindow = <T extends { date: string }>(rows: T[]) =>
+    rows.filter((r) => r.date >= windowStartIso);
+  const inPrevious = <T extends { date: string }>(rows: T[]) =>
+    rows.filter((r) => r.date >= previousStartIso && r.date < windowStartIso);
+
   const dailyUsageInWindow = useMemo(
-    () => dailyUsage.filter((u) => u.date >= dailyCutoffIso),
-    [dailyUsage, dailyCutoffIso],
+    () => inWindow(dailyUsage),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [dailyUsage, windowStartIso],
+  );
+  const dailyUsagePrevious = useMemo(
+    () => inPrevious(dailyUsage),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [dailyUsage, windowStartIso, previousStartIso],
   );
   const runTimeDailyInWindow = useMemo(
-    () => runTimeDailyRows.filter((r) => r.date >= dailyCutoffIso),
-    [runTimeDailyRows, dailyCutoffIso],
+    () => inWindow(runTimeDailyRows),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [runTimeDailyRows, windowStartIso],
+  );
+  const runTimeDailyPrevious = useMemo(
+    () => inPrevious(runTimeDailyRows),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [runTimeDailyRows, windowStartIso, previousStartIso],
   );
   const failureDailyInWindow = useMemo(
-    () => failureDailyRows.filter((r) => r.date >= dailyCutoffIso),
-    [failureDailyRows, dailyCutoffIso],
+    () => inWindow(failureDailyRows),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [failureDailyRows, windowStartIso],
   );
 
-  // Loading and empty are per tab: the Usage tab has no reason to wait on the
-  // two failure rollups, and a workspace with spend but no failures is not an
-  // empty dashboard.
-  const usageLoading =
-    dailyQuery.isLoading ||
-    byAgentQuery.isLoading ||
-    runTimeQuery.isLoading ||
-    runTimeDailyQuery.isLoading;
-  const errorsLoading =
-    failuresDailyQuery.isLoading || failuresByAgentQuery.isLoading;
-
-  const usageHasNoData =
-    !usageLoading &&
-    dailyUsage.length === 0 &&
-    byAgentUsage.length === 0 &&
-    runTimeRows.length === 0 &&
-    runTimeDailyRows.length === 0;
-
-  // Cost / token math — re-derived when usage, days, or pricings change.
-  const totals = useMemo(
-    () => computeDailyTotals(dailyUsageInWindow),
-    [dailyUsageInWindow],
+  const totals = useMemo(() => computeDailyTotals(dailyUsageInWindow), [dailyUsageInWindow]);
+  const previousTotals = useMemo(
+    () => computeDailyTotals(dailyUsagePrevious),
+    [dailyUsagePrevious],
   );
-  const dailyCost = useMemo(
-    () => aggregateDailyCost(dailyUsageInWindow),
-    [dailyUsageInWindow],
-  );
+  const runsInWindow = runTimeDailyInWindow.reduce((sum, r) => sum + r.task_count, 0);
+  const runsPrevious = runTimeDailyPrevious.reduce((sum, r) => sum + r.task_count, 0);
+  // The previous period only has a baseline when the backend has data that
+  // old; a workspace younger than two periods shows "no data" instead of a
+  // meaningless +∞%.
+  const hasPreviousUsage = dailyUsagePrevious.length > 0;
+
+  // ---- Usage charts (Cost tab) -------------------------------------------
+  const dailyCost = useMemo(() => aggregateDailyCost(dailyUsageInWindow), [dailyUsageInWindow]);
   const dailyTokens = useMemo(
     () => aggregateDailyTokens(dailyUsageInWindow),
     [dailyUsageInWindow],
   );
-  const dailyTime = useMemo(
-    () => aggregateDailyTime(runTimeDailyInWindow),
-    [runTimeDailyInWindow],
-  );
+  const dailyTime = useMemo(() => aggregateDailyTime(runTimeDailyInWindow), [runTimeDailyInWindow]);
   const dailyTasks = useMemo(
     () => aggregateDailyTasks(runTimeDailyInWindow),
     [runTimeDailyInWindow],
   );
-  const dailyErrors = useMemo(
-    () => aggregateDailyErrors(failureDailyInWindow),
-    [failureDailyInWindow],
-  );
-
-  // Failure summaries.
-  //
-  // Totals / classes / reasons are derived from the DATE-BUCKETED rollup after
-  // the same `dailyCutoffIso` trim the charts use, not from the per-agent one.
-  // `parseSinceParamInTZ` deliberately returns N+1 calendar days of headroom
-  // (see sinceFromDays in server/internal/handler/runtime.go), and only a
-  // series carrying a date can trim that back client-side. Reading these off
-  // the per-agent rollup put the summary one calendar day wider than the chart
-  // beside it — at 1D the chart could show no failures while the tile counted
-  // yesterday's.
-  const failureTotals = useMemo(
-    () => computeFailureTotals(failureDailyInWindow),
-    [failureDailyInWindow],
-  );
-  const failureClassRows = useMemo(
-    () => aggregateFailureClasses(failureDailyInWindow),
-    [failureDailyInWindow],
-  );
-  const failureReasonRows = useMemo(
-    () => aggregateFailureReasons(failureDailyInWindow),
-    [failureDailyInWindow],
-  );
-  // Which agent ids this viewer can actually resolve to a name. Declared here
-  // rather than next to the leaderboard because the Errors aggregation below
-  // needs it too — see anonymizeUnresolvedAgentRows.
-  const knownAgentIds = useMemo(
-    () => (agentsQuery.isSuccess ? new Set(agents.map((a) => a.id)) : null),
-    [agentsQuery.isSuccess, agents],
-  );
-
-  // The per-agent split has no date to trim on, so its window is closed
-  // server-side instead — GetDashboardFailuresByAgent uses the exact N-day
-  // cutoff rather than the N+1 one.
-  //
-  // Anonymize BEFORE aggregating: the sentinel then behaves like any other
-  // agent id, so the bucket's failure classes are summed from real
-  // per-(agent, reason) rows instead of being reconstructed from rows that
-  // have already collapsed to a single dominant class.
-  const agentFailureRows = useMemo(
-    () =>
-      aggregateAgentFailures(
-        anonymizeUnresolvedAgentRows(failureByAgentRows, knownAgentIds),
-      ),
-    [failureByAgentRows, knownAgentIds],
-  );
-
-  // Weekly aggregates — built from the over-fetched per-date queries so the
-  // leftmost trailing week always has data even when the user-selected `days`
-  // (e.g. 30D) is shorter than the chart's `weekCount * 7` span. Buckets are
-  // pre-zeroed inside the helpers, so sparse weeks render as empty bars
-  // instead of being dropped (MUL-2382 weekly window scoping). Week
-  // boundaries follow the viewer's timezone.
   const weekly = useMemo(
     () => aggregateByWeek(dailyUsage, viewTZ, weekCount),
     [dailyUsage, viewTZ, weekCount],
   );
-  const weeklyCost = weekly.weeklyCostStack;
-  const weeklyTokens = weekly.weeklyTokens;
   const weeklyTime = useMemo(
     () => aggregateWeeklyTime(runTimeDailyRows, viewTZ, weekCount),
     [runTimeDailyRows, viewTZ, weekCount],
@@ -399,62 +341,300 @@ export function DashboardPage() {
     () => aggregateWeeklyTasks(runTimeDailyRows, viewTZ, weekCount),
     [runTimeDailyRows, viewTZ, weekCount],
   );
+
+  // ---- Reliability ----------------------------------------------------------
+  // Totals / classes / reasons come from the date-bucketed rollup after the
+  // same trim the charts use, so the summary never spans a wider window than
+  // the chart beside it.
+  const dailyErrors = useMemo(() => aggregateDailyErrors(failureDailyInWindow), [failureDailyInWindow]);
   const weeklyErrors = useMemo(
     () => aggregateWeeklyErrors(failureDailyRows, viewTZ, weekCount),
     [failureDailyRows, viewTZ, weekCount],
   );
-  const agentTokenRows = useMemo(
-    () => aggregateAgentTokens(byAgentUsage),
-    [byAgentUsage],
+  const failureTotals = useMemo(() => computeFailureTotals(failureDailyInWindow), [failureDailyInWindow]);
+  const failureClassRows = useMemo(
+    () => aggregateFailureClasses(failureDailyInWindow),
+    [failureDailyInWindow],
+  );
+  const failureReasonRows = useMemo(
+    () => aggregateFailureReasons(failureDailyInWindow),
+    [failureDailyInWindow],
+  );
+  const knownAgentIds = useMemo(
+    () => (agentsQuery.isSuccess ? new Set(agents.map((a) => a.id)) : null),
+    [agentsQuery.isSuccess, agents],
+  );
+  const agentFailureRows = useMemo(
+    () => aggregateAgentFailures(anonymizeUnresolvedAgentRows(failureByAgentRows, knownAgentIds)),
+    [failureByAgentRows, knownAgentIds],
   );
 
-  // Run-time totals — taskCount + failedCount summed for the KPI row.
-  const runTimeTotals = useMemo(() => {
-    let totalSeconds = 0;
-    let taskCount = 0;
-    let failedCount = 0;
-    for (const r of runTimeRows) {
-      totalSeconds += r.total_seconds;
-      taskCount += r.task_count;
-      failedCount += r.failed_count;
+  // ---- Delivery ------------------------------------------------------------
+  const periods = useMemo(
+    () =>
+      splitDeliveryPeriods({
+        ...delivery,
+        issues: foldUnknownDeliveryAgents(delivery.issues, knownAgentIds),
+      }),
+    [delivery, knownAgentIds],
+  );
+  const summary = useMemo(() => summarizeDelivery(periods.current), [periods]);
+  const previousSummary = useMemo(() => summarizeDelivery(periods.previous), [periods]);
+  const hasPreviousDelivery = periods.previous.length > 0;
+  const agentRows = useMemo(() => aggregateDeliveryByAgent(periods.current), [periods]);
+  const agentSummaries = useMemo(() => {
+    const map = new Map<string, DeliverySummary>();
+    for (const row of agentRows) {
+      map.set(
+        row.agentId,
+        summarizeDelivery(periods.current.filter((i) => i.agent_id === row.agentId)),
+      );
     }
-    return { totalSeconds, taskCount, failedCount };
-  }, [runTimeRows]);
-
-  const agentRows = useMemo(
-    () => mergeAgentDashboardRows(agentTokenRows, runTimeRows),
-    [agentTokenRows, runTimeRows],
+    return map;
+  }, [agentRows, periods]);
+  // Anchor "now" on the fetch, not the render, so the waiting-for-review rule
+  // does not drift between renders of the same data.
+  const deliveryNow = deliveryQuery.dataUpdatedAt || Date.now();
+  const insights = useMemo(
+    () => deriveDeliveryInsights(periods, deliveryNow),
+    [periods, deliveryNow],
   );
+  const sources = useMemo(() => aggregateDeliverySources(periods.current), [periods]);
 
-  // Fold rollup rows for hard-deleted agents into one aggregated "Deleted
-  // agents" row instead of showing them as a bare UUID (MUL-3771) or dropping
-  // them outright — dropping made the per-agent breakdown stop reconciling
-  // with the top-line Cost/Tokens KPIs, which still count that spend (MUL-3776,
-  // #4640). Archived agents stay as themselves (the agent list is fetched with
-  // archived included); only truly-removed agents collapse into the bucket.
-  // Skip bucketing until the agent list has loaded so a slow agents fetch
-  // doesn't transiently merge every row.
-  const visibleAgentRows = useMemo(
-    () => bucketUnknownAgentRows(agentRows, knownAgentIds),
-    [agentRows, knownAgentIds],
-  );
-  // Distinct hard-deleted agents folded into the bucket — drives the caption's
-  // "· N deleted" suffix (the bucket itself is a single row). The server's
-  // restricted bucket is not in `knownAgentIds` either but is not a deletion,
-  // so it must not inflate this count — that mislabelling is exactly the bug
-  // MUL-5409 came with.
-  const deletedAgentCount = useMemo(
+  // Agent spend, with rows for agents this viewer cannot name folded exactly
+  // like the delivery rows so the two line up in the scorecard.
+  const foldedBreakdown = useMemo(
     () =>
       knownAgentIds
-        ? agentRows.filter(
-            (r) => !knownAgentIds.has(r.agentId) && !isSyntheticAgentRow(r.agentId),
-          ).length
-        : 0,
-    [agentRows, knownAgentIds],
+        ? breakdownRows.map((r) =>
+            r.agent_id === RESTRICTED_AGENTS_ROW_ID || knownAgentIds.has(r.agent_id)
+              ? r
+              : { ...r, agent_id: DELETED_AGENTS_ROW_ID },
+          )
+        : breakdownRows,
+    [breakdownRows, knownAgentIds],
+  );
+  const costByAgent = useMemo(
+    () => new Map(aggregateAgentTokens(foldedBreakdown).map((r) => [r.agentId, r.cost])),
+    [foldedBreakdown],
   );
 
-  const allowedDims = dimsForDays(days);
+  // ---- Sparklines ------------------------------------------------------------
+  const sparkDelivered = useMemo(
+    () =>
+      bucketDeliveries(periods.current, viewTZ, windowStartIso, today, "daily").map(
+        (b) => b.firstPass + b.reworked,
+      ),
+    [periods, viewTZ, windowStartIso, today],
+  );
+  const sparkFirstPass = useMemo(
+    () =>
+      trailingDailySeries(periods.current, viewTZ, windowStartIso, today, (window) =>
+        window.length > 0 ? window.filter((i) => i.bounce_count === 0).length / window.length : null,
+      ),
+    [periods, viewTZ, windowStartIso, today],
+  );
+  const sparkCycle = useMemo(
+    () =>
+      trailingDailySeries(periods.current, viewTZ, windowStartIso, today, (window) =>
+        median(window.map(cycleSeconds).filter((v): v is number => v !== null)),
+      ),
+    [periods, viewTZ, windowStartIso, today],
+  );
+  const sparkUnitCost = useMemo(() => {
+    const costByDay = new Map<string, number>();
+    for (const row of dailyUsageInWindow) {
+      costByDay.set(row.date, (costByDay.get(row.date) ?? 0) + estimateCost(row));
+    }
+    const deliveredByDay = new Map(
+      bucketDeliveries(periods.current, viewTZ, windowStartIso, today, "daily").map((b) => [
+        b.start,
+        b.firstPass + b.reworked,
+      ]),
+    );
+    const series: number[] = [];
+    let last = 0;
+    for (let day = windowStartIso; day <= today; day = addDaysIso(day, 1)) {
+      let cost = 0;
+      let delivered = 0;
+      for (let back = 0; back < 7; back++) {
+        const d = addDaysIso(day, -back);
+        cost += costByDay.get(d) ?? 0;
+        delivered += deliveredByDay.get(d) ?? 0;
+      }
+      if (delivered > 0) last = cost / delivered;
+      series.push(last);
+    }
+    return series;
+  }, [dailyUsageInWindow, periods, viewTZ, windowStartIso, today]);
+
+  // ---- Formatting ------------------------------------------------------------
   const lessThanMinuteLabel = t(($) => $.duration.less_than_minute);
+  const percentFmt = new Intl.NumberFormat(locales, { style: "percent", maximumFractionDigits: 0 });
+  const fmtPercent = (v: number | null) => (v === null ? "—" : percentFmt.format(v));
+  const fmtMoney = (v: number | null) => (v === null ? "—" : `$${v.toFixed(2)}`);
+  const fmtDuration = (v: number | null) =>
+    v === null ? "—" : formatDuration(v, lessThanMinuteLabel);
+
+  const unitCost = summary.delivered > 0 ? totals.cost / summary.delivered : null;
+  const previousUnitCost =
+    previousSummary.delivered > 0 && hasPreviousUsage
+      ? previousTotals.cost / previousSummary.delivered
+      : null;
+  const runCost = runsInWindow > 0 ? totals.cost / runsInWindow : null;
+  const previousRunCost =
+    runsPrevious > 0 && hasPreviousUsage ? previousTotals.cost / runsPrevious : null;
+
+  const deliveryDelta = (
+    current: number | null,
+    previous: number | null,
+    format: (v: number | null) => string,
+    tone: KpiDelta["tone"],
+    points = false,
+  ): KpiDelta => ({
+    change: points ? pointChange(current, previous) : relativeChange(current, previous),
+    points,
+    tone,
+    previous: hasPreviousDelivery && previous !== null ? format(previous) : null,
+  });
+
+  const agentName = (agentId: string) => {
+    if (agentId === DELETED_AGENTS_ROW_ID) return t(($) => $.scorecard.deleted_agents);
+    if (agentId === RESTRICTED_AGENTS_ROW_ID) return t(($) => $.scorecard.other_agents);
+    return agents.find((a) => a.id === agentId)?.name ?? agentId;
+  };
+
+  const costLabel = (group: CostGroup, key: string) => {
+    switch (group) {
+      case "agent":
+        return agentName(key);
+      case "model":
+        return key;
+      case "runtime": {
+        const runtime = runtimes.find((r) => r.id === key);
+        return runtime ? runtimeDisplayLabel(runtime) : t(($) => $.cost.unknown_runtime);
+      }
+      case "project":
+        if (!key) return t(($) => $.cost.no_project);
+        return projects.find((p) => p.id === key)?.title ?? t(($) => $.cost.unknown_project);
+    }
+  };
+
+  // ---- Drill-down ------------------------------------------------------------
+  const openStage = (stage: DeliveryStage) =>
+    setDrill({
+      title: stageLabel(stage),
+      issues: filterDeliveryIssues(periods.current, { kind: "stage", stage }, deliveryNow),
+    });
+  const openBounced = (agentId?: string) =>
+    setDrill({
+      title: agentId
+        ? t(($) => $.drill.bounced_agent_title, { agent: agentName(agentId) })
+        : t(($) => $.drill.bounced_title),
+      issues: filterDeliveryIssues(periods.current, { kind: "bounced", agentId }, deliveryNow),
+    });
+  const openDelivered = (agentId: string) =>
+    setDrill({
+      title: t(($) => $.drill.delivered_agent_title, { agent: agentName(agentId) }),
+      issues: filterDeliveryIssues(periods.current, { kind: "delivered", agentId }, deliveryNow),
+    });
+  const openInsight = (insight: DeliveryInsight) => {
+    switch (insight.kind) {
+      case "failure_spike":
+        handleTabChange("reliability");
+        return;
+      case "review_backlog":
+        setDrill({
+          title: t(($) => $.drill.waiting_title),
+          issues: filterDeliveryIssues(
+            [...periods.current, ...periods.previous],
+            { kind: "waiting_review" },
+            deliveryNow,
+          ),
+        });
+        return;
+      case "low_first_pass":
+        openBounced(insight.agentId);
+        return;
+      case "blocked":
+        openStage("blocked");
+        return;
+    }
+  };
+
+  // ---- Loading / empty, per tab ------------------------------------------------
+  const deliveryLoading = deliveryQuery.isLoading || dailyQuery.isLoading;
+  const costLoading = dailyQuery.isLoading || runTimeDailyQuery.isLoading || breakdownQuery.isLoading;
+  const errorsLoading = failuresDailyQuery.isLoading || failuresByAgentQuery.isLoading;
+  const usageHasNoData =
+    !costLoading && dailyUsage.length === 0 && runTimeDailyRows.length === 0;
+  const deliveryHasNoData = !deliveryLoading && delivery.issues.length === 0 && usageHasNoData;
+
+  const allowedDims = dimsForDays(days);
+  const trend = useMemo(
+    () => ({
+      tz: viewTZ,
+      firstDay: windowStartIso,
+      lastDay: today,
+      grain: days >= 30 ? ("weekly" as const) : ("daily" as const),
+    }),
+    [viewTZ, windowStartIso, today, days],
+  );
+
+  const deliveredKpi = (
+    <AnalyticsKpi
+      label={t(($) => $.overview.kpi_delivered)}
+      value={
+        <NumberFlow
+          value={summary.delivered}
+          locales={locales}
+          format={{ maximumFractionDigits: 0 }}
+        />
+      }
+      delta={deliveryDelta(summary.delivered, previousSummary.delivered, (v) => String(v ?? 0), "up_is_good")}
+      sparkline={sparkDelivered}
+      locales={locales}
+    />
+  );
+  const cycleKpi = (
+    <AnalyticsKpi
+      label={t(($) => $.overview.kpi_cycle)}
+      value={
+        summary.medianCycleSeconds === null ? (
+          "—"
+        ) : (
+          <DurationNumberFlow
+            seconds={summary.medianCycleSeconds}
+            lessThanMinuteLabel={lessThanMinuteLabel}
+            locales={locales}
+          />
+        )
+      }
+      delta={deliveryDelta(
+        summary.medianCycleSeconds,
+        previousSummary.medianCycleSeconds,
+        fmtDuration,
+        "down_is_good",
+      )}
+      sparkline={sparkCycle}
+      locales={locales}
+    />
+  );
+  const unitCostKpi = (
+    <AnalyticsKpi
+      label={t(($) => $.overview.kpi_unit_cost)}
+      value={
+        unitCost === null ? "—" : <CurrencyNumberFlow value={unitCost} locales={locales} />
+      }
+      delta={{
+        change: relativeChange(unitCost, previousUnitCost),
+        tone: "down_is_good",
+        previous: previousUnitCost === null ? null : fmtMoney(previousUnitCost),
+      }}
+      sparkline={sparkUnitCost}
+      locales={locales}
+    />
+  );
 
   return (
     <Tabs
@@ -466,9 +646,6 @@ export function DashboardPage() {
         icon={BarChart3}
         title={t(($) => $.title)}
         actions={
-          /* Data freshness cluster: the timestamp and the action that advances
-             it stay together. Refresh re-pulls the same scope, so it lives here
-             with the page metadata rather than among the scope controls. */
           <div className="flex items-center gap-1">
             {tzLabel ? (
               <span className="hidden text-caption text-muted-foreground lg:inline">
@@ -493,25 +670,26 @@ export function DashboardPage() {
         }
       />
 
-      {/* View toolbar, same grammar as the issues surface header: view
-          switching on the left, page-scoped filters on the right. Both tabs
-          share the range and project filter, which is why the filters live
-          here and not inside a tab. */}
+      {/* View switching on the left, the two page-scoped filters on the right —
+          the same grammar as the issues toolbar. */}
       <div className={cn("h-12 shrink-0 overflow-x-auto border-b [-webkit-overflow-scrolling:touch]", PAGE_GUTTER)}>
         <div className="flex h-full w-max min-w-full items-center justify-between gap-2">
           <TabsList variant="line" className="gap-0 p-0 group-data-horizontal/tabs:h-full">
-            <TabsTrigger
-              value="usage"
-              className="h-full rounded-none px-2.5 text-label group-data-horizontal/tabs:after:bottom-0"
-            >
-              {t(($) => $.tab_usage)}
-            </TabsTrigger>
-            <TabsTrigger
-              value="errors"
-              className="h-full rounded-none px-2.5 text-label group-data-horizontal/tabs:after:bottom-0"
-            >
-              {t(($) => $.errors.title)}
-            </TabsTrigger>
+            {DASHBOARD_TABS.map((value) => (
+              <TabsTrigger
+                key={value}
+                value={value}
+                className="h-full rounded-none px-2.5 text-label group-data-horizontal/tabs:after:bottom-0"
+              >
+                {value === "overview"
+                  ? t(($) => $.tabs.overview)
+                  : value === "delivery"
+                    ? t(($) => $.tabs.delivery)
+                    : value === "cost"
+                      ? t(($) => $.tabs.cost)
+                      : t(($) => $.tabs.reliability)}
+              </TabsTrigger>
+            ))}
           </TabsList>
           <div className="flex shrink-0 items-center gap-2">
             <TimeRangeFilter days={days} onChange={setDays} />
@@ -526,97 +704,224 @@ export function DashboardPage() {
 
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-6xl p-6">
-          <TabsContent value="usage" className="space-y-5">
-            {usageLoading ? (
+          <TabsContent value="overview" className="space-y-5">
+            {deliveryLoading ? (
               <DashboardSkeleton />
-            ) : usageHasNoData ? (
+            ) : deliveryHasNoData ? (
               <DashboardEmpty />
             ) : (
               <>
-                {/* KPI row — same 3-divide-x card grid the runtime usage
-                    section uses, expanded to four tiles. */}
-                <div className="grid grid-cols-1 divide-y rounded-lg border bg-card sm:grid-cols-2 sm:divide-x sm:divide-y-0 lg:grid-cols-4">
-                  <KpiCard
-                    label={t(($) => $.kpi.cost_label, { days })}
-                    value={<CurrencyNumberFlow value={totals.cost} locales={locales} />}
-                  />
-                  <KpiCard
-                    label={t(($) => $.kpi.tokens_label, { days })}
+                <KpiRow>
+                  {deliveredKpi}
+                  <AnalyticsKpi
+                    label={t(($) => $.overview.kpi_first_pass)}
                     value={
-                      <CompactNumberFlow
-                        value={
-                          totals.input +
-                          totals.output +
-                          totals.cacheRead +
-                          totals.cacheWrite
-                        }
-                        locales={locales}
-                      />
+                      summary.firstPassRate === null ? (
+                        "—"
+                      ) : (
+                        <>
+                          <NumberFlow
+                            value={Math.round(summary.firstPassRate * 100)}
+                            locales={locales}
+                            format={{ maximumFractionDigits: 0 }}
+                          />
+                          <KpiUnit>%</KpiUnit>
+                        </>
+                      )
                     }
-                    hint={t(($) => $.kpi.tokens_hint, {
-                      input: formatTokens(totals.input),
-                      output: formatTokens(totals.output),
-                    })}
+                    delta={deliveryDelta(
+                      summary.firstPassRate,
+                      previousSummary.firstPassRate,
+                      fmtPercent,
+                      "up_is_good",
+                      true,
+                    )}
+                    sparkline={sparkFirstPass}
+                    locales={locales}
                   />
-                  <KpiCard
-                    label={t(($) => $.kpi.run_time_label, { days })}
-                    value={
-                      <DurationNumberFlow
-                        seconds={runTimeTotals.totalSeconds}
-                        lessThanMinuteLabel={lessThanMinuteLabel}
-                        locales={locales}
-                      />
-                    }
-                    hint={t(($) => $.kpi.run_time_hint, {
-                      tasks: runTimeTotals.taskCount,
-                    })}
+                  {cycleKpi}
+                  {unitCostKpi}
+                </KpiRow>
+                <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+                  <FunnelCard
+                    className="lg:col-span-2"
+                    summary={summary}
+                    locales={locales}
+                    onOpenStage={openStage}
+                    onOpenBounced={() => openBounced()}
                   />
-                  <KpiCard
-                    label={t(($) => $.kpi.tasks_label, { days })}
-                    value={
-                      <NumberFlow
-                        value={runTimeTotals.taskCount}
-                        locales={locales}
-                        format={{ maximumFractionDigits: 0 }}
-                        aria-label={String(runTimeTotals.taskCount)}
-                      />
-                    }
-                    // Deliberately sourced from `runTimeTotals`, not the
-                    // failure rollup: the tile's own value counts started tasks
-                    // only, so quoting the failure rollup's larger failure count
-                    // here would put two different denominators in one tile. The
-                    // Errors tab states its rate with the denominator spelled
-                    // out instead.
-                    hint={t(($) => $.kpi.tasks_hint, {
-                      failed: runTimeTotals.failedCount,
-                    })}
+                  <InsightsCard
+                    insights={insights}
+                    agentName={agentName}
+                    locales={locales}
+                    onOpen={openInsight}
                   />
                 </div>
-
-                <UsageTrendCard
-                  allowedDims={allowedDims}
-                  dailyCost={dailyCost}
-                  dailyTokens={dailyTokens}
-                  dailyTime={dailyTime}
-                  dailyTasks={dailyTasks}
-                  weeklyCost={weeklyCost}
-                  weeklyTokens={weeklyTokens}
-                  weeklyTime={weeklyTime}
-                  weeklyTasks={weeklyTasks}
+                <Scorecard
+                  rows={agentRows}
+                  team={summary}
+                  costByAgent={costByAgent}
+                  teamCost={totals.cost}
+                  issues={periods.current}
+                  trend={trend}
+                  agentName={agentName}
                   lessThanMinuteLabel={lessThanMinuteLabel}
+                  locales={locales}
+                  onOpenDelivered={openDelivered}
+                  onOpenBounced={openBounced}
                 />
+              </>
+            )}
+          </TabsContent>
 
-                <Leaderboard
-                  rows={visibleAgentRows}
-                  agents={agents}
-                  deletedAgentCount={deletedAgentCount}
+          <TabsContent value="delivery" className="space-y-5">
+            {deliveryLoading ? (
+              <DashboardSkeleton />
+            ) : deliveryHasNoData ? (
+              <DashboardEmpty />
+            ) : (
+              <>
+                <KpiRow>
+                  {deliveredKpi}
+                  <AnalyticsKpi
+                    label={t(($) => $.delivery.kpi_accepted)}
+                    value={
+                      <NumberFlow
+                        value={summary.accepted}
+                        locales={locales}
+                        format={{ maximumFractionDigits: 0 }}
+                      />
+                    }
+                    delta={deliveryDelta(
+                      summary.accepted,
+                      previousSummary.accepted,
+                      (v) => String(v ?? 0),
+                      "up_is_good",
+                    )}
+                    locales={locales}
+                  />
+                  {cycleKpi}
+                  <AnalyticsKpi
+                    label={t(($) => $.delivery.kpi_review)}
+                    value={
+                      summary.medianReviewSeconds === null ? (
+                        "—"
+                      ) : (
+                        <DurationNumberFlow
+                          seconds={summary.medianReviewSeconds}
+                          lessThanMinuteLabel={lessThanMinuteLabel}
+                          locales={locales}
+                        />
+                      )
+                    }
+                    delta={deliveryDelta(
+                      summary.medianReviewSeconds,
+                      previousSummary.medianReviewSeconds,
+                      fmtDuration,
+                      "down_is_good",
+                    )}
+                    locales={locales}
+                  />
+                </KpiRow>
+                <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+                  <DeliveredChartCard
+                    className="lg:col-span-2"
+                    issues={periods.current}
+                    summary={summary}
+                    tz={viewTZ}
+                    firstDay={windowStartIso}
+                    lastDay={today}
+                    allowedDims={allowedDims}
+                  />
+                  <SourcesCard rows={sources} locales={locales} />
+                </div>
+                <TimeBreakdownCard
+                  team={summary}
+                  agentRows={agentRows}
+                  agentSummaries={agentSummaries}
+                  agentName={agentName}
                   lessThanMinuteLabel={lessThanMinuteLabel}
                 />
               </>
             )}
           </TabsContent>
 
-          <TabsContent value="errors">
+          <TabsContent value="cost" className="space-y-5">
+            {costLoading ? (
+              <DashboardSkeleton />
+            ) : usageHasNoData ? (
+              <DashboardEmpty />
+            ) : (
+              <>
+                <KpiRow>
+                  <AnalyticsKpi
+                    label={t(($) => $.cost.kpi_total)}
+                    value={<CurrencyNumberFlow value={totals.cost} locales={locales} />}
+                    delta={{
+                      change: relativeChange(totals.cost, hasPreviousUsage ? previousTotals.cost : null),
+                      tone: "neutral",
+                      previous: hasPreviousUsage ? fmtMoney(previousTotals.cost) : null,
+                    }}
+                    locales={locales}
+                  />
+                  {unitCostKpi}
+                  <AnalyticsKpi
+                    label={t(($) => $.cost.kpi_run)}
+                    value={
+                      runCost === null ? "—" : <CurrencyNumberFlow value={runCost} locales={locales} />
+                    }
+                    delta={{
+                      change: relativeChange(runCost, previousRunCost),
+                      tone: "down_is_good",
+                      previous: previousRunCost === null ? null : fmtMoney(previousRunCost),
+                    }}
+                    locales={locales}
+                  />
+                  <AnalyticsKpi
+                    label={t(($) => $.cost.kpi_tokens)}
+                    value={
+                      <CompactNumberFlow
+                        value={totals.input + totals.output + totals.cacheRead + totals.cacheWrite}
+                        locales={locales}
+                      />
+                    }
+                    hint={t(($) => $.cost.tokens_hint, {
+                      input: formatTokens(totals.input),
+                      output: formatTokens(totals.output),
+                    })}
+                    locales={locales}
+                  />
+                </KpiRow>
+                <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+                  <div className="lg:col-span-2">
+                    <UsageTrendCard
+                      allowedDims={allowedDims}
+                      dailyCost={dailyCost}
+                      dailyTokens={dailyTokens}
+                      dailyTime={dailyTime}
+                      dailyTasks={dailyTasks}
+                      weeklyCost={weekly.weeklyCostStack}
+                      weeklyTokens={weekly.weeklyTokens}
+                      weeklyTime={weeklyTime}
+                      weeklyTasks={weeklyTasks}
+                      lessThanMinuteLabel={lessThanMinuteLabel}
+                    />
+                  </div>
+                  <UnitCostCard
+                    rows={[...costByAgent.entries()].map(([agentId, cost]) => ({
+                      agentId,
+                      name: agentName(agentId),
+                      cost,
+                      delivered: agentRows.find((r) => r.agentId === agentId)?.delivered ?? 0,
+                    }))}
+                  />
+                </div>
+                <CostBreakdownCard rows={foldedBreakdown} labelFor={costLabel} locales={locales} />
+              </>
+            )}
+          </TabsContent>
+
+          <TabsContent value="reliability">
             {errorsLoading ? (
               <DashboardSkeleton />
             ) : (
@@ -636,6 +941,13 @@ export function DashboardPage() {
           </TabsContent>
         </div>
       </div>
+
+      <DeliveryIssuesSheet
+        drill={drill}
+        onOpenChange={(open) => {
+          if (!open) setDrill(null);
+        }}
+      />
     </Tabs>
   );
 }
