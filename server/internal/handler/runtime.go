@@ -380,6 +380,27 @@ func parseExactSinceParamInTZ(r *http.Request, defaultDays int, tzName string) p
 	return parseDaysCutoff(r, defaultDays, tzName, 1)
 }
 
+// parseDaysParam reads `?days=N`, falling back to defaultDays when the param is
+// absent or outside 1..365.
+func parseDaysParam(r *http.Request, defaultDays int) int {
+	if d := r.URL.Query().Get("days"); d != "" {
+		if parsed, err := strconv.Atoi(d); err == nil && parsed > 0 && parsed <= 365 {
+			return parsed
+		}
+	}
+	return defaultDays
+}
+
+// loadLocationOrUTC resolves an IANA zone name, falling back to UTC so a bad
+// stored or requested zone never fails a read.
+func loadLocationOrUTC(tzName string) *time.Location {
+	loc, err := time.LoadLocation(tzName)
+	if err != nil || loc == nil {
+		return time.UTC
+	}
+	return loc
+}
+
 // parseDaysCutoff is the shared body of the two cutoff parsers. `trimDays`
 // pulls the cutoff forward, so 0 keeps the N+1 headroom and 1 closes the
 // window to exactly N calendar days.
@@ -399,16 +420,8 @@ func parseDaysCutoff(
 	tzName string,
 	trimDays int,
 ) pgtype.Timestamptz {
-	days := defaultDays
-	if d := r.URL.Query().Get("days"); d != "" {
-		if parsed, err := strconv.Atoi(d); err == nil && parsed > 0 && parsed <= 365 {
-			days = parsed
-		}
-	}
-	loc, err := time.LoadLocation(tzName)
-	if err != nil || loc == nil {
-		loc = time.UTC
-	}
+	days := parseDaysParam(r, defaultDays)
+	loc := loadLocationOrUTC(tzName)
 	// Guard the floor: days is already >= 1 here, and trimming a 1-day
 	// window by one would put the cutoff at start-of-today+0 — still correct
 	// ("today only"), which is exactly what days=1 means.
