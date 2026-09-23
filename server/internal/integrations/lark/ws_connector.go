@@ -374,6 +374,15 @@ func (c *WSLongConnConnector) Run(ctx context.Context, inst Installation, emit E
 			// Heartbeat / unhandled event type. ACK 200 so the server
 			// stops sending it; the decoder owns the "what we handle"
 			// policy.
+			//
+			// Report the event type when the payload carries one
+			// (#8496): a socket that is up but only ever receives
+			// events we decline is indistinguishable from a healthy
+			// one otherwise, since this path writes no audit row.
+			// Heartbeats peek as "" and stay silent.
+			if eventType := PeekEventType(payload); eventType != "" {
+				log.Info("lark ws connector: dropped unhandled event", "event_type", eventType)
+			}
 			if werr := c.writeFrame(&writeMu, conn, NewAckFrame(frame, true)); werr != nil {
 				log.Warn("lark ws connector: ack-after-drop write failed", "err", werr.Error())
 				return fmt.Errorf("write ack: %w", werr)

@@ -108,10 +108,36 @@ func (d *fakeWSDialer) DialContext(ctx context.Context, urlStr string, h http.He
 	return d.conn, nil, nil
 }
 
+// syncBuffer is a mutex-guarded io.Writer, so a slog handler written
+// from the connector goroutine can be read from the test goroutine.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // quietConnector wires a connector with a deterministic decoder + the
 // fakeWSConn. Caller controls the decoder so each test can assert
 // per-payload behaviour.
 func quietConnector(t *testing.T, conn *fakeWSConn, decoder FrameDecoder, pingInterval time.Duration) *WSLongConnConnector {
+	t.Helper()
+	return connectorWithLogger(t, conn, decoder, pingInterval, slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
+
+// connectorWithLogger is quietConnector with the logger left to the
+// caller, for the tests that assert on what the connector logs.
+func connectorWithLogger(t *testing.T, conn *fakeWSConn, decoder FrameDecoder, pingInterval time.Duration, logger *slog.Logger) *WSLongConnConnector {
 	t.Helper()
 	c, err := NewWSLongConnConnector(WSConnectorConfig{
 		Dialer: &fakeWSDialer{conn: conn},
@@ -125,7 +151,7 @@ func quietConnector(t *testing.T, conn *fakeWSConn, decoder FrameDecoder, pingIn
 		PingInterval: pingInterval,
 		ReadDeadline: time.Second,
 		WriteTimeout: time.Second,
-		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:       logger,
 	})
 	if err != nil {
 		t.Fatalf("NewWSLongConnConnector: %v", err)
@@ -457,6 +483,61 @@ func TestWSConnectorDecoderErrorAcksAndContinues(t *testing.T) {
 
 	cancel()
 	<-done
+}
+
+// TestWSConnectorLogsDroppedEventType covers #8496: a connection that is up
+// but only receiving event types we do not handle looked exactly like a
+// healthy one, because the drop path wrote neither a log line nor a DB row.
+// The event type is logged so "connected but deaf" is visible. Heartbeats
+// carry no event type and stay silent, so the log does not fill with noise.
+func TestWSConnectorLogsDroppedEventType(t *testing.T) {
+	t.Parallel()
+	conn := newFakeWSConn()
+	logs := &syncBuffer{}
+	decoder := FrameDecoderFunc(func([]byte, Installation) (InboundMessage, bool, error) {
+		return InboundMessage{}, false, nil
+	})
+	c := connectorWithLogger(t, conn, decoder, time.Hour, slog.New(slog.NewTextHandler(logs, nil)))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- c.Run(ctx, Installation{AppID: "test_app"}, func(context.Context, InboundMessage) (DispatchResult, error) {
+			return DispatchResult{}, nil
+		})
+	}()
+
+	pushDataFrame(conn, []byte(`{"schema":"2.0","header":{"event_type":"im.chat.access_event_v1","event_id":"e1"}}`), "m1")
+	waitForWrites(t, conn, 1)
+	if got := logs.String(); !strings.Contains(got, "im.chat.access_event_v1") {
+		t.Fatalf("dropped event type not logged; log was:\n%s", got)
+	}
+
+	// A heartbeat-shaped frame carries no event type: ACKed, not logged.
+	pushDataFrame(conn, []byte(`{}`), "m2")
+	waitForWrites(t, conn, 2)
+	if got := strings.Count(logs.String(), "dropped unhandled event"); got != 1 {
+		t.Errorf("dropped-event log lines = %d, want 1 (heartbeats must stay silent); log was:\n%s", got, logs.String())
+	}
+
+	cancel()
+	<-done
+}
+
+// waitForWrites blocks until the connector has written n frames (each
+// processed frame is ACKed), so a test can assert on what handling that
+// frame did without racing the connector goroutine.
+func waitForWrites(t *testing.T, conn *fakeWSConn, n int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(conn.snapshot()) >= n {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("connector wrote %d frames, want %d", len(conn.snapshot()), n)
 }
 
 func TestWSConnectorReadErrorReturnsToHub(t *testing.T) {
