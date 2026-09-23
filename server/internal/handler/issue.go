@@ -4044,10 +4044,10 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		"prev_description":    textToPtr(prevIssue.Description),
 		"creator_type":        prevIssue.CreatorType,
 		"creator_id":          uuidToString(prevIssue.CreatorID),
-		// The duplicate mark is not on IssueResponse, so both ends of a
-		// change ride here for clients refreshing the two issues' relations.
-		"duplicate_of_issue_id":      uuidToPtr(issue.DuplicateOfIssueID),
-		"prev_duplicate_of_issue_id": uuidToPtr(prevIssue.DuplicateOfIssueID),
+		// Both ends of a mark change ride here: the activity log records it
+		// and clients refresh the two issues' relations from it.
+		"duplicate_of_issue_id":      liveDuplicateMark(issue.Status, issue.DuplicateOfIssueID),
+		"prev_duplicate_of_issue_id": liveDuplicateMark(prevIssue.Status, prevIssue.DuplicateOfIssueID),
 	})
 	if attachmentsChanged {
 		// The full owner snapshot must be admitted before an auxiliary event at
@@ -4468,8 +4468,8 @@ func (h *Handler) publishClearedDuplicates(ctx context.Context, cleared []cleare
 		h.fillStatusCategory(ctx, c.Issue.WorkspaceID, &response)
 		h.publish(protocol.EventIssueUpdated, uuidToString(c.Issue.WorkspaceID), actorType, actorID, map[string]any{
 			"issue":                        response,
-			"duplicate_of_issue_id":        uuidToPtr(c.Issue.DuplicateOfIssueID),
-			"prev_duplicate_of_issue_id":   uuidToPtr(c.Original.ID),
+			"duplicate_of_issue_id":        liveDuplicateMark(c.Issue.Status, c.Issue.DuplicateOfIssueID),
+			"prev_duplicate_of_issue_id":   liveDuplicateMark(c.Issue.Status, c.Original.ID),
 			"prev_duplicate_of_identifier": prefix + "-" + strconv.Itoa(int(c.Original.Number)),
 		})
 	}
@@ -4798,8 +4798,8 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			"status_changed":             statusChanged,
 			"priority_changed":           priorityChanged,
 			"project_changed":            projectChanged,
-			"duplicate_of_issue_id":      uuidToPtr(issue.DuplicateOfIssueID),
-			"prev_duplicate_of_issue_id": uuidToPtr(prevIssue.DuplicateOfIssueID),
+			"duplicate_of_issue_id":      liveDuplicateMark(issue.Status, issue.DuplicateOfIssueID),
+			"prev_duplicate_of_issue_id": liveDuplicateMark(prevIssue.Status, prevIssue.DuplicateOfIssueID),
 		})
 
 		// Reassignment does not cancel existing tasks (#4963 / MUL-4113) —
