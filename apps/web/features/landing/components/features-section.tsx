@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import Image from "next/image";
 import {
   Bot,
@@ -19,7 +19,6 @@ import {
   UserMinus,
 } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
-import { ImageIcon } from "./shared";
 import { useLocale } from "../i18n";
 import type { LandingDict } from "../i18n";
 import { StatusIcon, PriorityIcon } from "@multica/views/issues/components";
@@ -148,7 +147,7 @@ const statusCycle: BuiltInIssueStatus[] = [
 ];
 const priorityCycle: IssuePriority[] = ["none", "low", "medium", "high", "urgent"];
 
-function TeammatesVisual() {
+export function TeammatesVisual() {
   const [status, setStatus] = useState<BuiltInIssueStatus>("in_progress");
   const [priority, setPriority] = useState<IssuePriority>("medium");
   const [assignee, setAssignee] = useState<Assignee>(allAssignees[3]!); // Claude
@@ -422,7 +421,7 @@ const mockTaskHistory = [
   { status: "running" as const, title: "Migrate comment handler", duration: "1m 22s" },
 ];
 
-function AutonomousVisual() {
+export function AutonomousVisual() {
   const [expanded, setExpanded] = useState<number | null>(null);
 
   return (
@@ -548,7 +547,7 @@ const mockFileTree = [
   { name: "templates", isDir: true, depth: 0, open: false },
 ];
 
-function SkillsVisual() {
+export function SkillsVisual() {
   const [selectedSkill, setSelectedSkill] = useState(1);
   const [selectedFile, setSelectedFile] = useState("SKILL.md");
 
@@ -790,7 +789,7 @@ function DailyCostBars({ data }: { data: typeof mockUsageData }) {
   );
 }
 
-function RuntimesVisual() {
+export function RuntimesVisual() {
   const [selectedRuntime, setSelectedRuntime] = useState(0);
   const [timeRange, setTimeRange] = useState<"7d" | "30d" | "90d">("30d");
   const [heatmapCells, setHeatmapCells] = useState<ReturnType<typeof buildHeatmapCells>>([]);
@@ -965,155 +964,257 @@ function RuntimesVisual() {
   );
 }
 
-function buildFeatures(t: LandingDict) {
-  const keys = ["teammates", "autonomous", "skills", "runtimes"] as const;
-  const visuals = [TeammatesVisual, AutonomousVisual, SkillsVisual, RuntimesVisual];
-  const bgImages = [undefined, "/images/feature-bg-2.webp", "/images/feature-bg-3.webp", "/images/feature-bg-4.webp"];
+/* ------------------------------------------------------------------ */
+/*  Feature pillars — stacked, color-coded cards                        */
+/* ------------------------------------------------------------------ */
 
-  return keys.map((key, i) => ({
-    ...t.features[key],
-    visual: visuals[i]!,
-    bgImage: bgImages[i],
-  }));
-}
+type PillarKey = keyof LandingDict["features"];
+
+type PillarTheme = {
+  image: string;
+  panel: string;
+  accent: string;
+  pill: string;
+  halo: string;
+  Chip: () => React.ReactElement;
+};
+
+const PILLARS: Record<PillarKey, PillarTheme> = {
+  teammates: {
+    image: "/images/feature-bg.webp",
+    panel: "bg-[#edf2fd]",
+    accent: "text-[#2a5bd7]",
+    pill: "bg-[#2a5bd7]",
+    halo: "bg-[#2a5bd7]/16",
+    Chip: AssigneeChip,
+  },
+  autonomous: {
+    image: "/images/feature-bg-2.webp",
+    panel: "bg-[#f3f7e3]",
+    accent: "text-[#5a7508]",
+    pill: "bg-[#5a7508]",
+    halo: "bg-[#5a7508]/16",
+    Chip: RunChip,
+  },
+  skills: {
+    image: "/images/feature-bg-3.webp",
+    panel: "bg-[#fdf1e8]",
+    accent: "text-[#c2410c]",
+    pill: "bg-[#c2410c]",
+    halo: "bg-[#c2410c]/16",
+    Chip: SkillChip,
+  },
+  runtimes: {
+    image: "/images/feature-bg-4.webp",
+    panel: "bg-[#f2effd]",
+    accent: "text-[#6341d8]",
+    pill: "bg-[#6341d8]",
+    halo: "bg-[#6341d8]/16",
+    Chip: RuntimeChip,
+  },
+};
+
+const PILLAR_ORDER: PillarKey[] = ["teammates", "autonomous", "skills", "runtimes"];
 
 export function FeaturesSection() {
   const { t } = useLocale();
-  const features = buildFeatures(t);
-  const [activeIndex, setActiveIndex] = useState(0);
-  const panelRefs = useRef<(HTMLDivElement | null)[]>([]);
-
-  useEffect(() => {
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            const idx = Number(entry.target.getAttribute("data-index"));
-            if (!isNaN(idx)) setActiveIndex(idx);
-          }
-        }
-      },
-      { rootMargin: "-20% 0px -60% 0px", threshold: 0 },
-    );
-
-    panelRefs.current.forEach((el) => {
-      if (el) observer.observe(el);
-    });
-
-    return () => observer.disconnect();
-  }, []);
-
-  const scrollToPanel = (index: number) => {
-    panelRefs.current[index]?.scrollIntoView({
-      behavior: "smooth",
-      block: "start",
-    });
-  };
 
   return (
-    <section id="features" className="bg-white text-[#0a0d12]">
-      <div className="mx-auto max-w-[1320px] px-4 sm:px-6 lg:px-8">
-        <div className="relative lg:flex lg:gap-20">
-          {/* Sticky left nav */}
-          <nav className="hidden lg:block lg:w-[180px] lg:shrink-0">
-            <div className="sticky top-28 flex flex-col gap-0 py-28">
-              {features.map((f, i) => (
-                <button
-                  type="button"
-                  key={f.label}
-                  onClick={() => scrollToPanel(i)}
-                  className={cn(
-                    "group flex items-center gap-3 rounded-lg px-4 py-3 text-left text-micro font-semibold tracking-[0.12em] transition-colors",
-                    i === activeIndex
-                      ? "text-[#0a0d12]"
-                      : "text-[#0a0d12]/36 hover:text-[#0a0d12]/60",
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "size-2 shrink-0 rounded-full transition-colors",
-                      i === activeIndex ? "bg-[#0a0d12]" : "bg-transparent",
-                    )}
-                  />
-                  {f.label}
-                </button>
-              ))}
-            </div>
-          </nav>
-
-          {/* Scrollable feature panels */}
-          <div className="flex-1">
-            {features.map((feature, i) => (
-              <div
-                key={feature.label}
-                ref={(el) => {
-                  panelRefs.current[i] = el;
-                }}
-                data-index={i}
-                className={cn(
-                  "py-20 lg:py-28",
-                  i < features.length - 1 && "border-b border-[#0a0d12]/8",
-                )}
-              >
-                {/* Title + description */}
-                <h2 className="landing-serif text-[2.6rem] leading-[1.05] tracking-[-0.03em] text-[#0a0d12] sm:text-[3.4rem] lg:text-[4.2rem]">
-                  {feature.title}
-                </h2>
-                <p className="mt-5 max-w-[640px] text-body-lg leading-7 text-[#0a0d12]/60 sm:text-title-sm">
-                  {feature.description}
-                </p>
-
-                {/* Visual */}
-                <div className="mt-14 sm:mt-18">
-                  {feature.visual ? (
-                    <div className="relative overflow-hidden rounded-sm">
-                      <Image
-                        src={feature.bgImage ?? "/images/feature-bg.webp"}
-                        alt=""
-                        fill
-                        className="object-cover object-center"
-                        sizes="(max-width: 1320px) 100vw, 1320px"
-                        quality={80}
-                      />
-                      <div className="relative px-4 py-8 sm:px-6 sm:py-12 lg:px-8 lg:py-16">
-                        <feature.visual />
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="relative overflow-hidden border border-[#0a0d12]/8 bg-[#f5f5f5]">
-                      <div className="aspect-[16/9] w-full" />
-                      <div className="absolute inset-0 flex items-center justify-center">
-                        <div className="flex flex-col items-center gap-4 text-center">
-                          <div className="grid size-14 place-items-center rounded-2xl border border-[#0a0d12]/8 bg-white shadow-sm">
-                            <ImageIcon className="size-6 text-[#0a0d12]/30" />
-                          </div>
-                          <p className="text-label text-[#0a0d12]/36">
-                            {feature.label.toLowerCase()} visual
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Feature cards */}
-                <div className="mt-14 grid gap-8 sm:mt-18 md:grid-cols-3 md:gap-10">
-                  {feature.cards.map((card) => (
-                    <div key={card.title}>
-                      <h3 className="text-body-lg font-semibold leading-snug text-[#0a0d12] sm:text-title-sm">
-                        {card.title}
-                      </h3>
-                      <p className="mt-2.5 text-body leading-[1.7] text-[#0a0d12]/56 sm:text-body-lg">
-                        {card.description}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+    <section
+      id="features"
+      className="bg-white px-3 pb-6 text-[#0a0d12] sm:px-6 lg:px-10"
+    >
+      <div className="mx-auto flex max-w-[1280px] flex-col gap-4">
+        {PILLAR_ORDER.map((key) => (
+          <FeaturePillar key={key} feature={t.features[key]} theme={PILLARS[key]} />
+        ))}
       </div>
     </section>
+  );
+}
+
+function FeaturePillar({
+  feature,
+  theme,
+}: {
+  feature: LandingDict["features"][PillarKey];
+  theme: PillarTheme;
+}) {
+  const { Chip } = theme;
+
+  return (
+    // Each card pins under the floating header so the next one slides over
+    // it. Only on viewports tall enough to show a whole card while pinned —
+    // otherwise its bottom row would be covered before it was ever visible.
+    <div className="[@media(min-width:1024px)_and_(min-height:840px)]:sticky [@media(min-width:1024px)_and_(min-height:840px)]:top-[116px]">
+      <article
+        className={cn(
+          "rounded-[32px] p-6 shadow-[0_-12px_40px_-24px_rgba(10,13,18,0.18)] sm:rounded-[40px] sm:p-10 lg:p-12",
+          theme.panel,
+        )}
+      >
+        <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)] lg:gap-12">
+          <div>
+            <span className="inline-flex items-center">
+              <span
+                className={cn(
+                  "relative z-10 rounded-full px-3.5 py-1.5 text-caption font-semibold uppercase tracking-[0.16em] text-white",
+                  theme.pill,
+                )}
+              >
+                {feature.label}
+              </span>
+              <span aria-hidden className={cn("-ml-3 size-[30px] rounded-full", theme.halo)} />
+              <span aria-hidden className={cn("-ml-4 size-[30px] rounded-full", theme.halo)} />
+            </span>
+
+            <h2 className="landing-display mt-6 text-[2.25rem] font-semibold leading-[1.02] tracking-[-0.04em] sm:text-[3rem]">
+              <span className="block">{feature.title}</span>
+              <span className={cn("block", theme.accent)}>{feature.titleAccent}</span>
+            </h2>
+
+            <p className="mt-5 max-w-[520px] text-body-lg text-[#0a0d12]/72 sm:text-title-sm sm:leading-[1.6]">
+              {feature.description}
+            </p>
+          </div>
+
+          <div className="relative min-h-[300px] overflow-hidden rounded-[24px] sm:min-h-[360px] sm:rounded-[28px]">
+            <Image
+              src={theme.image}
+              alt=""
+              fill
+              className="object-cover object-center"
+              sizes="(max-width: 1024px) 100vw, 640px"
+              quality={80}
+            />
+            <div className="absolute bottom-4 left-4 right-4 sm:bottom-6 sm:left-6 sm:right-auto">
+              <Chip />
+            </div>
+          </div>
+        </div>
+
+        <ul className="mt-8 grid gap-6 border-t border-[#0a0d12]/8 pt-8 sm:mt-10 md:grid-cols-3 md:gap-8">
+          {feature.cards.map((card) => (
+            <li key={card.title}>
+              <h3 className="flex items-center gap-2 text-body-lg font-semibold text-[#0a0d12]">
+                <Check className={cn("size-4 shrink-0", theme.accent)} aria-hidden />
+                {card.title}
+              </h3>
+              <p className="mt-2 text-body leading-[1.6] text-[#0a0d12]/62">
+                {card.description}
+              </p>
+            </li>
+          ))}
+        </ul>
+      </article>
+    </div>
+  );
+}
+
+/* Floating product fragments pinned onto each pillar's artwork. They are
+   decorative mock UI, like the visuals above, so their copy stays English. */
+
+const chipClassName =
+  "w-full rounded-[16px] bg-white/95 p-3 text-caption text-[#0a0d12] shadow-[0_18px_40px_-12px_rgba(10,13,18,0.45)] backdrop-blur sm:w-[264px]";
+
+function AssigneeChip() {
+  const rows = [
+    { name: "Claude", agent: true, selected: true },
+    { name: "Codex", agent: true, selected: false },
+    { name: "Alex Rivera", agent: false, selected: false },
+  ];
+  return (
+    <div aria-hidden className={chipClassName}>
+      <p className="px-1.5 pb-1.5 text-micro font-semibold uppercase tracking-[0.12em] text-[#0a0d12]/48">
+        Assign to
+      </p>
+      {rows.map((row) => (
+        <div
+          key={row.name}
+          className={cn(
+            "flex items-center gap-2 rounded-[10px] px-1.5 py-1.5 text-label",
+            row.selected && "bg-[#edf2fd]",
+          )}
+        >
+          <MockAvatar type={row.agent ? "agent" : "member"} initials="AR" size={20} />
+          <span className="flex-1 font-medium">{row.name}</span>
+          {row.selected ? <Check className="size-3.5 text-[#2a5bd7]" /> : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RunChip() {
+  return (
+    <div aria-hidden className={chipClassName}>
+      <div className="flex items-center gap-2 px-1.5 pb-2 text-label font-semibold">
+        <Loader2 className="size-3.5 text-[#5a7508] motion-safe:animate-spin" />
+        Agent is working
+        <span className="ml-auto font-normal tabular-nums text-[#0a0d12]/48">7m 17s</span>
+      </div>
+      {mockTaskHistory.map((task) => (
+        <div key={task.title} className="flex items-center gap-2 px-1.5 py-1 text-label">
+          {task.status === "completed" ? (
+            <CheckCircle2 className="size-3.5 shrink-0 text-[#16a34a]" />
+          ) : (
+            <Loader2 className="size-3.5 shrink-0 text-[#5a7508] motion-safe:animate-spin" />
+          )}
+          <span className="truncate">{task.title}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SkillChip() {
+  return (
+    <div aria-hidden className={chipClassName}>
+      <div className="flex items-center gap-2.5 px-1.5">
+        <span className="grid size-8 place-items-center rounded-[10px] bg-[#fdf1e8] text-[#c2410c]">
+          <Sparkles className="size-4" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block font-mono text-label font-medium">write-migration</span>
+          <span className="block text-[#0a0d12]/48">v1.2.0 · Alex Rivera</span>
+        </span>
+      </div>
+      <div className="mt-3 flex items-center gap-2 border-t border-[#0a0d12]/6 px-1.5 pt-2.5 text-label text-[#0a0d12]/64">
+        <span className="flex -space-x-1.5">
+          {[0, 1, 2].map((i) => (
+            <span key={i} className="rounded-full ring-2 ring-white">
+              <MockAvatar type="agent" size={18} />
+            </span>
+          ))}
+        </span>
+        Used by 4 agents
+      </div>
+    </div>
+  );
+}
+
+function RuntimeChip() {
+  return (
+    <div aria-hidden className={chipClassName}>
+      {mockRuntimeList.map((runtime) => (
+        <div key={runtime.name} className="flex items-center gap-2 px-1.5 py-1.5 text-label">
+          {runtime.mode === "cloud" ? (
+            <Cloud className="size-3.5 shrink-0 text-[#0a0d12]/48" />
+          ) : (
+            <Monitor className="size-3.5 shrink-0 text-[#0a0d12]/48" />
+          )}
+          <span className="flex-1 truncate font-medium">{runtime.name}</span>
+          <span
+            className={cn(
+              "size-1.5 rounded-full",
+              runtime.status === "online" ? "bg-success" : "bg-[#0a0d12]/24",
+            )}
+          />
+          <span className="text-[#0a0d12]/48">
+            {runtime.status === "online" ? "Online" : "Offline"}
+          </span>
+        </div>
+      ))}
+    </div>
   );
 }

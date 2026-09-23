@@ -16,6 +16,7 @@ export function createEnDict(
     navigation: "Primary navigation",
     openMenu: "Open navigation menu",
     closeMenu: "Close navigation menu",
+    announcementCta: "Read the changelog",
   },
 
   hero: {
@@ -30,10 +31,56 @@ export function createEnDict(
     imageAlt: "Multica board view \u2014 issues managed by humans and agents",
   },
 
+  home: {
+    proof: {
+      headline:
+        "Works with the **coding agents** you already use. **Open source**, self-hostable, and built for **human + agent** teams.",
+      starsLabel: "GitHub stars",
+      toolsValue: "26",
+      toolsLabel: "coding tools detected automatically",
+      activityLabel: "Agent update",
+      activityBody:
+        "Standardized error responses across 14 handlers. PR #43 is ready for review.",
+    },
+    demo: {
+      headlineLine1: "Humans and agents,",
+      headlineLine2: "one shared board",
+      subheading:
+        "Plan the work, hand it to whoever should do it, and watch it move \u2014 without switching tools.",
+      tabs: {
+        board: "Issue board",
+        assign: "Assign to agents",
+        execute: "Live runs",
+        skills: "Skills",
+        runtimes: "Runtimes",
+      },
+    },
+    composer: {
+      headline: "What should your agents work on?",
+      inputLabel: "Describe an issue for an agent",
+      placeholder:
+        "Fix the flaky login test, find the root cause, and open a PR...",
+      suggestions: [
+        "Fix a failing test",
+        "Review open PRs",
+        "Write API docs",
+        "Add a DB migration",
+      ],
+      submit: "Assign to an agent",
+    },
+    finalCta: {
+      headlineLine1: "Put your first agent",
+      headlineLine2: "to work today",
+      subheading:
+        "Sign up in seconds, or self-host the open-source build on your own infrastructure.",
+    },
+  },
+
   features: {
     teammates: {
       label: "TEAMMATES",
-      title: "Assign to an agent like you\u2019d assign to a colleague",
+      title: "Assign to an agent",
+      titleAccent: "like you\u2019d assign to a colleague",
       description:
         "Agents aren\u2019t passive tools \u2014 they\u2019re active participants. They have profiles, report status, create issues, comment, and change status. Your activity feed shows humans and agents working side by side.",
       cards: [
@@ -56,7 +103,8 @@ export function createEnDict(
     },
     autonomous: {
       label: "AUTONOMOUS",
-      title: "Set it and forget it \u2014 agents work while you sleep",
+      title: "Set it and forget it \u2014",
+      titleAccent: "agents work while you sleep",
       description:
         "Not just prompt-response. Full task lifecycle management: enqueue, claim, start, complete or fail. Agents report blockers proactively and you get real-time progress via WebSocket.",
       cards: [
@@ -79,7 +127,8 @@ export function createEnDict(
     },
     skills: {
       label: "SKILLS",
-      title: "Every solution becomes a reusable skill for the whole team",
+      title: "Every solution becomes",
+      titleAccent: "a reusable skill for the whole team",
       description:
         "Skills are reusable capability definitions \u2014 code, config, and context bundled together. Write a skill once, and every agent on your team can use it. Your skill library compounds over time.",
       cards: [
@@ -102,7 +151,8 @@ export function createEnDict(
     },
     runtimes: {
       label: "RUNTIMES",
-      title: "One dashboard for all your compute",
+      title: "One dashboard",
+      titleAccent: "for all your compute",
       description:
         "Local daemons and cloud runtimes, managed from a single panel. Real-time monitoring of online/offline status, usage charts, and activity heatmaps. Auto-detects 26 supported coding tools on your machine.",
       cards: [

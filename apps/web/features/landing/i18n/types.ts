@@ -30,7 +30,10 @@ export function isZhLocale(locale: Locale): boolean {
 
 type FeatureSection = {
   label: string;
+  /** Headline lead, rendered in ink. */
   title: string;
+  /** Headline continuation, rendered in the section's accent color. */
+  titleAccent: string;
   description: string;
   cards: { title: string; description: string }[];
 };
@@ -53,6 +56,7 @@ export type LandingDict = {
     navigation: string;
     openMenu: string;
     closeMenu: string;
+    announcementCta: string;
   };
   hero: {
     headlineLine1: string;
@@ -63,6 +67,41 @@ export type LandingDict = {
     talkToSales: string;
     worksWith: string;
     imageAlt: string;
+  };
+  home: {
+    proof: {
+      /** Wrap emphasized phrases in `**`. */
+      headline: string;
+      starsLabel: string;
+      toolsValue: string;
+      toolsLabel: string;
+      activityLabel: string;
+      activityBody: string;
+    };
+    demo: {
+      headlineLine1: string;
+      headlineLine2: string;
+      subheading: string;
+      tabs: {
+        board: string;
+        assign: string;
+        execute: string;
+        skills: string;
+        runtimes: string;
+      };
+    };
+    composer: {
+      headline: string;
+      inputLabel: string;
+      placeholder: string;
+      suggestions: string[];
+      submit: string;
+    };
+    finalCta: {
+      headlineLine1: string;
+      headlineLine2: string;
+      subheading: string;
+    };
   };
   features: {
     teammates: FeatureSection;

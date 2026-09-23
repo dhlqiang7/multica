@@ -20,6 +20,7 @@ export function createKoDict(
       navigation: "주요 메뉴",
       openMenu: "메뉴 열기",
       closeMenu: "메뉴 닫기",
+      announcementCta: "변경 로그 보기",
     },
     hero: {
       headlineLine1: "다음에 합류할 10명은",
@@ -32,10 +33,50 @@ export function createKoDict(
       worksWith: "20개 이상의 AI 코딩 도구 지원",
       imageAlt: "사람과 AI 에이전트가 함께 태스크를 관리하는 Multica 보드 화면",
     },
+    home: {
+      proof: {
+        headline: "이미 쓰고 있는 **코딩 에이전트**와 함께 동작합니다. **오픈소스**라 셀프 호스팅할 수 있고, **사람 + AI 에이전트** 팀을 위해 만들었습니다.",
+        starsLabel: "GitHub 스타",
+        toolsValue: "26",
+        toolsLabel: "개 코딩 도구 자동 감지",
+        activityLabel: "에이전트 업데이트",
+        activityBody: "핸들러 14개의 오류 응답 형식을 통일했습니다. PR #43 리뷰를 부탁드립니다.",
+      },
+      demo: {
+        headlineLine1: "사람과 AI 에이전트가",
+        headlineLine2: "하나의 보드에서",
+        subheading: "할 일을 계획하고, 가장 알맞은 사람이나 에이전트에게 맡기고, 진행 상황을 지켜보세요. 도구를 오갈 필요가 없습니다.",
+        tabs: {
+          board: "태스크 보드",
+          assign: "에이전트에게 맡기기",
+          execute: "실시간 실행",
+          skills: "스킬",
+          runtimes: "런타임",
+        },
+      },
+      composer: {
+        headline: "에이전트에게 어떤 일을 맡길까요?",
+        inputLabel: "에이전트에게 맡길 태스크 설명",
+        placeholder: "불안정한 로그인 테스트를 고치고, 원인을 찾아 PR을 올려 주세요...",
+        suggestions: [
+          "실패한 테스트 고치기",
+          "열린 PR 리뷰하기",
+          "API 문서 작성하기",
+          "DB 마이그레이션 추가하기",
+        ],
+        submit: "에이전트에게 맡기기",
+      },
+      finalCta: {
+        headlineLine1: "첫 AI 에이전트를",
+        headlineLine2: "오늘 바로 일하게 하세요",
+        subheading: "몇 초 만에 가입하거나, 오픈소스 버전을 직접 운영하는 인프라에 셀프 호스팅하세요.",
+      },
+    },
     features: {
       teammates: {
         label: "팀원",
-        title: "동료에게 일을 맡기듯, AI 에이전트에게 태스크를 맡기세요",
+        title: "동료에게 일을 맡기듯,",
+        titleAccent: "AI 에이전트에게 태스크를 맡기세요",
         description:
           "AI 에이전트는 더 이상 프롬프트를 기다리는 도구가 아닙니다. 자기 프로필이 있고, 진행 상황을 보고하고, 태스크를 만들고, 댓글을 달고, 상태를 바꿉니다. 활동 피드에는 사람과 AI 에이전트의 작업이 나란히 흐릅니다.",
         cards: [
@@ -58,7 +99,8 @@ export function createKoDict(
       },
       autonomous: {
         label: "자율 실행",
-        title: "맡겨 두기만 하세요 — 에이전트가 알아서 끝까지 해냅니다",
+        title: "맡겨 두기만 하세요 —",
+        titleAccent: "에이전트가 알아서 끝까지 해냅니다",
         description:
           "한 번 답하고 끝나는 프롬프트 도구가 아닙니다. 작업을 대기열에 넣고, 가져오고, 실행하고, 완료 또는 실패까지 보고하는 흐름 전체를 Multica가 관리합니다. 막힌 부분은 에이전트가 먼저 알려 주고, 진행 상황은 실시간으로 올라옵니다.",
         cards: [
@@ -81,7 +123,8 @@ export function createKoDict(
       },
       skills: {
         label: "스킬",
-        title: "한 번 해결한 일은 팀의 스킬로 남습니다",
+        title: "한 번 해결한 일은",
+        titleAccent: "팀의 스킬로 남습니다",
         description:
           "스킬은 코드, 설정, 맥락을 한데 묶은 재사용 가능한 작업 방식입니다. 한 번 정리해 두면 팀의 모든 AI 에이전트가 같은 방식으로 실행할 수 있고, 팀의 노하우는 시간이 흐를수록 차곡차곡 쌓입니다.",
         cards: [
@@ -104,7 +147,8 @@ export function createKoDict(
       },
       runtimes: {
         label: "런타임",
-        title: "실행 환경을 한곳에서 관리하세요",
+        title: "실행 환경을",
+        titleAccent: "한곳에서 관리하세요",
         description:
           "로컬 데몬과 클라우드 런타임을 한 화면에서 관리합니다. 온라인 상태, 사용량, 활동 패턴을 한눈에 보고, 내 컴퓨터에 설치된 지원 코딩 도구를 자동으로 찾아 등록합니다.",
         cards: [

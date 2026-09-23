@@ -164,7 +164,7 @@ export function LandingHeader({
  *  button context the number reads as the star count on its own. Inherits the
  *  button's text color so it adapts to both the dark and light header
  *  variants. */
-function GitHubStarsBadge({ label }: { label: string }) {
+export function GitHubStarsBadge({ label }: { label: string }) {
   return (
     <span className="inline-flex items-center gap-1.5 tabular-nums">
       <span aria-hidden className="h-3 w-px bg-current opacity-25" />
@@ -173,7 +173,7 @@ function GitHubStarsBadge({ label }: { label: string }) {
   );
 }
 
-function navLinkClassName(variant: "dark" | "light") {
+export function navLinkClassName(variant: "dark" | "light") {
   return cn(
     "inline-flex h-9 items-center rounded-(--landing-radius-nav-item) px-3 text-label font-medium transition-colors",
     variant === "dark"
@@ -182,7 +182,7 @@ function navLinkClassName(variant: "dark" | "light") {
   );
 }
 
-function mobileNavLinkClassName(variant: "dark" | "light") {
+export function mobileNavLinkClassName(variant: "dark" | "light") {
   return cn(
     "flex min-h-11 items-center gap-2 rounded-(--landing-radius-menu-item) px-3 text-body font-medium transition-colors",
     variant === "dark"

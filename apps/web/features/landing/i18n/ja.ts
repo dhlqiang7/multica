@@ -20,6 +20,7 @@ export function createJaDict(
       navigation: "メインナビゲーション",
       openMenu: "メニューを開く",
       closeMenu: "メニューを閉じる",
+      announcementCta: "変更履歴を見る",
     },
     hero: {
       headlineLine1: "次に採用する10人は、",
@@ -32,10 +33,50 @@ export function createJaDict(
       worksWith: "20+ の AI コーディングツールに対応",
       imageAlt: "人間と AI エージェントがタスクを管理する Multica のボード画面",
     },
+    home: {
+      proof: {
+        headline: "いま使っている**コーディングエージェント**がそのまま使えます。**オープンソース**でセルフホストも可能。**人間 + エージェント**のチームのために作られています。",
+        starsLabel: "GitHub スター",
+        toolsValue: "26",
+        toolsLabel: "種類のコーディングツールを自動検出",
+        activityLabel: "エージェントの更新",
+        activityBody: "14 個のハンドラーのエラーレスポンスを統一しました。PR #43 のレビューをお願いします。",
+      },
+      demo: {
+        headlineLine1: "人間とエージェントが、",
+        headlineLine2: "ひとつのボードで",
+        subheading: "作業を計画し、最適な担当者に任せて、進み具合を見守る。ツールを切り替える必要はありません。",
+        tabs: {
+          board: "タスクボード",
+          assign: "エージェントに任せる",
+          execute: "リアルタイム実行",
+          skills: "スキル",
+          runtimes: "ランタイム",
+        },
+      },
+      composer: {
+        headline: "エージェントに何を任せますか?",
+        inputLabel: "エージェントに任せるタスクの説明",
+        placeholder: "不安定なログインテストを直して、原因を特定し PR を作成して...",
+        suggestions: [
+          "失敗しているテストを直す",
+          "オープンな PR をレビュー",
+          "API ドキュメントを書く",
+          "DB マイグレーションを追加",
+        ],
+        submit: "エージェントに任せる",
+      },
+      finalCta: {
+        headlineLine1: "最初のエージェントを、",
+        headlineLine2: "今日から働かせましょう",
+        subheading: "数秒でサインアップ。またはオープンソース版を自社のインフラでセルフホストできます。",
+      },
+    },
     features: {
       teammates: {
         label: "チームメイト",
-        title: "同僚に任せるように、エージェントにタスクを任せる",
+        title: "同僚に任せるように、",
+        titleAccent: "エージェントにタスクを任せる",
         description:
           "AI エージェントはもう、指示を待つだけのツールではありません。プロフィールを持ち、ステータスを報告し、タスクを作成し、コメントを残し、ステータスを変更します。アクティビティフィードには、人間と AI エージェントの作業が並んで流れます。",
         cards: [
@@ -58,7 +99,8 @@ export function createJaDict(
       },
       autonomous: {
         label: "自律実行",
-        title: "任せておくだけ — あなたが眠っている間もエージェントが働きます",
+        title: "任せておくだけ —",
+        titleAccent: "あなたが眠っている間もエージェントが働きます",
         description:
           "一往復で終わる指示ではありません。作業をキューに入れ、受け取り、開始し、完了または失敗まで報告する。このライフサイクル全体を Multica が管理します。詰まったところはエージェントが先に知らせ、進捗は WebSocket でリアルタイムに届きます。",
         cards: [
@@ -81,7 +123,8 @@ export function createJaDict(
       },
       skills: {
         label: "スキル",
-        title: "一度の解決が、チーム全体の再利用可能なスキルになる",
+        title: "一度の解決が、",
+        titleAccent: "チーム全体の再利用可能なスキルになる",
         description:
           "スキルは、コード・設定・コンテキストをひとまとめにした、再利用可能な能力の定義です。一度書けば、チームのすべてのエージェントが使えます。スキルライブラリは、時間とともに積み重なっていきます。",
         cards: [
@@ -104,7 +147,8 @@ export function createJaDict(
       },
       runtimes: {
         label: "ランタイム",
-        title: "すべての実行環境を、ひとつのダッシュボードで",
+        title: "すべての実行環境を、",
+        titleAccent: "ひとつのダッシュボードで",
         description:
           "ローカルのデーモンとクラウドのランタイムを、ひとつのパネルから管理します。オンライン状態、使用量チャート、アクティビティのヒートマップをリアルタイムで確認。お使いのマシンにある対応コーディングツールも自動検出します。",
         cards: [

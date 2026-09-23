@@ -16,6 +16,7 @@ export function createZhDict(
     navigation: "\u4e3b\u5bfc\u822a",
     openMenu: "\u6253\u5f00\u5bfc\u822a\u83dc\u5355",
     closeMenu: "\u5173\u95ed\u5bfc\u822a\u83dc\u5355",
+    announcementCta: "查看更新日志",
   },
 
   hero: {
@@ -30,10 +31,51 @@ export function createZhDict(
     imageAlt: "Multica \u770b\u677f\u89c6\u56fe\u2014\u2014\u4eba\u7c7b\u548c 智能体 \u534f\u540c\u7ba1\u7406\u4efb\u52a1",
   },
 
+  home: {
+    proof: {
+      headline: "兼容你正在使用的**编程智能体**。**开源**、可自托管，专为**人类 + 智能体**团队打造。",
+      starsLabel: "GitHub 星标",
+      toolsValue: "26",
+      toolsLabel: "种编程工具自动识别",
+      activityLabel: "智能体动态",
+      activityBody: "已统一 14 个 handler 的错误响应格式，PR #43 可以评审了。",
+    },
+    demo: {
+      headlineLine1: "人类与智能体，",
+      headlineLine2: "共用一块看板",
+      subheading: "规划工作，交给最合适的人或智能体，然后看着它推进——无需切换工具。",
+      tabs: {
+        board: "任务看板",
+        assign: "分配给智能体",
+        execute: "实时运行",
+        skills: "Skills",
+        runtimes: "运行时",
+      },
+    },
+    composer: {
+      headline: "你想让智能体做什么？",
+      inputLabel: "为智能体描述一个任务",
+      placeholder: "修复不稳定的登录测试，找出根因并提交 PR...",
+      suggestions: [
+        "修复失败的测试",
+        "评审待合并的 PR",
+        "编写 API 文档",
+        "新增数据库迁移",
+      ],
+      submit: "分配给智能体",
+    },
+    finalCta: {
+      headlineLine1: "今天就让你的",
+      headlineLine2: "第一个智能体开工",
+      subheading: "几秒钟完成注册，或在你自己的基础设施上自托管开源版本。",
+    },
+  },
+
   features: {
     teammates: {
       label: "\u56e2\u961f\u534f\u4f5c",
-      title: "\u50cf\u5206\u914d\u7ed9\u540c\u4e8b\u4e00\u6837\u5206\u914d\u7ed9 智能体",
+      title: "像分配给同事一样",
+      titleAccent: "分配给智能体",
       description:
         "智能体 \u4e0d\u662f\u88ab\u52a8\u5de5\u5177\u2014\u2014\u5b83\u4eec\u662f\u4e3b\u52a8\u53c2\u4e0e\u8005\u3002\u5b83\u4eec\u62e5\u6709\u4e2a\u4eba\u8d44\u6599\u3001\u62a5\u544a\u72b6\u6001\u3001\u521b\u5efa\u4efb\u52a1\u3001\u53d1\u8868\u8bc4\u8bba\u3001\u66f4\u65b0\u72b6\u6001\u3002\u4f60\u7684\u6d3b\u52a8\u6d41\u5c55\u793a\u4eba\u7c7b\u548c 智能体 \u5e76\u80a9\u5de5\u4f5c\u3002",
       cards: [
@@ -56,7 +98,8 @@ export function createZhDict(
     },
     autonomous: {
       label: "\u81ea\u4e3b\u6267\u884c",
-      title: "\u8bbe\u7f6e\u540e\u65e0\u9700\u7ba1\u7406\u2014\u2014智能体 \u5728\u4f60\u7761\u89c9\u65f6\u5de5\u4f5c",
+      title: "设置后无需管理——",
+      titleAccent: "智能体在你睡觉时工作",
       description:
         "不只是提示-响应。完整的 task 生命周期管理：入队、领取、启动、完成或失败。智能体 主动报告阻塞，你通过 WebSocket 获取实时进度。",
       cards: [
@@ -79,7 +122,8 @@ export function createZhDict(
     },
     skills: {
       label: "\u6280\u80fd\u5e93",
-      title: "\u6bcf\u4e2a\u89e3\u51b3\u65b9\u6848\u90fd\u6210\u4e3a\u5168\u56e2\u961f\u53ef\u590d\u7528\u7684\u6280\u80fd",
+      title: "每个解决方案",
+      titleAccent: "都成为全团队可复用的技能",
       description:
         "\u6280\u80fd\u662f\u53ef\u590d\u7528\u7684\u80fd\u529b\u5b9a\u4e49\u2014\u2014\u4ee3\u7801\u3001\u914d\u7f6e\u548c\u4e0a\u4e0b\u6587\u6253\u5305\u5728\u4e00\u8d77\u3002\u53ea\u9700\u7f16\u5199\u4e00\u6b21\uff0c\u56e2\u961f\u4e2d\u6bcf\u4e2a 智能体 \u90fd\u80fd\u4f7f\u7528\u3002\u4f60\u7684\u6280\u80fd\u5e93\u968f\u65f6\u95f4\u4e0d\u65ad\u79ef\u7d2f\u3002",
       cards: [
@@ -102,7 +146,8 @@ export function createZhDict(
     },
     runtimes: {
       label: "\u8fd0\u884c\u65f6",
-      title: "\u4e00\u4e2a\u63a7\u5236\u53f0\u7ba1\u7406\u6240\u6709\u7b97\u529b",
+      title: "一个控制台",
+      titleAccent: "管理所有算力",
       description:
         "\u672c\u5730\u5b88\u62a4\u8fdb\u7a0b\u548c\u4e91\u7aef\u8fd0\u884c\u65f6\uff0c\u5728\u540c\u4e00\u4e2a\u9762\u677f\u4e2d\u7ba1\u7406\u3002\u5b9e\u65f6\u76d1\u63a7\u5728\u7ebf/\u79bb\u7ebf\u72b6\u6001\u3001\u4f7f\u7528\u91cf\u56fe\u8868\u548c\u6d3b\u52a8\u70ed\u529b\u56fe\u3002\u81ea\u52a8\u68c0\u6d4b\u672c\u673a\u5df2\u5b89\u88c5\u7684 26 \u6b3e\u652f\u6301\u7684 AI \u7f16\u7a0b\u5de5\u5177\u3002",
       cards: [

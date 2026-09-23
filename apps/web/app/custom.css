@@ -148,3 +148,26 @@ html[lang|="ko"] :is(h1, h2).landing-serif {
     word-break: keep-all;
     overflow-wrap: break-word;
 }
+
+/* -----------------------------------------------------------------------------
+ * Landing display sans
+ *
+ * The home page sets its headlines in the UI sans (Inter + the per-locale CJK
+ * chain from app/globals.css) at display sizes. Tracking and leading are set
+ * per headline with utilities; like `.landing-serif`, the CJK resets live here,
+ * outside Tailwind's layers, so they outrank those Latin-tuned utilities. */
+.landing-display {
+    font-family: var(--font-sans);
+}
+
+html[lang|="zh"] :is(h1, h2, h3).landing-display,
+html[lang|="ja"] :is(h1, h2, h3).landing-display,
+html[lang|="ko"] :is(h1, h2, h3).landing-display {
+    letter-spacing: -0.01em;
+    line-height: 1.2;
+}
+
+html[lang|="ko"] :is(h1, h2, h3).landing-display {
+    word-break: keep-all;
+    overflow-wrap: break-word;
+}

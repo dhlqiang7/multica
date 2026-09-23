@@ -43,26 +43,6 @@ export function XMark({ className }: { className?: string }) {
   );
 }
 
-export function ImageIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-      className={className}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect x="3.5" y="5" width="17" height="14" rx="2.5" />
-      <circle cx="9" cy="10" r="1.6" />
-      <path d="m20.5 16-4.8-4.8a1 1 0 0 0-1.4 0L8 17.5" />
-      <path d="m11.5 14.5 1.8-1.8a1 1 0 0 1 1.4 0l2.8 2.8" />
-    </svg>
-  );
-}
-
 export function headerButtonClassName(
   tone: "ghost" | "solid",
   variant: "dark" | "light" = "dark",
@@ -85,5 +65,18 @@ export function heroButtonClassName(tone: "ghost" | "solid") {
     tone === "solid"
       ? "bg-white text-[#0a0d12] hover:bg-white/92"
       : "border border-white/18 bg-black/16 text-white backdrop-blur-sm hover:bg-black/24",
+  );
+}
+
+/**
+ * Hairline rails at the content edges of white home sections — the faint
+ * column frame that ties the stacked sections into one page.
+ */
+export function GuideRails() {
+  return (
+    <div
+      aria-hidden
+      className="pointer-events-none absolute inset-y-0 left-1/2 hidden w-full max-w-[1184px] -translate-x-1/2 border-x border-[#0a0d12]/[0.06] lg:block"
+    />
   );
 }

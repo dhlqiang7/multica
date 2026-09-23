@@ -7,7 +7,6 @@ import { useAuthStore } from "@multica/core/auth";
 import { docsHrefForLocale, useLocale } from "../i18n";
 import { useDashboardCtaHref } from "../utils/use-dashboard-cta";
 import { HERO_PROVIDERS } from "./provider-marks";
-import { heroButtonClassName } from "./shared";
 
 export function LandingHero() {
   const { t, locale } = useLocale();
@@ -15,60 +14,50 @@ export function LandingHero() {
   const ctaHref = useDashboardCtaHref();
 
   return (
-    <div className="relative min-h-full overflow-hidden bg-[#05070b] text-white">
+    <section className="relative isolate overflow-hidden bg-[#143b8f] text-white">
       <LandingBackdrop />
 
-      <main className="relative z-10">
-        <section
-          id="product"
-          className="mx-auto max-w-[1320px] px-4 pb-16 pt-28 sm:px-6 sm:pt-32 lg:px-8 lg:pb-24 lg:pt-36"
-        >
-          <div className="mx-auto max-w-[1120px] text-center">
-            <h1 className="landing-serif text-[3.65rem] leading-[0.93] tracking-[-0.038em] text-white drop-shadow-[0_10px_34px_rgba(0,0,0,0.32)] sm:text-[4.85rem] lg:text-[6.4rem]">
-              {t.hero.headlineLine1}
-              <br />
-              {t.hero.headlineLine2}
-            </h1>
+      <div className="relative mx-auto flex min-h-[760px] max-w-[1280px] flex-col justify-end px-5 pb-40 pt-44 sm:px-8 lg:min-h-[900px] lg:px-12 lg:pb-48">
+        <div className="grid gap-10 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] xl:items-end xl:gap-16">
+          <h1 className="landing-display text-[2.625rem] font-semibold leading-[0.98] tracking-[-0.045em] drop-shadow-[0_8px_30px_rgba(8,20,60,0.35)] sm:text-[4.5rem] lg:text-[5.25rem]">
+            {t.hero.headlineLine1}
+            <br />
+            {t.hero.headlineLine2}
+          </h1>
 
-            <p className="mx-auto mt-7 max-w-[820px] text-body-lg leading-7 text-white/84 sm:text-title">
+          <div className="xl:pb-2">
+            <p className="max-w-[460px] text-title-sm text-white/88 sm:text-title-lg sm:leading-[1.5]">
               {t.hero.subheading}
             </p>
 
-            <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-              <Link href={ctaHref} className={heroButtonClassName("solid")}>
+            <div className="mt-8 flex flex-wrap items-center gap-3">
+              <Link
+                href={ctaHref}
+                className="group inline-flex h-12 items-center gap-2 rounded-[14px] bg-white px-5 text-body-lg font-semibold text-[#0a0d12] transition-colors hover:bg-white/90"
+              >
                 {user ? t.header.dashboard : t.hero.cta}
-              </Link>
-              <Link
-                href="/download"
-                className={heroButtonClassName("ghost")}
-              >
-                <Download className="size-4" aria-hidden />
-                {t.hero.downloadDesktop}
-              </Link>
-              <Link
-                href="/contact-sales"
-                className="group inline-flex items-center justify-center gap-1.5 rounded-(--landing-radius-action) px-3 py-3 text-body font-semibold text-white/80 transition-colors hover:text-white"
-              >
-                {t.hero.talkToSales}
                 <ArrowRight
                   className="size-4 transition-transform group-hover:translate-x-0.5"
                   aria-hidden
                 />
               </Link>
+              <Link
+                href="/download"
+                className="inline-flex h-12 items-center gap-2 rounded-[14px] bg-[#d7f36b] px-5 text-body-lg font-semibold text-[#10142a] transition-colors hover:bg-[#cdea5c]"
+              >
+                <Download className="size-4" aria-hidden />
+                {t.hero.downloadDesktop}
+              </Link>
             </div>
-          </div>
 
-          <WorksWithRow
-            label={t.hero.worksWith}
-            href={`${docsHrefForLocale(locale)}/providers`}
-          />
-
-          <div id="preview" className="mt-10 sm:mt-12">
-            <ProductImage alt={t.hero.imageAlt} />
+            <WorksWithRow
+              label={t.hero.worksWith}
+              href={`${docsHrefForLocale(locale)}/providers`}
+            />
           </div>
-        </section>
-      </main>
-    </div>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -79,10 +68,10 @@ export function LandingHero() {
  */
 function WorksWithRow({ label, href }: { label: string; href: string }) {
   return (
-    <div className="mt-12 flex flex-col items-center gap-6">
+    <div className="mt-7 flex flex-wrap items-center gap-x-4 gap-y-3">
       <Link
         href={href}
-        className="group inline-flex items-center gap-1.5 text-body text-white/60 transition-colors hover:text-white"
+        className="group inline-flex items-center gap-1.5 text-body-lg text-white/72 transition-colors hover:text-white"
       >
         {label}
         <ArrowRight
@@ -90,23 +79,14 @@ function WorksWithRow({ label, href }: { label: string; href: string }) {
           aria-hidden
         />
       </Link>
-
-      {/*
-        Explicit column counts, not free wrapping: with `flex-wrap` the 14 marks
-        broke 13 + 1 around 834px and 12 + 2 around 768px, and a single orphan
-        on the second row reads as a bug rather than a layout. Fourteen columns
-        once there is room for one row, seven — an exact 7 x 2 — below that. The
-        columns carry the spacing, so the marks stay evenly pitched at every
-        width and the grid still shrinks below its max width on a narrow phone.
-      */}
-      <ul className="grid w-full max-w-[392px] grid-cols-7 items-center justify-items-center gap-y-6 sm:max-w-[532px] lg:max-w-[896px] lg:grid-cols-14">
-        {HERO_PROVIDERS.map(({ name, Mark, size }) => (
+      <ul className="flex items-center gap-1.5">
+        {HERO_PROVIDERS.slice(0, 5).map(({ name, Mark }) => (
           <li
             key={name}
             title={name}
-            className="flex items-center text-white opacity-70 drop-shadow-[0_1px_6px_rgba(0,0,0,0.28)] transition-opacity duration-200 hover:opacity-100"
+            className="grid size-8 place-items-center rounded-full bg-white/14 text-white ring-1 ring-white/18 backdrop-blur-sm"
           >
-            <Mark className={size ?? "size-6"} />
+            <Mark className="size-4" />
             <span className="sr-only">{name}</span>
           </li>
         ))}
@@ -117,35 +97,18 @@ function WorksWithRow({ label, href }: { label: string; href: string }) {
 
 function LandingBackdrop() {
   return (
-    <div className="pointer-events-none absolute inset-0">
-      {/* This artwork is above the fold, so preload it alongside the product preview. */}
+    <div className="pointer-events-none absolute inset-0 -z-10">
+      {/* This artwork is above the fold, so preload it. */}
       <Image
         src="/images/landing-bg.webp"
         alt=""
         fill
         preload
-        className="object-cover object-center"
+        className="object-cover object-[center_35%]"
         sizes="100vw"
       />
-    </div>
-  );
-}
-
-function ProductImage({ alt }: { alt: string }) {
-  return (
-    <div>
-      <div className="relative overflow-hidden border border-white/14">
-        <Image
-          src="/images/landing-hero.webp"
-          alt={alt}
-          width={2640}
-          height={1781}
-          preload
-          className="block h-auto w-full"
-          sizes="(max-width: 1320px) 100vw, 1320px"
-          quality={85}
-        />
-      </div>
+      {/* Deepen the lower half so the headline and CTAs read on any crop. */}
+      <div className="absolute inset-0 bg-[linear-gradient(to_bottom,rgba(20,59,143,0)_35%,rgba(20,59,143,0.55)_70%,#143b8f_100%)]" />
     </div>
   );
 }
