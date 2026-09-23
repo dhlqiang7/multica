@@ -78,16 +78,14 @@ WITH locked_task AS MATERIALIZED (
 SELECT c.*, i.revision AS issue_revision,
        s.task_id AS supplement_task_id, s.status AS supplement_status,
        s.failure_reason AS supplement_failure_reason,
-       s.delivered_at AS supplement_delivered_at,
-       s.client_request_id AS supplement_client_request_id
+       s.delivered_at AS supplement_delivered_at
 FROM inserted_comment c
 JOIN touched_issue i ON i.id = c.issue_id
 JOIN inserted_supplement s ON s.comment_id = c.id;
 
 -- name: GetTaskSupplementByRequest :one
-SELECT s.*, c.content
+SELECT s.*
 FROM task_supplement s
-JOIN comment c ON c.id = s.comment_id
 WHERE s.task_id = @task_id
   AND s.workspace_id = @workspace_id
   AND s.author_id = @author_id
@@ -138,7 +136,7 @@ WITH next AS MATERIALIZED (
     WHERE s.comment_id = next.comment_id
     RETURNING s.*
 )
-SELECT claimed.*, c.content,
+SELECT claimed.comment_id, claimed.attempt_count, c.content,
        COALESCE(NULLIF(btrim(u.name), ''), 'a user')::text AS author_name
 FROM claimed
 JOIN comment c ON c.id = claimed.comment_id

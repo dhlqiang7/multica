@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -168,13 +169,7 @@ func (s *claudeSupplementSession) handleHook(msg claudeSDKMessage, w io.Writer) 
 	defer s.mu.Unlock()
 	// Hook registrations are inherited by subagents. Only the main loop may
 	// consume instructions addressed to this Multica task.
-	owned := false
-	for _, event := range claudeSupplementEvents {
-		if req.Input.Event == event && req.CallbackID == "multica-supplement-"+event {
-			owned = true
-			break
-		}
-	}
+	owned := slices.Contains(claudeSupplementEvents, req.Input.Event) && req.CallbackID == "multica-supplement-"+req.Input.Event
 	var delivered []*claudeSupplementInput
 	if owned && req.Input.AgentID == "" && msg.ParentToolUseID == "" && !s.ended && s.ctx.Err() == nil {
 		s.started = true
@@ -209,12 +204,7 @@ func (s *claudeSupplementSession) handleHook(msg claudeSDKMessage, w io.Writer) 
 }
 
 func writeClaudeFrame(w io.Writer, frame any) error {
-	data, err := json.Marshal(frame)
-	if err != nil {
-		return err
-	}
-	_, err = w.Write(append(data, '\n'))
-	return err
+	return json.NewEncoder(w).Encode(frame)
 }
 
 // The initial prompt and SDK control replies share stdin. Serialize entire

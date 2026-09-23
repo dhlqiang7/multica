@@ -3,8 +3,10 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,81 +30,33 @@ type taskSupplementSignals struct {
 	byTask map[string]chan struct{}
 }
 
-func newTaskSupplementSignals() *taskSupplementSignals {
-	return &taskSupplementSignals{byTask: make(map[string]chan struct{})}
-}
-
 func (s *taskSupplementSignals) subscribe(taskID string) (<-chan struct{}, func()) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.byTask == nil {
+		s.byTask = make(map[string]chan struct{})
+	}
 	ch := s.byTask[taskID]
 	if ch == nil {
 		ch = make(chan struct{}, 1)
 		s.byTask[taskID] = ch
 	}
-	s.mu.Unlock()
-	return ch, func() { s.clear(taskID, ch) }
+	return ch, func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.byTask[taskID] == ch {
+			delete(s.byTask, taskID)
+		}
+	}
 }
 
 func (s *taskSupplementSignals) notify(taskID string) {
-	if s == nil || taskID == "" {
-		return
-	}
 	s.mu.Lock()
-	ch := s.byTask[taskID]
-	if ch == nil {
-		// A negotiated task registers its slot before provider launch. Ignore
-		// stale or unnegotiated hints instead of retaining an unowned channel.
-		s.mu.Unlock()
-		return
-	}
+	defer s.mu.Unlock()
+	// A nil channel ignores stale or unnegotiated hints without allocating state.
 	select {
-	case ch <- struct{}{}:
+	case s.byTask[taskID] <- struct{}{}:
 	default:
-	}
-	s.mu.Unlock()
-}
-
-func (s *taskSupplementSignals) clear(taskID string, expected ...chan struct{}) {
-	if s == nil || taskID == "" {
-		return
-	}
-	s.mu.Lock()
-	if len(expected) == 0 || s.byTask[taskID] == expected[0] {
-		delete(s.byTask, taskID)
-	}
-	s.mu.Unlock()
-}
-
-func (d *Daemon) taskSupplementWakeup(taskID string) (<-chan struct{}, func()) {
-	d.taskSupplementSignalsInitMu.Lock()
-	if d.taskSupplementSignals == nil {
-		d.taskSupplementSignals = newTaskSupplementSignals()
-	}
-	signals := d.taskSupplementSignals
-	d.taskSupplementSignalsInitMu.Unlock()
-	return signals.subscribe(taskID)
-}
-
-func (d *Daemon) signalTaskSupplementWakeup(taskID string) {
-	d.taskSupplementSignalsInitMu.Lock()
-	if d.taskSupplementSignals == nil {
-		// No negotiated run has registered a slot yet. The durable row will be
-		// found by the bounded poll after a slot exists, so there is no reason to
-		// allocate state for an unsupported, old, or already-finished task.
-		d.taskSupplementSignalsInitMu.Unlock()
-		return
-	}
-	signals := d.taskSupplementSignals
-	d.taskSupplementSignalsInitMu.Unlock()
-	signals.notify(taskID)
-}
-
-func (d *Daemon) clearTaskSupplementWakeup(taskID string) {
-	d.taskSupplementSignalsInitMu.Lock()
-	signals := d.taskSupplementSignals
-	d.taskSupplementSignalsInitMu.Unlock()
-	if signals != nil {
-		signals.clear(taskID)
 	}
 }
 
@@ -133,6 +87,23 @@ func waitTaskSupplement(ctx context.Context, wakeup <-chan struct{}, delay time.
 	}
 }
 
+func formatTaskSupplementInstruction(authorName, content string) string {
+	authorName = strings.Join(strings.Fields(authorName), " ")
+	if authorName == "" {
+		authorName = "a user"
+	}
+	return fmt.Sprintf(`[ADDITIONAL GUIDANCE] Human %s added guidance while you were working.
+
+Treat this as additional guidance for the same active task, not as a replacement:
+- Preserve and complete the original objective.
+- Incorporate this guidance into the work and the turn's single final response.
+- Do not send a separate acknowledgement.
+- Replace or cancel the original objective only if the human explicitly asks for replacement or cancellation.
+
+Human message:
+%s`, strconv.Quote(authorName), content)
+}
+
 func taskSupplementEndpointUnsupported(err error) bool {
 	var reqErr *requestError
 	return errors.As(err, &reqErr) && (reqErr.StatusCode == http.StatusNotFound || reqErr.StatusCode == http.StatusPreconditionFailed)
@@ -158,7 +129,7 @@ func taskSupplementFailureReason(ctx context.Context, err error) string {
 // one negotiated run. It performs no HTTP request until the provider confirms a live
 // turn, wakes immediately on a content-free WebSocket hint, and otherwise uses
 // the same five-second cadence as task cancellation polling.
-func (d *Daemon) runTaskSupplementLoop(ctx, parentCtx context.Context, session *agent.Session, taskID string, wakeup <-chan struct{}, taskLog *slog.Logger) {
+func (d *Daemon) runTaskSupplementLoop(ctx context.Context, session *agent.Session, taskID string, wakeup <-chan struct{}, taskLog *slog.Logger) {
 	if session == nil || session.Supplement == nil || session.SupplementReady == nil {
 		return
 	}
@@ -176,20 +147,13 @@ func (d *Daemon) runTaskSupplementLoop(ctx, parentCtx context.Context, session *
 		claimCtx, cancelClaim := context.WithTimeout(ctx, 3*time.Second)
 		supplement, claimErr := d.client.ClaimTaskSupplement(claimCtx, taskID)
 		cancelClaim()
-		if claimErr != nil {
+		if claimErr != nil || supplement == nil {
 			if taskSupplementEndpointUnsupported(claimErr) {
 				return
 			}
-			if ctx.Err() != nil {
-				return
+			if claimErr != nil {
+				taskLog.Debug("additional message claim failed", "error", claimErr)
 			}
-			taskLog.Debug("additional message claim failed", "error", claimErr)
-			if !waitTaskSupplement(ctx, wakeup, d.effectiveTaskSupplementPollInterval()) {
-				return
-			}
-			continue
-		}
-		if supplement == nil {
 			if !waitTaskSupplement(ctx, wakeup, d.effectiveTaskSupplementPollInterval()) {
 				return
 			}
@@ -207,7 +171,7 @@ func (d *Daemon) runTaskSupplementLoop(ctx, parentCtx context.Context, session *
 			taskLog.Warn("additional message injection failed", "comment_id", supplement.CommentID, "reason", reason, "error", injectErr)
 		}
 
-		ackCtx, cancelAck := context.WithTimeout(context.WithoutCancel(parentCtx), taskSupplementAckTimeout)
+		ackCtx, cancelAck := context.WithTimeout(context.WithoutCancel(ctx), taskSupplementAckTimeout)
 		ackErr := d.client.AckTaskSupplement(ackCtx, taskID, supplement.CommentID, injectErr == nil, reason)
 		cancelAck()
 		if ackErr != nil {

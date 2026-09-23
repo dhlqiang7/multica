@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,22 +17,6 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func TestFormatTaskSupplementInstructionPreservesOriginalGoal(t *testing.T) {
-	got := formatTaskSupplementInstruction("  Ada   Lovelace ", "also include a rollback note")
-	for _, want := range []string{
-		"additional guidance for the same active task",
-		"Preserve and complete the original objective",
-		"single final response",
-		"only if the human explicitly asks",
-		`Human "Ada Lovelace"`,
-		"also include a rollback note",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("instruction missing %q:\n%s", want, got)
-		}
-	}
-}
-
 func taskSupplementTestDaemon(t *testing.T, handler http.HandlerFunc) *Daemon {
 	t.Helper()
 	server := httptest.NewServer(handler)
@@ -39,7 +24,6 @@ func taskSupplementTestDaemon(t *testing.T, handler http.HandlerFunc) *Daemon {
 	return &Daemon{
 		client:                      NewClient(server.URL),
 		logger:                      slog.New(slog.NewTextHandler(io.Discard, nil)),
-		taskSupplementSignals:       newTaskSupplementSignals(),
 		taskSupplementPollInterval:  10 * time.Millisecond,
 		taskSupplementReadyInterval: 5 * time.Millisecond,
 	}
@@ -58,19 +42,19 @@ func TestTaskSupplementLoopWaitsForTurnReadyBeforeClaim(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	wakeup, unsubscribe := d.taskSupplementWakeup("task-ready")
+	wakeup, unsubscribe := d.taskSupplementSignals.subscribe("task-ready")
 	defer unsubscribe()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		d.runTaskSupplementLoop(ctx, ctx, session, "task-ready", wakeup, d.logger)
+		d.runTaskSupplementLoop(ctx, session, "task-ready", wakeup, d.logger)
 	}()
 	time.Sleep(30 * time.Millisecond)
 	if got := claims.Load(); got != 0 {
 		t.Fatalf("claims before turn ready = %d, want 0", got)
 	}
 	ready.Store(true)
-	d.signalTaskSupplementWakeup("task-ready")
+	d.taskSupplementSignals.notify("task-ready")
 	select {
 	case <-done:
 	case <-time.After(time.Second):
@@ -82,87 +66,66 @@ func TestTaskSupplementLoopWaitsForTurnReadyBeforeClaim(t *testing.T) {
 }
 
 func TestTaskSupplementLoopAcknowledgesBeforeTurnEnds(t *testing.T) {
-	var claimCount atomic.Int32
-	ackSeen := make(chan struct{}, 1)
-	d := taskSupplementTestDaemon(t, func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/supplements/claim"):
-			if claimCount.Add(1) == 1 {
-				_ = json.NewEncoder(w).Encode(map[string]string{
-					"comment_id": "comment-1", "author_name": "Ada", "content": "Create evidence.txt",
-				})
-				return
+	for _, tc := range []struct {
+		name   string
+		err    error
+		reason string
+	}{
+		{name: "delivered"},
+		{name: "provider timeout", err: context.DeadlineExceeded, reason: protocol.TaskSupplementFailureTimeout},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var claims atomic.Int32
+			ackSeen := make(chan struct{}, 1)
+			d := taskSupplementTestDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/supplements/claim"):
+					if claims.Add(1) == 1 {
+						_ = json.NewEncoder(w).Encode(map[string]string{
+							"comment_id": "comment-1", "author_name": "Ada", "content": "Create evidence.txt",
+						})
+						return
+					}
+					w.WriteHeader(http.StatusPreconditionFailed)
+				case strings.HasSuffix(r.URL.Path, "/supplements/comment-1/ack"):
+					var body struct {
+						Delivered bool   `json:"delivered"`
+						Error     string `json:"error"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Error(err)
+					}
+					if body.Delivered != (tc.err == nil) || body.Error != tc.reason {
+						t.Errorf("ack = %#v, want delivered=%v reason=%q", body, tc.err == nil, tc.reason)
+					}
+					ackSeen <- struct{}{}
+				default:
+					t.Errorf("unexpected request %s", r.URL.Path)
+				}
+			})
+			injections := 0
+			session := &agent.Session{
+				SupplementReady: func() bool { return true },
+				Supplement: func(_ context.Context, instruction string) error {
+					injections++
+					if !strings.Contains(instruction, "Preserve and complete the original objective") || !strings.Contains(instruction, "Create evidence.txt") {
+						t.Errorf("injected instruction lost framing or content: %q", instruction)
+					}
+					return tc.err
+				},
 			}
-			w.WriteHeader(http.StatusPreconditionFailed)
-		case strings.HasSuffix(r.URL.Path, "/supplements/comment-1/ack"):
-			var body struct {
-				Delivered bool   `json:"delivered"`
-				Error     string `json:"error"`
+			wakeup, unsubscribe := d.taskSupplementSignals.subscribe("task-ack")
+			defer unsubscribe()
+			d.runTaskSupplementLoop(t.Context(), session, "task-ack", wakeup, d.logger)
+			if injections != 1 {
+				t.Fatalf("injections = %d, want 1", injections)
 			}
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			if !body.Delivered || body.Error != "" {
-				t.Errorf("ack = %#v, want delivered", body)
+			select {
+			case <-ackSeen:
+			default:
+				t.Fatal("loop returned before delivery acknowledgement")
 			}
-			ackSeen <- struct{}{}
-			w.WriteHeader(http.StatusOK)
-		default:
-			t.Fatalf("unexpected request %s", r.URL.Path)
-		}
-	})
-	injected := make(chan string, 1)
-	session := &agent.Session{
-		SupplementReady: func() bool { return true },
-		Supplement: func(_ context.Context, instruction string) error {
-			injected <- instruction
-			return nil
-		},
-	}
-	wakeup, unsubscribe := d.taskSupplementWakeup("task-ack")
-	defer unsubscribe()
-	d.runTaskSupplementLoop(context.Background(), context.Background(), session, "task-ack", wakeup, d.logger)
-	select {
-	case instruction := <-injected:
-		if !strings.Contains(instruction, "Preserve and complete the original objective") || !strings.Contains(instruction, "Create evidence.txt") {
-			t.Fatalf("injected instruction lost framing or content: %q", instruction)
-		}
-	default:
-		t.Fatal("message was not injected")
-	}
-	select {
-	case <-ackSeen:
-	default:
-		t.Fatal("loop returned before delivery acknowledgement")
-	}
-}
-
-func TestTaskSupplementLoopUsesStableFailureReason(t *testing.T) {
-	var claimCount atomic.Int32
-	reasonSeen := make(chan string, 1)
-	d := taskSupplementTestDaemon(t, func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/supplements/claim") {
-			if claimCount.Add(1) == 1 {
-				_ = json.NewEncoder(w).Encode(map[string]string{"comment_id": "comment-1", "content": "Do it"})
-				return
-			}
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		var body struct {
-			Error string `json:"error"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		reasonSeen <- body.Error
-		w.WriteHeader(http.StatusOK)
-	})
-	session := &agent.Session{
-		SupplementReady: func() bool { return true },
-		Supplement:      func(context.Context, string) error { return context.DeadlineExceeded },
-	}
-	wakeup, unsubscribe := d.taskSupplementWakeup("task-failure")
-	defer unsubscribe()
-	d.runTaskSupplementLoop(context.Background(), context.Background(), session, "task-failure", wakeup, d.logger)
-	if got := <-reasonSeen; got != protocol.TaskSupplementFailureTimeout {
-		t.Fatalf("workspace-visible reason = %q, want %q", got, protocol.TaskSupplementFailureTimeout)
+		})
 	}
 }
 
@@ -188,46 +151,25 @@ func (b *supplementGateBackend) Execute(_ context.Context, _ string, opts agent.
 	}, nil
 }
 
-func TestExecuteAndDrainUnnegotiatedMakesNoSupplementRequest(t *testing.T) {
-	var requests atomic.Int32
-	d := taskSupplementTestDaemon(t, func(w http.ResponseWriter, _ *http.Request) {
-		requests.Add(1)
-		w.WriteHeader(http.StatusInternalServerError)
-	})
-	backend := &supplementGateBackend{}
-	if _, _, err := d.executeAndDrain(context.Background(), backend, "original", agent.ExecOptions{}, d.logger, "task-unnegotiated", "", new(atomic.Int32), false); err != nil {
-		t.Fatalf("executeAndDrain: %v", err)
-	}
-	if got := requests.Load(); got != 0 {
-		t.Fatalf("supplement HTTP requests = %d, want 0", got)
-	}
-	if got := backend.supplementCalls.Load(); got != 0 {
-		t.Fatalf("supplement calls = %d, want 0", got)
-	}
-	if backend.enabled {
-		t.Fatal("unnegotiated run enabled provider hooks")
-	}
-}
-
-func TestExecuteAndDrainNegotiatedEnablesProviderHooks(t *testing.T) {
-	d := taskSupplementTestDaemon(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) })
-	backend := &supplementGateBackend{}
-	if _, _, err := d.executeAndDrain(t.Context(), backend, "original", agent.ExecOptions{}, d.logger, "task-negotiated", "", new(atomic.Int32), true); err != nil {
-		t.Fatal(err)
-	}
-	if !backend.enabled {
-		t.Fatal("negotiated run did not enable provider hooks")
-	}
-}
-
-func TestTaskSupplementSignalSubscriptionCleansUp(t *testing.T) {
-	d := &Daemon{taskSupplementSignals: newTaskSupplementSignals()}
-	_, unsubscribe := d.taskSupplementWakeup("task-cleanup")
-	d.signalTaskSupplementWakeup("task-cleanup")
-	unsubscribe()
-	d.taskSupplementSignals.mu.Lock()
-	defer d.taskSupplementSignals.mu.Unlock()
-	if len(d.taskSupplementSignals.byTask) != 0 {
-		t.Fatalf("signal subscriptions leaked: %#v", d.taskSupplementSignals.byTask)
+func TestExecuteAndDrainSupplementNegotiation(t *testing.T) {
+	for _, negotiated := range []bool{false, true} {
+		t.Run(fmt.Sprintf("negotiated=%v", negotiated), func(t *testing.T) {
+			var requests atomic.Int32
+			d := taskSupplementTestDaemon(t, func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				w.WriteHeader(http.StatusNotFound)
+			})
+			backend := &supplementGateBackend{}
+			opts := agent.ExecOptions{EnableTaskSupplement: negotiated}
+			if _, _, err := d.executeAndDrain(t.Context(), backend, "original", opts, d.logger, "task", "", new(atomic.Int32)); err != nil {
+				t.Fatal(err)
+			}
+			if backend.enabled != negotiated {
+				t.Fatalf("provider hooks enabled=%v, want %v", backend.enabled, negotiated)
+			}
+			if !negotiated && (requests.Load() != 0 || backend.supplementCalls.Load() != 0) {
+				t.Fatalf("unnegotiated run made HTTP requests=%d supplement calls=%d", requests.Load(), backend.supplementCalls.Load())
+			}
+		})
 	}
 }

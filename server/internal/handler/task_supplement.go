@@ -83,36 +83,36 @@ func applySupplementReceipt(resp *CommentResponse, s db.TaskSupplement) {
 	resp.SupplementDeliveredAt = receipt.DeliveredAt
 }
 
-func (h *Handler) loadTaskSupplementTarget(w http.ResponseWriter, r *http.Request) (db.Issue, db.AgentTaskQueue, db.Agent, pgtype.UUID, bool) {
+func (h *Handler) loadTaskSupplementTarget(w http.ResponseWriter, r *http.Request) (db.Issue, db.AgentTaskQueue, pgtype.UUID, bool) {
 	issue, ok := h.loadIssueForUser(w, r, chi.URLParam(r, "id"))
 	if !ok {
-		return db.Issue{}, db.AgentTaskQueue{}, db.Agent{}, pgtype.UUID{}, false
+		return db.Issue{}, db.AgentTaskQueue{}, pgtype.UUID{}, false
 	}
 	userID, ok := requireUserID(w, r)
 	if !ok {
-		return db.Issue{}, db.AgentTaskQueue{}, db.Agent{}, pgtype.UUID{}, false
+		return db.Issue{}, db.AgentTaskQueue{}, pgtype.UUID{}, false
 	}
 	authorID, ok := parseUUIDOrBadRequest(w, userID, "user id")
 	if !ok {
-		return db.Issue{}, db.AgentTaskQueue{}, db.Agent{}, pgtype.UUID{}, false
+		return db.Issue{}, db.AgentTaskQueue{}, pgtype.UUID{}, false
 	}
 	taskID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "taskId"), "task id")
 	if !ok {
-		return db.Issue{}, db.AgentTaskQueue{}, db.Agent{}, pgtype.UUID{}, false
+		return db.Issue{}, db.AgentTaskQueue{}, pgtype.UUID{}, false
 	}
 	task, err := h.Queries.GetAgentTask(r.Context(), taskID)
 	if err != nil || uuidToString(task.IssueID) != uuidToString(issue.ID) {
 		writeError(w, http.StatusNotFound, "task not found")
-		return db.Issue{}, db.AgentTaskQueue{}, db.Agent{}, pgtype.UUID{}, false
+		return db.Issue{}, db.AgentTaskQueue{}, pgtype.UUID{}, false
 	}
 	agent, err := h.Queries.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{
 		ID: task.AgentID, WorkspaceID: issue.WorkspaceID,
 	})
 	if err != nil || !h.canInvokeAgent(r.Context(), agent, "member", userID, userID, uuidToString(issue.WorkspaceID)) {
 		writeErrorCode(w, http.StatusForbidden, "invocation_not_allowed", "you cannot run this agent")
-		return db.Issue{}, db.AgentTaskQueue{}, db.Agent{}, pgtype.UUID{}, false
+		return db.Issue{}, db.AgentTaskQueue{}, pgtype.UUID{}, false
 	}
-	return issue, task, agent, authorID, true
+	return issue, task, authorID, true
 }
 
 type createTaskSupplementRequest struct {
@@ -124,7 +124,7 @@ type createTaskSupplementRequest struct {
 // The SQL statement owns the terminal race: when completion wins, no comment,
 // binding, or coverage marker is created.
 func (h *Handler) CreateTaskSupplement(w http.ResponseWriter, r *http.Request) {
-	issue, task, _, authorID, ok := h.loadTaskSupplementTarget(w, r)
+	issue, task, authorID, ok := h.loadTaskSupplementTarget(w, r)
 	if !ok {
 		return
 	}
@@ -147,7 +147,7 @@ func (h *Handler) CreateTaskSupplement(w http.ResponseWriter, r *http.Request) {
 	}
 	if existing, err := h.Queries.GetTaskSupplementByRequest(r.Context(), lookup); err == nil {
 		h.notifyTaskSupplementAvailable(task)
-		h.writeExistingTaskSupplement(w, r, existing, http.StatusOK)
+		h.writeExistingTaskSupplement(w, r, existing)
 		return
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusInternalServerError, "failed to check additional message")
@@ -174,7 +174,7 @@ func (h *Handler) CreateTaskSupplement(w http.ResponseWriter, r *http.Request) {
 	if isUniqueViolation(err) {
 		if existing, loadErr := h.Queries.GetTaskSupplementByRequest(r.Context(), lookup); loadErr == nil {
 			h.notifyTaskSupplementAvailable(task)
-			h.writeExistingTaskSupplement(w, r, existing, http.StatusOK)
+			h.writeExistingTaskSupplement(w, r, existing)
 			return
 		}
 	}
@@ -216,7 +216,7 @@ func (h *Handler) notifyTaskSupplementAvailable(task db.AgentTaskQueue) {
 	h.DaemonTaskSupplement.NotifyTaskSupplementAvailable(uuidToString(task.RuntimeID), uuidToString(task.ID))
 }
 
-func (h *Handler) writeExistingTaskSupplement(w http.ResponseWriter, r *http.Request, existing db.GetTaskSupplementByRequestRow, status int) {
+func (h *Handler) writeExistingTaskSupplement(w http.ResponseWriter, r *http.Request, existing db.TaskSupplement) {
 	comment, err := h.Queries.GetCommentInWorkspace(r.Context(), db.GetCommentInWorkspaceParams{
 		ID: existing.CommentID, WorkspaceID: existing.WorkspaceID,
 	})
@@ -225,15 +225,12 @@ func (h *Handler) writeExistingTaskSupplement(w http.ResponseWriter, r *http.Req
 		return
 	}
 	resp := commentToResponse(comment, nil, nil)
-	resp.SupplementTaskID = uuidToString(existing.TaskID)
-	resp.SupplementStatus = existing.Status
-	resp.SupplementFailureReason = textToPtr(existing.FailureReason)
-	resp.SupplementDeliveredAt = timestampToPtr(existing.DeliveredAt)
-	writeJSON(w, status, resp)
+	applySupplementReceipt(&resp, existing)
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) RetryTaskSupplement(w http.ResponseWriter, r *http.Request) {
-	issue, task, _, _, ok := h.loadTaskSupplementTarget(w, r)
+	issue, task, _, ok := h.loadTaskSupplementTarget(w, r)
 	if !ok {
 		return
 	}
@@ -330,15 +327,11 @@ func (h *Handler) AckTaskSupplement(w http.ResponseWriter, r *http.Request) {
 }
 
 func stableTaskSupplementFailureReason(reason string) string {
-	switch strings.TrimSpace(sanitizeNullBytes(reason)) {
-	case protocol.TaskSupplementFailureTurnNotStarted:
-		return protocol.TaskSupplementFailureTurnNotStarted
-	case protocol.TaskSupplementFailureTimeout:
-		return protocol.TaskSupplementFailureTimeout
-	case protocol.TaskSupplementFailureTurnEnded:
-		return protocol.TaskSupplementFailureTurnEnded
-	case protocol.TaskSupplementFailureProviderRejected:
-		return protocol.TaskSupplementFailureProviderRejected
+	reason = strings.TrimSpace(sanitizeNullBytes(reason))
+	switch reason {
+	case protocol.TaskSupplementFailureTurnNotStarted, protocol.TaskSupplementFailureTimeout,
+		protocol.TaskSupplementFailureTurnEnded, protocol.TaskSupplementFailureProviderRejected:
+		return reason
 	default:
 		// Provider and Go errors are private daemon diagnostics. Never persist or
 		// rebroadcast them to workspace members, and never byte-truncate UTF-8.

@@ -135,14 +135,14 @@ func TestRunTaskWakeupConnectionRoutesTaskSupplementHint(t *testing.T) {
 		}
 		defer conn.Close()
 		<-sendHint
-		payload, _ := json.Marshal(protocol.TaskSupplementAvailablePayload{RuntimeID: "runtime-1", TaskID: "task-1"})
+		payload, _ := json.Marshal(protocol.TaskAvailablePayload{RuntimeID: "runtime-1", TaskID: "task-1"})
 		_ = conn.WriteJSON(protocol.Message{Type: protocol.EventDaemonTaskSupplementAvailable, Payload: payload})
 		<-serverDone
 	}))
 	defer srv.Close()
 
 	d := New(Config{ServerBaseURL: srv.URL, HeartbeatInterval: time.Hour}, slog.Default())
-	supplementWakeup, unsubscribe := d.taskSupplementWakeup("task-1")
+	supplementWakeup, unsubscribe := d.taskSupplementSignals.subscribe("task-1")
 	defer unsubscribe()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -670,8 +670,7 @@ type Daemon struct {
 	// taskSupplementSignals carries content-free server hints to the exact
 	// negotiated task. The two intervals are production defaults in New and
 	// independently overridable by focused tests.
-	taskSupplementSignals       *taskSupplementSignals
-	taskSupplementSignalsInitMu sync.Mutex
+	taskSupplementSignals       taskSupplementSignals
 	taskSupplementPollInterval  time.Duration
 	taskSupplementReadyInterval time.Duration
 	// envRootBusyWait is how long a task that is entitled to a prior env root
@@ -741,7 +740,6 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		reregisterLastCompletedAt:   make(map[string]time.Time),
 		cancelPollInterval:          5 * time.Second,
 		taskSlotWait:                taskSlotWaitTimeout,
-		taskSupplementSignals:       newTaskSupplementSignals(),
 		taskSupplementPollInterval:  defaultTaskSupplementPollInterval,
 		taskSupplementReadyInterval: defaultTaskSupplementReadyInterval,
 		envRootBusyWait:             15 * time.Second,
@@ -8395,7 +8393,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		// between the committed server transition and turn/started. The row is
 		// durable, so a coalesced hint is sufficient; the five-second fallback
 		// covers a notification sent before this start response arrived.
-		_, unsubscribeSupplements := d.taskSupplementWakeup(task.ID)
+		_, unsubscribeSupplements := d.taskSupplementSignals.subscribe(task.ID)
 		defer unsubscribeSupplements()
 	}
 	stopPrepareLease()
@@ -8655,6 +8653,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		idleWatchdogTimeout = d.cfg.OpenCodeIdleWatchdog
 	}
 	execOpts := agent.ExecOptions{
+		EnableTaskSupplement:       taskSupplementNegotiated,
 		Cwd:                        env.WorkDir,
 		Model:                      model,
 		ThreadName:                 deriveTaskThreadName(task),
@@ -8759,7 +8758,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// Shared across the resume-retry below so the retry's transcript rows
 	// keep ascending seq values for the same task.
 	var msgSeq atomic.Int32
-	result, tools, err := d.executeAndDrain(ctx, backend, prompt, execOpts, taskLog, task.ID, env.CodexHome, &msgSeq, taskSupplementNegotiated)
+	result, tools, err := d.executeAndDrain(ctx, backend, prompt, execOpts, taskLog, task.ID, env.CodexHome, &msgSeq)
 	if err != nil {
 		return TaskResult{}, err
 	}
@@ -8815,7 +8814,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		}
 		freshPrompt := BuildPrompt(task, provider, promptOptions...)
 
-		retryResult, retryTools, retryErr := d.executeAndDrain(ctx, backend, freshPrompt, execOpts, taskLog, task.ID, env.CodexHome, &msgSeq, taskSupplementNegotiated)
+		retryResult, retryTools, retryErr := d.executeAndDrain(ctx, backend, freshPrompt, execOpts, taskLog, task.ID, env.CodexHome, &msgSeq)
 		if retryErr != nil {
 			taskLog.Error("fresh session also failed to start; keeping the original poisoned result", "error", retryErr)
 		} else if retryResult.Status != "completed" && retryResult.SessionID == "" {
@@ -9270,24 +9269,7 @@ func freshSessionMayHelp(errText string) bool {
 // messages and is owned by the caller so a same-task retry continues the
 // sequence instead of restarting at 1 — the server orders the transcript by
 // seq alone, and duplicate seqs would interleave the two attempts' rows.
-func formatTaskSupplementInstruction(authorName, content string) string {
-	authorName = strings.Join(strings.Fields(authorName), " ")
-	if authorName == "" {
-		authorName = "a user"
-	}
-	return fmt.Sprintf(`[ADDITIONAL GUIDANCE] Human %s added guidance while you were working.
-
-Treat this as additional guidance for the same active task, not as a replacement:
-- Preserve and complete the original objective.
-- Incorporate this guidance into the work and the turn's single final response.
-- Do not send a separate acknowledgement.
-- Replace or cancel the original objective only if the human explicitly asks for replacement or cancellation.
-
-Human message:
-%s`, strconv.Quote(authorName), content)
-}
-
-func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, prompt string, opts agent.ExecOptions, taskLog *slog.Logger, taskID, codexHome string, msgSeq *atomic.Int32, taskSupplementNegotiated ...bool) (agent.Result, int32, error) {
+func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, prompt string, opts agent.ExecOptions, taskLog *slog.Logger, taskID, codexHome string, msgSeq *atomic.Int32) (agent.Result, int32, error) {
 	phaseRecorder := taskPhaseRecorderFromContext(ctx)
 	// Wrap the caller's ctx so the idle watchdog (below) can interrupt both
 	// the agent subprocess (via the ctx passed to backend.Execute) AND the
@@ -9297,8 +9279,6 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 	agentCtx, agentCancel := context.WithCancel(ctx)
 	defer agentCancel()
 
-	negotiatedSupplements := len(taskSupplementNegotiated) > 0 && taskSupplementNegotiated[0]
-	opts.EnableTaskSupplement = negotiatedSupplements
 	session, err := backend.Execute(agentCtx, prompt, opts)
 	if err != nil {
 		// One provider-agnostic boundary for launches: every backend's
@@ -9316,28 +9296,22 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 	phaseRecorder.Mark(taskPhaseRuntimeStarted)
 	taskLog.Debug("backend started, draining messages")
 
-	// One goroutine serially claims additions for this exact run and injects
-	// them into the active Codex turn. It exists only when StartTask explicitly
-	// negotiated this task-scoped capability and Codex can prove a turn is
-	// live. A WS hint wakes it immediately; the fallback shares the daemon's
-	// five-second status cadence. New-daemon/old-server observes one 404 and
-	// stops, while old-daemon/new-server never negotiated support.
-	supplementCtx, cancelSupplements := context.WithCancel(agentCtx)
-	supplementsDone := make(chan struct{})
-	if negotiatedSupplements && session.Supplement != nil && session.SupplementReady != nil {
-		wakeup, unsubscribe := d.taskSupplementWakeup(taskID)
+	// Only negotiated sessions may claim additions. Stop and join delivery
+	// before the caller reports the task's terminal state to the server.
+	if opts.EnableTaskSupplement && session.Supplement != nil && session.SupplementReady != nil {
+		supplementCtx, cancelSupplements := context.WithCancel(agentCtx)
+		supplementsDone := make(chan struct{})
+		wakeup, unsubscribe := d.taskSupplementSignals.subscribe(taskID)
 		go func() {
 			defer unsubscribe()
 			defer close(supplementsDone)
-			d.runTaskSupplementLoop(supplementCtx, ctx, session, taskID, wakeup, taskLog)
+			d.runTaskSupplementLoop(supplementCtx, session, taskID, wakeup, taskLog)
 		}()
-	} else {
-		close(supplementsDone)
+		defer func() {
+			cancelSupplements()
+			<-supplementsDone
+		}()
 	}
-	defer func() {
-		cancelSupplements()
-		<-supplementsDone
-	}()
 
 	// Bound the drain loop only when there is a wall-clock cap. With a positive
 	// opts.Timeout, give the drain a slightly longer deadline than the backend

@@ -114,7 +114,7 @@ WITH next AS MATERIALIZED (
     WHERE s.comment_id = next.comment_id
     RETURNING s.task_id, s.workspace_id, s.issue_id, s.comment_id, s.author_id, s.client_request_id, s.status, s.failure_reason, s.attempt_count, s.created_at, s.updated_at, s.delivered_at
 )
-SELECT claimed.task_id, claimed.workspace_id, claimed.issue_id, claimed.comment_id, claimed.author_id, claimed.client_request_id, claimed.status, claimed.failure_reason, claimed.attempt_count, claimed.created_at, claimed.updated_at, claimed.delivered_at, c.content,
+SELECT claimed.comment_id, claimed.attempt_count, c.content,
        COALESCE(NULLIF(btrim(u.name), ''), 'a user')::text AS author_name
 FROM claimed
 JOIN comment c ON c.id = claimed.comment_id
@@ -122,38 +122,18 @@ LEFT JOIN "user" u ON u.id = claimed.author_id
 `
 
 type ClaimNextTaskSupplementRow struct {
-	TaskID          pgtype.UUID        `json:"task_id"`
-	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
-	IssueID         pgtype.UUID        `json:"issue_id"`
-	CommentID       pgtype.UUID        `json:"comment_id"`
-	AuthorID        pgtype.UUID        `json:"author_id"`
-	ClientRequestID pgtype.UUID        `json:"client_request_id"`
-	Status          string             `json:"status"`
-	FailureReason   pgtype.Text        `json:"failure_reason"`
-	AttemptCount    int32              `json:"attempt_count"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
-	DeliveredAt     pgtype.Timestamptz `json:"delivered_at"`
-	Content         string             `json:"content"`
-	AuthorName      string             `json:"author_name"`
+	CommentID    pgtype.UUID `json:"comment_id"`
+	AttemptCount int32       `json:"attempt_count"`
+	Content      string      `json:"content"`
+	AuthorName   string      `json:"author_name"`
 }
 
 func (q *Queries) ClaimNextTaskSupplement(ctx context.Context, taskID pgtype.UUID) (ClaimNextTaskSupplementRow, error) {
 	row := q.db.QueryRow(ctx, claimNextTaskSupplement, taskID)
 	var i ClaimNextTaskSupplementRow
 	err := row.Scan(
-		&i.TaskID,
-		&i.WorkspaceID,
-		&i.IssueID,
 		&i.CommentID,
-		&i.AuthorID,
-		&i.ClientRequestID,
-		&i.Status,
-		&i.FailureReason,
 		&i.AttemptCount,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.DeliveredAt,
 		&i.Content,
 		&i.AuthorName,
 	)
@@ -205,8 +185,7 @@ WITH locked_task AS MATERIALIZED (
 SELECT c.id, c.issue_id, c.author_type, c.author_id, c.content, c.type, c.created_at, c.updated_at, c.parent_id, c.workspace_id, c.resolved_at, c.resolved_by_type, c.resolved_by_id, c.source_task_id, c.quick_action_id, c.via_plugin_id, c.revision, c.recovery_settled_at, c.deleted_at, i.revision AS issue_revision,
        s.task_id AS supplement_task_id, s.status AS supplement_status,
        s.failure_reason AS supplement_failure_reason,
-       s.delivered_at AS supplement_delivered_at,
-       s.client_request_id AS supplement_client_request_id
+       s.delivered_at AS supplement_delivered_at
 FROM inserted_comment c
 JOIN touched_issue i ON i.id = c.issue_id
 JOIN inserted_supplement s ON s.comment_id = c.id
@@ -222,31 +201,30 @@ type CreateTaskSupplementParams struct {
 }
 
 type CreateTaskSupplementRow struct {
-	ID                        pgtype.UUID        `json:"id"`
-	IssueID                   pgtype.UUID        `json:"issue_id"`
-	AuthorType                string             `json:"author_type"`
-	AuthorID                  pgtype.UUID        `json:"author_id"`
-	Content                   string             `json:"content"`
-	Type                      string             `json:"type"`
-	CreatedAt                 pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt                 pgtype.Timestamptz `json:"updated_at"`
-	ParentID                  pgtype.UUID        `json:"parent_id"`
-	WorkspaceID               pgtype.UUID        `json:"workspace_id"`
-	ResolvedAt                pgtype.Timestamptz `json:"resolved_at"`
-	ResolvedByType            pgtype.Text        `json:"resolved_by_type"`
-	ResolvedByID              pgtype.UUID        `json:"resolved_by_id"`
-	SourceTaskID              pgtype.UUID        `json:"source_task_id"`
-	QuickActionID             pgtype.UUID        `json:"quick_action_id"`
-	ViaPluginID               pgtype.UUID        `json:"via_plugin_id"`
-	Revision                  int64              `json:"revision"`
-	RecoverySettledAt         pgtype.Timestamptz `json:"recovery_settled_at"`
-	DeletedAt                 pgtype.Timestamptz `json:"deleted_at"`
-	IssueRevision             int64              `json:"issue_revision"`
-	SupplementTaskID          pgtype.UUID        `json:"supplement_task_id"`
-	SupplementStatus          string             `json:"supplement_status"`
-	SupplementFailureReason   pgtype.Text        `json:"supplement_failure_reason"`
-	SupplementDeliveredAt     pgtype.Timestamptz `json:"supplement_delivered_at"`
-	SupplementClientRequestID pgtype.UUID        `json:"supplement_client_request_id"`
+	ID                      pgtype.UUID        `json:"id"`
+	IssueID                 pgtype.UUID        `json:"issue_id"`
+	AuthorType              string             `json:"author_type"`
+	AuthorID                pgtype.UUID        `json:"author_id"`
+	Content                 string             `json:"content"`
+	Type                    string             `json:"type"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt               pgtype.Timestamptz `json:"updated_at"`
+	ParentID                pgtype.UUID        `json:"parent_id"`
+	WorkspaceID             pgtype.UUID        `json:"workspace_id"`
+	ResolvedAt              pgtype.Timestamptz `json:"resolved_at"`
+	ResolvedByType          pgtype.Text        `json:"resolved_by_type"`
+	ResolvedByID            pgtype.UUID        `json:"resolved_by_id"`
+	SourceTaskID            pgtype.UUID        `json:"source_task_id"`
+	QuickActionID           pgtype.UUID        `json:"quick_action_id"`
+	ViaPluginID             pgtype.UUID        `json:"via_plugin_id"`
+	Revision                int64              `json:"revision"`
+	RecoverySettledAt       pgtype.Timestamptz `json:"recovery_settled_at"`
+	DeletedAt               pgtype.Timestamptz `json:"deleted_at"`
+	IssueRevision           int64              `json:"issue_revision"`
+	SupplementTaskID        pgtype.UUID        `json:"supplement_task_id"`
+	SupplementStatus        string             `json:"supplement_status"`
+	SupplementFailureReason pgtype.Text        `json:"supplement_failure_reason"`
+	SupplementDeliveredAt   pgtype.Timestamptz `json:"supplement_delivered_at"`
 }
 
 // Locking the exact task serializes against terminal transitions.
@@ -287,7 +265,6 @@ func (q *Queries) CreateTaskSupplement(ctx context.Context, arg CreateTaskSupple
 		&i.SupplementStatus,
 		&i.SupplementFailureReason,
 		&i.SupplementDeliveredAt,
-		&i.SupplementClientRequestID,
 	)
 	return i, err
 }
@@ -323,9 +300,8 @@ func (q *Queries) GetTaskSupplementByComment(ctx context.Context, arg GetTaskSup
 }
 
 const getTaskSupplementByRequest = `-- name: GetTaskSupplementByRequest :one
-SELECT s.task_id, s.workspace_id, s.issue_id, s.comment_id, s.author_id, s.client_request_id, s.status, s.failure_reason, s.attempt_count, s.created_at, s.updated_at, s.delivered_at, c.content
+SELECT s.task_id, s.workspace_id, s.issue_id, s.comment_id, s.author_id, s.client_request_id, s.status, s.failure_reason, s.attempt_count, s.created_at, s.updated_at, s.delivered_at
 FROM task_supplement s
-JOIN comment c ON c.id = s.comment_id
 WHERE s.task_id = $1
   AND s.workspace_id = $2
   AND s.author_id = $3
@@ -339,30 +315,14 @@ type GetTaskSupplementByRequestParams struct {
 	ClientRequestID pgtype.UUID `json:"client_request_id"`
 }
 
-type GetTaskSupplementByRequestRow struct {
-	TaskID          pgtype.UUID        `json:"task_id"`
-	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
-	IssueID         pgtype.UUID        `json:"issue_id"`
-	CommentID       pgtype.UUID        `json:"comment_id"`
-	AuthorID        pgtype.UUID        `json:"author_id"`
-	ClientRequestID pgtype.UUID        `json:"client_request_id"`
-	Status          string             `json:"status"`
-	FailureReason   pgtype.Text        `json:"failure_reason"`
-	AttemptCount    int32              `json:"attempt_count"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
-	DeliveredAt     pgtype.Timestamptz `json:"delivered_at"`
-	Content         string             `json:"content"`
-}
-
-func (q *Queries) GetTaskSupplementByRequest(ctx context.Context, arg GetTaskSupplementByRequestParams) (GetTaskSupplementByRequestRow, error) {
+func (q *Queries) GetTaskSupplementByRequest(ctx context.Context, arg GetTaskSupplementByRequestParams) (TaskSupplement, error) {
 	row := q.db.QueryRow(ctx, getTaskSupplementByRequest,
 		arg.TaskID,
 		arg.WorkspaceID,
 		arg.AuthorID,
 		arg.ClientRequestID,
 	)
-	var i GetTaskSupplementByRequestRow
+	var i TaskSupplement
 	err := row.Scan(
 		&i.TaskID,
 		&i.WorkspaceID,
@@ -376,7 +336,6 @@ func (q *Queries) GetTaskSupplementByRequest(ctx context.Context, arg GetTaskSup
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeliveredAt,
-		&i.Content,
 	)
 	return i, err
 }

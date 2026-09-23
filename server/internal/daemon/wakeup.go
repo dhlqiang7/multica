@@ -408,7 +408,7 @@ func (d *Daemon) readTaskWakeupMessagesForConnection(conn *websocket.Conn, taskW
 			}
 			signalTaskWakeup(taskWakeups, payload.RuntimeID)
 		case protocol.EventDaemonTaskSupplementAvailable:
-			var payload protocol.TaskSupplementAvailablePayload
+			var payload protocol.TaskAvailablePayload
 			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
 				d.logger.Debug("task supplement websocket invalid payload", "error", err)
 				continue
@@ -417,7 +417,7 @@ func (d *Daemon) readTaskWakeupMessagesForConnection(conn *websocket.Conn, taskW
 				d.logger.Debug("task supplement websocket missing task_id")
 				continue
 			}
-			d.signalTaskSupplementWakeup(payload.TaskID)
+			d.taskSupplementSignals.notify(payload.TaskID)
 		case protocol.EventDaemonRuntimeProfilesChanged:
 			var payload protocol.RuntimeProfilesChangedPayload
 			if err := json.Unmarshal(msg.Payload, &payload); err != nil {

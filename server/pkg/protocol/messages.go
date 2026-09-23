@@ -132,20 +132,12 @@ type TaskDispatchPayload struct {
 	Description string `json:"description"`
 }
 
-// TaskAvailablePayload is sent from server to daemon as a wakeup hint. The
-// daemon still claims work through the existing HTTP claim endpoint.
+// TaskAvailablePayload carries content-free task and supplement wakeup hints.
+// Supplement hints require an exact task ID; the daemon claims durable input
+// through the corresponding HTTP endpoint.
 type TaskAvailablePayload struct {
 	RuntimeID string `json:"runtime_id"`
 	TaskID    string `json:"task_id,omitempty"`
-}
-
-// TaskSupplementAvailablePayload is a best-effort wakeup hint for one exact
-// active run. It carries no user content: the daemon still authenticates and
-// claims the durable row through the supplement endpoint. A lost hint costs at
-// most the bounded safety-poll interval.
-type TaskSupplementAvailablePayload struct {
-	RuntimeID string `json:"runtime_id"`
-	TaskID    string `json:"task_id"`
 }
 
 // RuntimeProfilesChangedPayload is sent from server to daemon as a wakeup hint
