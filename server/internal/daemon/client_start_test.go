@@ -18,6 +18,22 @@ type startTaskTransport func(*http.Request) (*http.Response, error)
 
 func (f startTaskTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
+func TestStartTaskBoundsResponseRead(t *testing.T) {
+	const responseSize = 2 << 20
+	body := strings.NewReader(strings.Repeat(" ", responseSize))
+	client := NewClient("https://daemon.test")
+	client.client.Transport = startTaskTransport(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(body)}, nil
+	})
+	_, err := client.StartTask(context.Background(), Task{ID: "task-1"})
+	if !errors.Is(err, errInvalidResponseBody) || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("StartTask error = %v, want response size error", err)
+	}
+	if read := responseSize - body.Len(); read > (1<<20)+1 {
+		t.Fatalf("read %d bytes before rejecting oversized response", read)
+	}
+}
+
 func TestStartTaskRetries(t *testing.T) {
 	defer noSleepRetry(t)()
 	for _, tc := range []struct {

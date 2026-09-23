@@ -102,17 +102,24 @@ func TestClient_IdentityHeaders_GetJSON(t *testing.T) {
 
 func TestStartTaskCapabilityNegotiationMixedVersions(t *testing.T) {
 	defer noSleepRetry(t)()
+	const prefix = `{"supplement_capability":"task-supplement-v1","issue":{"description":"`
+	const suffix = `"}}`
+	responseAtLimit := prefix + strings.Repeat("x", (1<<20)-len(prefix)-len(suffix)) + suffix
 	for _, tc := range []struct {
 		name          string
 		response      string
 		contentLength string
 		negotiated    bool
 		wantError     bool
+		retry         bool
 	}{
 		{name: "empty response", response: ""},
-		{name: "truncated HTTP body", contentLength: "8", wantError: true},
+		{name: "truncated HTTP body", contentLength: "8", wantError: true, retry: true},
 		{name: "truncated response", response: `{"supplement_capability":`, wantError: true},
 		{name: "trailing garbage", response: `{"supplement_capability":"task-supplement-v1"}garbage`, wantError: true},
+		{name: "HTML response", response: `<html>Proxy error</html>`, wantError: true},
+		{name: "response at size limit", response: responseAtLimit, negotiated: true},
+		{name: "response exceeds size limit", response: responseAtLimit + " ", wantError: true},
 		{name: "old server task response", response: `{"id":"task-1","status":"running"}`, negotiated: false},
 		{name: "new server explicit capability", response: `{"supplement_capability":"task-supplement-v1"}`, negotiated: true},
 	} {
@@ -148,7 +155,7 @@ func TestStartTaskCapabilityNegotiationMixedVersions(t *testing.T) {
 					t.Errorf("negotiated = %v, want %v", got, tc.negotiated)
 				}
 				wantCalls := 1
-				if tc.wantError && task.StartClaimSupported {
+				if tc.retry && task.StartClaimSupported {
 					wantCalls += len(startTaskRetrySchedule)
 				}
 				if got := int(calls.Load()); got != wantCalls {

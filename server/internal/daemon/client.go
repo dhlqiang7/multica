@@ -31,6 +31,8 @@ func (e *requestError) Error() string {
 	return fmt.Sprintf("%s %s returned %d: %s", e.Method, e.Path, e.StatusCode, e.Body)
 }
 
+var errInvalidResponseBody = errors.New("invalid response body")
+
 // isWorkspaceNotFoundError returns true if the error is a 404 with "workspace not found" body.
 func isWorkspaceNotFoundError(err error) bool {
 	var reqErr *requestError
@@ -466,25 +468,32 @@ func (c *Client) AckTaskSupplement(ctx context.Context, taskID, commentID string
 // fresh claims, and cannot reuse this acknowledgement.
 var startTaskRetrySchedule = []time.Duration{500 * time.Millisecond, 2 * time.Second}
 
-const startTaskTimeout = 30 * time.Second
+const (
+	startTaskTimeout = 30 * time.Second
+	// Start responses can include an issue snapshot alongside the capability.
+	maxStartTaskResponseBytes = 1 << 20
+)
 
 var errStartClaimRejected = errors.New("task start claim rejected")
 
 func (c *Client) StartTask(ctx context.Context, task Task, capabilities ...string) (bool, error) {
 	var negotiated bool
-	decodeResponse := func(r io.Reader) error {
-		data, err := io.ReadAll(r)
+	var decodeResponse responseDecoder = func(r io.Reader) error {
+		data, err := io.ReadAll(io.LimitReader(r, maxStartTaskResponseBytes+1))
 		if err != nil {
 			return err
+		}
+		if len(data) > maxStartTaskResponseBytes {
+			return fmt.Errorf("%w: task start exceeds %d bytes", errInvalidResponseBody, maxStartTaskResponseBytes)
 		}
 		var response struct {
 			SupplementCapability string `json:"supplement_capability"`
 		}
 		// Empty acknowledgements start the task without negotiating supplements.
-		// Read failures and nonempty invalid JSON must still fail the attempt.
+		// Invalid JSON fails without retrying; transport read failures can retry.
 		if len(data) != 0 {
 			if err := json.Unmarshal(data, &response); err != nil {
-				return err
+				return fmt.Errorf("%w: task start: %w", errInvalidResponseBody, err)
 			}
 		}
 		negotiated = response.SupplementCapability == protocol.DaemonCapabilityTaskSupplementV1
@@ -1173,15 +1182,15 @@ var retrySleep = func(ctx context.Context, d time.Duration) error {
 // resolve on retry: connection / TLS / I/O errors at the transport layer
 // (including client timeouts surfacing as context.DeadlineExceeded inside
 // http.Client.Do), 5xx server responses, and 408/429 rate-limit-style 4xx
-// codes. Other 4xx codes are treated as permanent — retrying a 400 (bad
-// body) or 404 (task not found) only burns time.
+// codes. Response validation errors marked with errInvalidResponseBody and
+// other 4xx codes are permanent.
 //
 // The caller is responsible for separately bailing on parent-context
 // cancellation; this predicate cannot distinguish "the daemon is shutting
 // down" from "the HTTP client timed out a single attempt" because both
 // reach here as context errors wrapped by net/http.
 func isTransientError(err error) bool {
-	if err == nil {
+	if err == nil || errors.Is(err, errInvalidResponseBody) {
 		return false
 	}
 	var reqErr *requestError
@@ -1249,10 +1258,13 @@ func (c *Client) postJSON(ctx context.Context, path string, reqBody any, respBod
 	return c.postJSONVia(ctx, c.client, path, reqBody, respBody)
 }
 
+// responseDecoder customizes successful-response decoding inside each attempt.
+type responseDecoder func(io.Reader) error
+
 // postJSONVia is postJSON over an explicit http.Client. Callers pick the client
 // to control the timeout regime: c.client (fixed 30s) for control-plane calls,
 // c.bundleClient (deadline from ctx) for large skill-bundle downloads.
-// respBody can be a JSON destination or a func(io.Reader) error that decodes a
+// respBody can be a JSON destination or a responseDecoder that decodes a
 // successful response inside each attempt, before retry decisions are made.
 func (c *Client) postJSONVia(ctx context.Context, httpClient *http.Client, path string, reqBody any, respBody any) error {
 	return c.postJSONViaObserved(ctx, httpClient, path, reqBody, respBody, nil)
@@ -1297,7 +1309,7 @@ func (c *Client) postJSONViaObserved(ctx context.Context, httpClient *http.Clien
 		io.Copy(io.Discard, respReader)
 		return nil
 	}
-	if decode, ok := respBody.(func(io.Reader) error); ok {
+	if decode, ok := respBody.(responseDecoder); ok {
 		return decode(respReader)
 	}
 	return json.NewDecoder(respReader).Decode(respBody)
