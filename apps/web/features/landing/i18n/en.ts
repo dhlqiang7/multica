@@ -294,14 +294,13 @@ export function createEnDict(allowSignup: boolean): LandingDict {
     },
     entries: [
       {
-        version: "0.6.0",
+        version: "0.5.2",
         date: "2026-09-23",
-        title: "Steering running tasks, duplicate Issue marks, steadier task runs, and instant new-model availability",
+        title: "Steering running tasks, duplicate Issue marks, and steadier task runs",
         changes: [],
         features: [
           "Add new instructions to a Claude Code or Codex task while it is still running.",
-          "Mark an Issue as a duplicate from the status picker, and jump to the original in one click.",
-          "See duplicate relationships on the Issue list and on the Issue itself.",
+          "Mark an Issue as a duplicate from the status picker, jump back to the original, and see that link on lists.",
           "Set an Issue's custom properties as you create it from the command line.",
           "Mention an agent in a Telegram group and it already knows the recent conversation.",
           "Install the command line tool on Windows straight from the download page.",
@@ -315,7 +314,7 @@ export function createEnDict(allowSignup: boolean): LandingDict {
           "The running indicator is smoother and lighter on your machine.",
         ],
         fixes: [
-          "New Claude Code and Codex models show up in the picker as soon as they are out.",
+          "New Codex models show up in the picker as soon as they are out.",
           "A task that cannot take extra instructions no longer offers the option.",
           "A command line sign-in that cannot reach the server says so, instead of waiting forever.",
           "An invited member can finish signing up on a self-hosted server that restricts signups.",

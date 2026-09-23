@@ -269,14 +269,13 @@ export function createKoDict(allowSignup: boolean): LandingDict {
       },
       entries: [
         {
-          version: "0.6.0",
+          version: "0.5.2",
           date: "2026-09-23",
-          title: "실행 중 작업에 지시 추가, Issue 중복 표시, 더 안정적인 작업 실행, 새 모델 즉시 반영",
+          title: "실행 중 작업에 지시 추가, Issue 중복 표시, 더 안정적인 작업 실행",
           changes: [],
           features: [
             "Claude Code나 Codex 작업이 실행 중일 때도 새 지시를 더할 수 있습니다.",
-            "상태 선택에서 Issue를 중복으로 표시하고, 원래 Issue로 한 번에 이동할 수 있습니다.",
-            "중복 관계는 Issue 목록과 Issue 안에서 모두 보입니다.",
+            "상태 선택에서 Issue를 중복으로 표시하고, 원래 Issue로 바로 이동하며, 목록에서도 그 관계가 보입니다.",
             "커맨드라인에서 Issue를 만들 때 사용자 지정 속성도 함께 설정할 수 있습니다.",
             "Telegram 그룹에서 에이전트를 @하면 최근 대화를 이미 알고 답합니다.",
             "다운로드 페이지에서 Windows용 커맨드라인 설치 방법을 바로 볼 수 있습니다.",
@@ -290,7 +289,7 @@ export function createKoDict(allowSignup: boolean): LandingDict {
             "실행 중 표시가 더 부드러워지고 기기 부담도 줄었습니다.",
           ],
           fixes: [
-            "Claude Code와 Codex의 새 모델이 나오는 대로 선택 목록에 뜹니다.",
+            "Codex의 새 모델이 나오는 대로 선택 목록에 뜹니다.",
             "추가 지시를 받을 수 없는 작업에는 해당 항목이 더 이상 보이지 않습니다.",
             "커맨드라인 로그인이 서버에 닿지 않으면 계속 기다리지 않고 알려 줍니다.",
             "초대받은 멤버는 가입을 제한한 셀프 호스팅에서도 가입을 마칠 수 있습니다.",

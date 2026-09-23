@@ -294,14 +294,13 @@ export function createZhDict(allowSignup: boolean): LandingDict {
     },
     entries: [
       {
-        version: "0.6.0",
+        version: "0.5.2",
         date: "2026-09-23",
-        title: "运行中任务追加指令、Issue 重复标记、任务运行更可靠、新模型即时可选",
+        title: "运行中任务追加指令、Issue 重复标记、任务运行更可靠",
         changes: [],
         features: [
           "Claude Code、Codex 的任务在运行过程中也能补充新的指导。",
-          "可以在状态选择器里把 Issue 标记为重复，并一键跳回原 Issue。",
-          "重复关系在 Issue 列表和 Issue 里都能看到。",
+          "可以在状态选择器里把 Issue 标记为重复，一键跳回原 Issue，列表里也看得到。",
           "命令行创建 Issue 时可以同时写好自定义属性。",
           "在 Telegram 群里 @ 智能体，它已经知道近期的对话。",
           "下载页可以直接获取 Windows 上的命令行安装方式。",
@@ -315,7 +314,7 @@ export function createZhDict(allowSignup: boolean): LandingDict {
           "运行状态的动效更流畅，也更省资源。",
         ],
         fixes: [
-          "Claude Code、Codex 的新模型一发布就出现在选择器里。",
+          "Codex 的新模型一发布就出现在选择器里。",
           "不支持追加指令的任务不再显示这个入口。",
           "命令行登录连不上服务器时会明确告知，不再一直等。",
           "受邀成员在限制注册的自托管环境里也能完成注册。",
