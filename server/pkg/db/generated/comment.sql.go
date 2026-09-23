@@ -1338,16 +1338,20 @@ WHERE c.issue_id = $1
        OR comment_thread_root_id(c.id) = $3::uuid)
   -- A deleted comment is no longer input, even when replies keep its row.
   AND c.deleted_at IS NULL
-  -- Explicit supplements belong only to their bound run, regardless of
-  -- delivery status. Failed delivery must not become an automatic new run.
+  -- A comment that steered this agent's running turn belongs to that turn,
+  -- regardless of delivery status: failed delivery must not become an automatic
+  -- new run. The same comment still reconciles normally for any other agent
+  -- it addressed without steering.
   AND NOT EXISTS (
       SELECT 1 FROM task_supplement s
+      JOIN agent_task_queue bound ON bound.id = s.task_id
       WHERE s.comment_id = c.id AND s.workspace_id = c.workspace_id
+        AND bound.agent_id = $4
   )
   AND (
       (
           c.author_type IN ('member', 'agent')
-          AND (c.created_at > $4 OR c.id = ANY($2::uuid[]))
+          AND (c.created_at > $5 OR c.id = ANY($2::uuid[]))
       )
       OR (
           c.author_type = 'system'
@@ -1363,6 +1367,7 @@ type ListReconcilableCommentsForIssueSinceParams struct {
 	IssueID           pgtype.UUID        `json:"issue_id"`
 	PlannedCommentIds []pgtype.UUID      `json:"planned_comment_ids"`
 	CommentThreadID   pgtype.UUID        `json:"comment_thread_id"`
+	AgentID           pgtype.UUID        `json:"agent_id"`
 	Since             pgtype.Timestamptz `json:"since"`
 }
 
@@ -1397,6 +1402,7 @@ func (q *Queries) ListReconcilableCommentsForIssueSince(ctx context.Context, arg
 		arg.IssueID,
 		arg.PlannedCommentIds,
 		arg.CommentThreadID,
+		arg.AgentID,
 		arg.Since,
 	)
 	if err != nil {

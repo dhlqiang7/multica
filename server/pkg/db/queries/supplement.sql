@@ -92,17 +92,61 @@ WHERE s.task_id = @task_id
   AND s.author_id = @author_id
   AND s.client_request_id = @client_request_id;
 
--- name: GetTaskSupplementByComment :one
+-- name: BindCommentTaskSupplement :one
+-- Binds an ordinary member comment, already created through the normal comment
+-- path, to one agent's running turn on the same issue. Locking the task
+-- serializes against terminal transitions: when the turn ended first nothing is
+-- bound, and the caller keeps the comment's normal trigger instead.
+WITH locked_task AS MATERIALIZED (
+    SELECT t.id, t.issue_id, t.runtime_id
+    FROM agent_task_queue t
+    JOIN agent_runtime r ON r.id = t.runtime_id
+    JOIN task_supplement_capability cap ON cap.task_id = t.id
+    WHERE t.issue_id = @issue_id
+      AND t.agent_id = @agent_id
+      AND r.workspace_id = @workspace_id
+      AND t.status = 'running'
+      AND cap.capability = 'task-supplement-v1'
+      AND r.provider IN ('codex', 'claude')
+    ORDER BY t.started_at DESC, t.id
+    LIMIT 1
+    FOR UPDATE OF t
+), inserted AS (
+    INSERT INTO task_supplement (
+        task_id, workspace_id, issue_id, comment_id, author_id,
+        client_request_id, status
+    )
+    SELECT t.id, @workspace_id, t.issue_id, @comment_id, @author_id,
+           @comment_id, 'pending'
+    FROM locked_task t
+    RETURNING *
+)
+SELECT inserted.*, locked_task.runtime_id
+FROM inserted
+JOIN locked_task ON locked_task.id = inserted.task_id;
+
+-- name: GetTaskSupplementForRun :one
 SELECT * FROM task_supplement
-WHERE comment_id = @comment_id AND workspace_id = @workspace_id;
+WHERE comment_id = @comment_id AND task_id = @task_id AND workspace_id = @workspace_id;
+
+-- name: CommentHasTaskSupplement :one
+SELECT EXISTS (
+    SELECT 1 FROM task_supplement
+    WHERE comment_id = @comment_id AND workspace_id = @workspace_id
+) AS bound;
 
 -- name: GetTaskSupplementCapability :one
 SELECT * FROM task_supplement_capability WHERE task_id = @task_id;
 
 -- name: ListTaskSupplementsByCommentIDs :many
-SELECT * FROM task_supplement
-WHERE workspace_id = @workspace_id
-  AND comment_id = ANY(@comment_ids::uuid[]);
+-- One comment may steer several runs; receipts carry the run's agent so a
+-- client can say whose turn received it.
+SELECT s.*, t.agent_id
+FROM task_supplement s
+LEFT JOIN agent_task_queue t ON t.id = s.task_id
+WHERE s.workspace_id = @workspace_id
+  AND s.comment_id = ANY(@comment_ids::uuid[])
+ORDER BY s.created_at, s.task_id;
 
 -- name: ListTaskSupplementMetadata :many
 SELECT cap.task_id, cap.capability,
@@ -116,7 +160,7 @@ GROUP BY cap.task_id, cap.capability;
 
 -- name: ClaimNextTaskSupplement :one
 WITH next AS MATERIALIZED (
-    SELECT s.comment_id
+    SELECT s.comment_id, s.task_id
     FROM task_supplement s
     JOIN agent_task_queue t ON t.id = s.task_id
     JOIN task_supplement_capability cap ON cap.task_id = t.id
@@ -135,6 +179,7 @@ WITH next AS MATERIALIZED (
         updated_at = now()
     FROM next
     WHERE s.comment_id = next.comment_id
+      AND s.task_id = next.task_id
     RETURNING s.*
 )
 SELECT claimed.comment_id, claimed.attempt_count, c.content,
@@ -200,7 +245,7 @@ WHERE s.task_id = t.id
   AND s.status = 'failed'
 RETURNING s.*;
 
--- name: LockTaskSupplementByComment :one
+-- name: LockTaskSupplementsByComment :many
 SELECT * FROM task_supplement
 WHERE comment_id = @comment_id AND workspace_id = @workspace_id
 FOR UPDATE;

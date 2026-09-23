@@ -243,8 +243,8 @@ func TestTaskSupplementCompletionDoesNotReplayBoundComments(t *testing.T) {
 						map[string]any{"output": "done"}, testWorkspaceID, "legit-daemon")
 					testutil.Call(t, testHandler.CompleteTask, withURLParam(req, "taskId", fixture.taskID)).Want(http.StatusOK)
 					if status == "pending" || status == "delivering" {
-						receipt, err := testHandler.Queries.GetTaskSupplementByComment(t.Context(), db.GetTaskSupplementByCommentParams{
-							CommentID: parseUUID(supplement.ID), WorkspaceID: parseUUID(testWorkspaceID),
+						receipt, err := testHandler.Queries.GetTaskSupplementForRun(t.Context(), db.GetTaskSupplementForRunParams{
+							CommentID: parseUUID(supplement.ID), TaskID: parseUUID(fixture.taskID), WorkspaceID: parseUUID(testWorkspaceID),
 						})
 						if err != nil || receipt.Status != "failed" || receipt.FailureReason.String != protocol.TaskSupplementFailureTurnEnded {
 							t.Fatalf("completion did not settle pending delivery: %#v: %v", receipt, err)
@@ -507,8 +507,8 @@ func TestTaskSupplementStopRemainsIndependent(t *testing.T) {
 	cancelReq := withURLParams(newRequest(http.MethodPost, "/cancel", nil),
 		"id", fixture.issueID, "taskId", fixture.taskID)
 	testutil.Call(t, testHandler.CancelTask, cancelReq).Want(http.StatusOK)
-	receipt, err := testHandler.Queries.GetTaskSupplementByComment(context.Background(), db.GetTaskSupplementByCommentParams{
-		CommentID: parseUUID(comment.ID), WorkspaceID: parseUUID(testWorkspaceID),
+	receipt, err := testHandler.Queries.GetTaskSupplementForRun(context.Background(), db.GetTaskSupplementForRunParams{
+		CommentID: parseUUID(comment.ID), TaskID: parseUUID(fixture.taskID), WorkspaceID: parseUUID(testWorkspaceID),
 	})
 	if err != nil || receipt.Status != "failed" || receipt.FailureReason.String != "turn_ended" {
 		t.Fatalf("stop receipt = %#v, err %v", receipt, err)

@@ -4470,6 +4470,7 @@ func (h *Handler) reconcileCommentsOnCompletion(ctx context.Context, task *db.Ag
 		IssueID:           task.IssueID,
 		Since:             task.CreatedAt,
 		PlannedCommentIds: plannedCommentIDs,
+		AgentID:           task.AgentID,
 	})
 	if err != nil {
 		slog.Warn("reconcile comments on completion: list comments failed",

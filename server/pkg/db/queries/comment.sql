@@ -381,11 +381,15 @@ WHERE c.issue_id = @issue_id
        OR comment_thread_root_id(c.id) = sqlc.narg('comment_thread_id')::uuid)
   -- A deleted comment is no longer input, even when replies keep its row.
   AND c.deleted_at IS NULL
-  -- Explicit supplements belong only to their bound run, regardless of
-  -- delivery status. Failed delivery must not become an automatic new run.
+  -- A comment that steered this agent's running turn belongs to that turn,
+  -- regardless of delivery status: failed delivery must not become an automatic
+  -- new run. The same comment still reconciles normally for any other agent
+  -- it addressed without steering.
   AND NOT EXISTS (
       SELECT 1 FROM task_supplement s
+      JOIN agent_task_queue bound ON bound.id = s.task_id
       WHERE s.comment_id = c.id AND s.workspace_id = c.workspace_id
+        AND bound.agent_id = @agent_id
   )
   AND (
       (
