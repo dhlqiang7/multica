@@ -23,6 +23,7 @@ type supplementFixture struct {
 	agentID   string
 	issueID   string
 	taskID    string
+	triggerID string
 }
 
 func TestStableTaskSupplementFailureReason(t *testing.T) {
@@ -68,7 +69,7 @@ func newSupplementFixture(t *testing.T, provider, status string, negotiated bool
 	t.Cleanup(func() {
 		testPool.Exec(context.Background(), `DELETE FROM task_supplement WHERE task_id = $1`, taskID)
 	})
-	return supplementFixture{runtimeID: runtimeID, agentID: agentID, issueID: issueID, taskID: taskID}
+	return supplementFixture{runtimeID: runtimeID, agentID: agentID, issueID: issueID, taskID: taskID, triggerID: triggerID}
 }
 
 func supplementRequest(t *testing.T, fixture supplementFixture, requestID, content string) *testutil.Response {
@@ -246,6 +247,90 @@ func TestTaskSupplementOrderedReceiptsRetryAndIdempotency(t *testing.T) {
 	dbfx.QueryRow(t, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1`, fixture.issueID).Scan(&taskCount)
 	if taskCount != 1 {
 		t.Fatalf("supplements created %d runs, want exactly one", taskCount)
+	}
+}
+
+func TestTaskSupplementCompletionDoesNotReplayBoundComments(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	for _, status := range []string{"pending", "delivering", "delivered", "failed"} {
+		for _, ordinary := range []string{"none", "unhandled", "queued"} {
+			t.Run(status+"/"+ordinary, func(t *testing.T) {
+				fixture := newSupplementFixture(t, "codex", "running", true)
+				ctx := context.Background()
+				// A plain reply routes back to the agent owning the original thread.
+				dbfx.Exec(t, `UPDATE comment SET content = $2 WHERE id = $1`, fixture.triggerID,
+					fmt.Sprintf("[@Supplement](mention://agent/%s) original objective", fixture.agentID))
+				dbfx.Exec(t, `UPDATE agent_task_queue SET delivered_comment_ids = ARRAY[trigger_comment_id] WHERE id = $1`, fixture.taskID)
+				dbfx.Cleanup(t, `DELETE FROM agent_task_queue WHERE issue_id = $1`, fixture.issueID)
+
+				var ordinaryID, queuedID string
+				if ordinary != "none" {
+					ordinaryID = dbfx.Comment(t, fixture.issueID, "Handle this ordinary reply next.", testutil.Cols{
+						"parent_id": fixture.triggerID,
+					})
+				}
+				if ordinary == "queued" {
+					queuedID = dbfx.Task(t, fixture.agentID, testutil.Cols{
+						"issue_id": fixture.issueID, "runtime_id": fixture.runtimeID,
+						"trigger_comment_id": ordinaryID,
+					})
+				}
+
+				var supplement CommentResponse
+				supplementRequest(t, fixture, "0199a4e8-22ce-7b01-bba5-999999999999", "Add this only to the current run.").
+					Want(http.StatusCreated).JSON(&supplement)
+				if status != "pending" {
+					if _, err := testHandler.Queries.ClaimNextTaskSupplement(ctx, parseUUID(fixture.taskID)); err != nil {
+						t.Fatalf("claim supplement: %v", err)
+					}
+				}
+				switch status {
+				case "delivered":
+					if _, err := testHandler.Queries.AckTaskSupplementDelivered(ctx, db.AckTaskSupplementDeliveredParams{
+						TaskID: parseUUID(fixture.taskID), CommentID: parseUUID(supplement.ID),
+					}); err != nil {
+						t.Fatalf("acknowledge supplement delivery: %v", err)
+					}
+				case "failed":
+					if _, err := testHandler.Queries.AckTaskSupplementFailed(ctx, db.AckTaskSupplementFailedParams{
+						TaskID: parseUUID(fixture.taskID), CommentID: parseUUID(supplement.ID),
+						FailureReason: pgtype.Text{String: protocol.TaskSupplementFailureProviderRejected, Valid: true},
+					}); err != nil {
+						t.Fatalf("acknowledge supplement failure: %v", err)
+					}
+				}
+
+				// Drive the real completion handler: a direct SQL status update skips
+				// the reconciliation that previously replayed the supplement.
+				req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+fixture.taskID+"/complete",
+					map[string]any{"output": "done"}, testWorkspaceID, "legit-daemon")
+				testutil.Call(t, testHandler.CompleteTask, withURLParam(req, "taskId", fixture.taskID)).Want(http.StatusOK)
+
+				wantTasks := 1
+				if ordinary != "none" {
+					wantTasks++
+				}
+				if n := dbfx.Count(t, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1`, fixture.issueID); n != wantTasks {
+					t.Fatalf("completion left %d runs, want %d; supplement must never create a follow-up", n, wantTasks)
+				}
+				if ordinary != "none" {
+					var followupID, triggerID string
+					var coalesced []string
+					dbfx.QueryRow(t, `SELECT id, trigger_comment_id, coalesced_comment_ids::text[]
+						FROM agent_task_queue WHERE issue_id = $1 AND id <> $2 AND status = 'queued'`,
+						fixture.issueID, fixture.taskID).Scan(&followupID, &triggerID, &coalesced)
+					if queuedID != "" && followupID != queuedID {
+						t.Fatalf("replaced existing queued run %s with %s", queuedID, followupID)
+					}
+					if triggerID != ordinaryID || slices.Contains(coalesced, supplement.ID) {
+						t.Fatalf("follow-up input = trigger %s, coalesced %v; want ordinary comment %s without supplement %s",
+							triggerID, coalesced, ordinaryID, supplement.ID)
+					}
+				}
+			})
+		}
 	}
 }
 
