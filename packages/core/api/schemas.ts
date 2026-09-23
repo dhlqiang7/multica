@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { normalizeIssueStatusCategory } from "../issues/config/status";
 import type {
+  DashboardDelivery,
   AgentBuilderRuntimeSwitch,
   AgentBuilderSession,
   AgentBuilderSessionSummary,
@@ -1718,6 +1719,59 @@ const DashboardFailureByAgentSchema = z.object({
 export const DashboardFailureByAgentListSchema = z.array(
   DashboardFailureByAgentSchema,
 );
+
+const DashboardUsageBreakdownSchema = z.object({
+  agent_id: z.string().default(""),
+  runtime_id: z.string().default(""),
+  project_id: z.string().default(""),
+  provider: z.string().default(""),
+  model: z.string().default(""),
+  input_tokens: z.number().default(0),
+  output_tokens: z.number().default(0),
+  cache_read_tokens: z.number().default(0),
+  cache_write_tokens: z.number().default(0),
+  ...CostSplitShape,
+  task_count: z.number().default(0),
+}).loose();
+
+export const DashboardUsageBreakdownListSchema = z.array(
+  DashboardUsageBreakdownSchema,
+);
+
+// `source` falls back to "member" for a value a newer backend adds, so the
+// issue still counts everywhere except the per-source split. Timestamps that
+// arrive malformed become null rather than dropping the issue: a missing
+// delivered_at reads as "not delivered yet", the conservative answer.
+const DashboardDeliveryIssueSchema = z.object({
+  issue_id: z.string().default(""),
+  identifier: z.string().default(""),
+  title: z.string().default(""),
+  status: z.string().default(""),
+  status_kind: z.string().default(""),
+  project_id: z.string().nullable().catch(null),
+  source: z.enum(["member", "agent", "autopilot"]).catch("member"),
+  agent_id: z.string().default(""),
+  assigned_at: z.string().default(""),
+  delivered_at: z.string().nullable().catch(null),
+  accepted_at: z.string().nullable().catch(null),
+  bounce_count: z.number().default(0),
+  last_bounce_at: z.string().nullable().catch(null),
+  run_count: z.number().default(0),
+  failed_run_count: z.number().default(0),
+  run_seconds: z.number().default(0),
+}).loose();
+
+export const EMPTY_DASHBOARD_DELIVERY: DashboardDelivery = {
+  window_start: "",
+  previous_window_start: "",
+  issues: [],
+};
+
+export const DashboardDeliverySchema = z.object({
+  window_start: z.string().default(""),
+  previous_window_start: z.string().default(""),
+  issues: z.array(DashboardDeliveryIssueSchema).default([]),
+}).loose();
 
 // ---------------------------------------------------------------------------
 // Runtime usage schemas — the runtime-detail page's four usage endpoints

@@ -1111,6 +1111,70 @@ export interface DashboardFailureByAgent {
   task_count: number;
 }
 
+// Per-(agent, runtime, project, provider, model) token totals — every
+// dimension the hourly rollup keeps, so the analytics cost table can regroup
+// client-side. `project_id` is "" for usage outside any project.
+export interface DashboardUsageBreakdown {
+  agent_id: string;
+  runtime_id: string;
+  project_id: string;
+  provider: string;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  cost_usd_ticks?: number;
+  uncosted_input_tokens?: number;
+  uncosted_output_tokens?: number;
+  uncosted_cache_read_tokens?: number;
+  uncosted_cache_write_tokens?: number;
+  task_count: number;
+}
+
+// Who created an issue agents picked up: a member, an agent, or an autopilot.
+export type DashboardDeliverySource = "member" | "agent" | "autopilot";
+
+// One issue agents picked up, with the facts the analytics page folds into
+// its delivery funnel, first-pass rate, cycle time and agent scorecard.
+//
+// - `assigned_at`   first agent task on the issue
+// - `delivered_at`  first move into an in_review or done status afterwards
+// - `accepted_at`   when it entered done; null unless it is still done
+// - `bounce_count`  moves from in_review back to backlog / todo / in_progress
+// - `run_seconds`   agent run time before the first delivery
+//
+// `status_kind` is the built-in status the current status behaves as: the key
+// itself for a built-in status, and todo / in_progress / done / cancelled for a
+// custom one by its lifecycle category (only the built-in in_review is review).
+export interface DashboardDeliveryIssue {
+  issue_id: string;
+  identifier: string;
+  title: string;
+  status: string;
+  status_kind: string;
+  project_id: string | null;
+  source: DashboardDeliverySource;
+  agent_id: string;
+  assigned_at: string;
+  delivered_at: string | null;
+  accepted_at: string | null;
+  bounce_count: number;
+  last_bounce_at: string | null;
+  run_count: number;
+  failed_run_count: number;
+  run_seconds: number;
+}
+
+// Issues of the current AND the previous period: an issue is in the current
+// one when `assigned_at >= window_start`. Both boundaries are start-of-day in
+// the viewer's timezone, computed server-side.
+export interface DashboardDelivery {
+  window_start: string;
+  previous_window_start: string;
+  issues: DashboardDeliveryIssue[];
+}
+
 export type RuntimeUpdateStatus =
   | "pending"
   | "running"

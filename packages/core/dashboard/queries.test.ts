@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   dashboardAgentRunTimeOptions,
+  dashboardDeliveryOptions,
   dashboardFailuresByAgentOptions,
   dashboardFailuresDailyOptions,
   dashboardRunTimeDailyOptions,
+  dashboardUsageBreakdownOptions,
   dashboardUsageByAgentOptions,
   dashboardUsageDailyOptions,
 } from "./queries";
@@ -38,6 +40,8 @@ const optionBuilders = [
   dashboardRunTimeDailyOptions,
   dashboardFailuresDailyOptions,
   dashboardFailuresByAgentOptions,
+  dashboardUsageBreakdownOptions,
+  dashboardDeliveryOptions,
 ] as const;
 
 describe("dashboard range placeholders", () => {

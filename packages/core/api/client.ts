@@ -80,6 +80,8 @@ import type {
   DashboardRunTimeDaily,
   DashboardFailureDaily,
   DashboardFailureByAgent,
+  DashboardUsageBreakdown,
+  DashboardDelivery,
   RuntimeUpdate,
   RuntimeModelListRequest,
   RuntimeLocalSkillListRequest,
@@ -276,6 +278,9 @@ import {
   DashboardRunTimeDailyListSchema,
   DashboardFailureDailyListSchema,
   DashboardFailureByAgentListSchema,
+  DashboardUsageBreakdownListSchema,
+  DashboardDeliverySchema,
+  EMPTY_DASHBOARD_DELIVERY,
   DashboardUsageByAgentListSchema,
   DashboardUsageDailyListSchema,
   EMPTY_APP_CONFIG,
@@ -2522,6 +2527,40 @@ export class ApiClient {
       DashboardFailureByAgentListSchema,
       [],
       { endpoint: "GET /api/dashboard/failures/by-agent" },
+    );
+  }
+
+  async getDashboardUsageBreakdown(
+    params: { days?: number; project_id?: string | null; tz?: string },
+  ): Promise<DashboardUsageBreakdown[]> {
+    const search = new URLSearchParams();
+    if (params.days) search.set("days", String(params.days));
+    if (params.project_id) search.set("project_id", params.project_id);
+    if (params.tz) search.set("tz", params.tz);
+    const raw = await this.fetch<unknown>(`/api/dashboard/usage/breakdown?${search}`);
+    return parseWithFallback<DashboardUsageBreakdown[]>(
+      raw,
+      DashboardUsageBreakdownListSchema,
+      [],
+      { endpoint: "GET /api/dashboard/usage/breakdown" },
+    );
+  }
+
+  // Delivery facts for the current AND the previous `days`-long period; `tz`
+  // sets the day boundary both periods start on.
+  async getDashboardDelivery(
+    params: { days?: number; project_id?: string | null; tz?: string },
+  ): Promise<DashboardDelivery> {
+    const search = new URLSearchParams();
+    if (params.days) search.set("days", String(params.days));
+    if (params.project_id) search.set("project_id", params.project_id);
+    if (params.tz) search.set("tz", params.tz);
+    const raw = await this.fetch<unknown>(`/api/dashboard/delivery?${search}`);
+    return parseWithFallback<DashboardDelivery>(
+      raw,
+      DashboardDeliverySchema,
+      EMPTY_DASHBOARD_DELIVERY,
+      { endpoint: "GET /api/dashboard/delivery" },
     );
   }
 

@@ -25,6 +25,8 @@ import {
   DashboardFailureDailyListSchema,
   DashboardUsageByAgentListSchema,
   DashboardUsageDailyListSchema,
+  DashboardUsageBreakdownListSchema,
+  DashboardDeliverySchema,
   ChatDraftRestoresResponseSchema,
   ChatPendingTaskSchema,
   ChatSessionListSchema,
@@ -1246,6 +1248,59 @@ describe("dashboard + runtime usage schema drift", () => {
       { date: "2026-05-19", region: "us-east" },
     ]);
     expect((parsed[0] as Record<string, unknown>).region).toBe("us-east");
+  });
+});
+
+describe("dashboard analytics schemas", () => {
+  it("defaults every breakdown dimension so a partial row still prices", () => {
+    const parsed = DashboardUsageBreakdownListSchema.parse([
+      { model: "claude-opus-4-7", input_tokens: 10 },
+    ]);
+    expect(parsed[0]).toMatchObject({
+      agent_id: "",
+      runtime_id: "",
+      project_id: "",
+      provider: "",
+      output_tokens: 0,
+      task_count: 0,
+    });
+    // No cost split on the wire means "this backend doesn't split", not 0.
+    expect(parsed[0]?.uncosted_input_tokens).toBeUndefined();
+    expect(DashboardUsageBreakdownListSchema.safeParse({ rows: [] }).success).toBe(
+      false,
+    );
+  });
+
+  it("keeps a delivery issue whose optional fields are missing or malformed", () => {
+    const parsed = DashboardDeliverySchema.parse({
+      window_start: "2026-09-01T00:00:00Z",
+      issues: [
+        {
+          issue_id: "i-1",
+          source: "workflow",
+          delivered_at: 42,
+          project_id: { id: "p" },
+        },
+      ],
+    });
+    expect(parsed.previous_window_start).toBe("");
+    expect(parsed.issues).toHaveLength(1);
+    expect(parsed.issues[0]).toMatchObject({
+      issue_id: "i-1",
+      // An unknown source still counts, filed under the default one.
+      source: "member",
+      // A malformed timestamp reads as "not delivered", never as a delivery.
+      delivered_at: null,
+      accepted_at: null,
+      project_id: null,
+      bounce_count: 0,
+      run_seconds: 0,
+    });
+  });
+
+  it("falls back to an empty payload for a body that is not an object", () => {
+    expect(DashboardDeliverySchema.safeParse([]).success).toBe(false);
+    expect(DashboardDeliverySchema.parse({}).issues).toEqual([]);
   });
 });
 
