@@ -613,7 +613,6 @@ export function SupplementReceipt({ issueId, entry }: {
   entry: TimelineEntry;
 }) {
   const { t } = useT("issues");
-  const locale = useLocale();
   const retry = useRetryTaskSupplement(issueId);
   // Run placement belongs to one card, but every bound supplement must observe
   // the task's terminal state, including earlier top-level comments.
@@ -622,22 +621,13 @@ export function SupplementReceipt({ issueId, entry }: {
     enabled: !!issueId && !!entry.supplement_task_id && !!entry.supplement_status,
     select: (tasks) => tasks.find((task) => task.id === entry.supplement_task_id)?.status,
   });
-  if (!entry.supplement_task_id || !entry.supplement_status) return null;
+  if (!entry.supplement_task_id || !entry.supplement_status || entry.supplement_status === "delivered") return null;
   const terminal = taskStatus === "completed" || taskStatus === "failed" || taskStatus === "cancelled";
   const endedBeforeDelivery = terminal
     && (entry.supplement_status === "pending" || entry.supplement_status === "delivering");
   if (!endedBeforeDelivery && (entry.supplement_status === "pending" || entry.supplement_status === "delivering")) {
     return <p role="status" className="mt-1.5 text-caption text-muted-foreground">
       {t(($) => $.inline_run.supplement_waiting_delivery)}
-    </p>;
-  }
-  if (entry.supplement_status === "delivered") {
-    const delivered = entry.supplement_delivered_at
-      ? new Date(entry.supplement_delivered_at).toLocaleString(locale)
-      : t(($) => $.inline_run.supplement_delivered_unknown_time);
-    return <p role="status" className="mt-1.5 text-caption text-success">
-      {t(($) => $.inline_run.supplement_delivered, { time: delivered })}
-      <span className="ml-1 text-muted-foreground">{t(($) => $.inline_run.supplement_delivered_notice)}</span>
     </p>;
   }
   const reasonCode = endedBeforeDelivery ? "turn_ended" : entry.supplement_failure_reason;
