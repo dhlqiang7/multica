@@ -26,6 +26,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { PAGE_GUTTER, PAGE_RAIL } from "../../layout/page-header";
 import { ActorIssuesPanel } from "../../common/actor-issues-panel";
 import { useT } from "../../i18n";
+import { DetailViewTabs } from "../../layout/detail-header";
 import { useNavigation } from "../../navigation";
 import { AgentActivityView } from "./agent-activity-view";
 import {
@@ -170,31 +171,15 @@ export function AgentDetailViews({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-background">
-      <div
-        className="shrink-0 overflow-x-auto border-b"
-        role="tablist"
-        aria-label={t(($) => $.tabs.page_navigation_aria)}
-      >
-        <div className={cn(PAGE_RAIL, PAGE_GUTTER, "flex items-center gap-6")}>
-          {VIEWS.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              role="tab"
-              aria-selected={view === item.id}
-              onClick={() => requestTarget(item.id)}
-              className={cn(
-                "relative shrink-0 py-3 text-body font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-                view === item.id
-                  ? "text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {t(($) => $.tabs[item.labelKey])}
-            </button>
-          ))}
-        </div>
-      </div>
+      <DetailViewTabs
+        views={VIEWS.map((item) => ({
+          id: item.id,
+          label: t(($) => $.tabs[item.labelKey]),
+        }))}
+        value={view}
+        onChange={requestTarget}
+        ariaLabel={t(($) => $.tabs.page_navigation_aria)}
+      />
 
       {/* Header, tabs and every view read PAGE_RAIL, so the page is one
           centred column at every width (MUL-7107). The issue list owns its

@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDown, ArrowUp } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown } from "lucide-react";
 
 import { cn } from "../../lib/utils";
 
@@ -197,6 +197,54 @@ function ListGridRow({ className, children, ...props }: ListGridRowProps) {
   );
 }
 
+// Group divider inside a grouped list ("Needs attention 2"). It spans the
+// whole template like a row and collapses its group. Row heights stay fixed,
+// so a virtualized list can mix these with rows by giving them their own
+// size (LIST_GRID_GROUP_HEIGHT).
+export const LIST_GRID_GROUP_HEIGHT = 36;
+
+function ListGridGroupHeader({
+  open,
+  onToggle,
+  label,
+  count,
+  className,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  label: React.ReactNode;
+  count: number;
+  className?: string;
+}) {
+  return (
+    <div
+      role="row"
+      className={cn(
+        "col-span-full flex h-9 items-center border-y border-border/60 bg-muted/40 px-3",
+        className,
+      )}
+    >
+      <button
+        type="button"
+        role="rowheader"
+        aria-expanded={open}
+        onClick={onToggle}
+        className="-ml-1 flex h-7 items-center gap-1.5 rounded-md px-1 text-caption font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <ChevronDown
+          aria-hidden="true"
+          className={cn(
+            "size-3.5 text-muted-foreground transition-transform",
+            !open && "-rotate-90",
+          )}
+        />
+        {label}
+        <span className="tabular-nums text-muted-foreground">{count}</span>
+      </button>
+    </div>
+  );
+}
+
 // Cells and header cells carry the same default horizontal padding so the
 // header can never drift out of alignment with row content. Structural
 // columns (checkbox, kebab) opt out with `px-0`.
@@ -216,6 +264,7 @@ function ListGridCell({
 export {
   ListGrid,
   ListGridBody,
+  ListGridGroupHeader,
   ListGridHeader,
   ListGridHeaderCell,
   ListGridRow,

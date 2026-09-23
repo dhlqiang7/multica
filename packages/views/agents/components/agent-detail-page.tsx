@@ -57,6 +57,10 @@ import { AppLink, useNavigation } from "../../navigation";
 import { PAGE_GUTTER, PAGE_RAIL, PageHeader } from "../../layout/page-header";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { AgentPresenceIndicator } from "./agent-presence-indicator";
+import {
+  DetailStatusPill,
+  EntityDetailHeader,
+} from "../../layout/detail-header";
 import { AgentDetailViews, type AgentViewTarget } from "./agent-detail-views";
 import { AgentHealthCallout } from "./agent-health-callout";
 import { ExpandableDescription } from "../../common/expandable-description";
@@ -467,94 +471,79 @@ function DetailHeader({
   const hasMoreActions = !!onArchive;
 
   return (
-    <header className="shrink-0 bg-background pb-4 pt-3">
-      <div className={cn(PAGE_RAIL, PAGE_GUTTER)}>
-        <div className="flex min-w-0 items-center gap-1.5 text-caption text-muted-foreground">
-          <AppLink
-            href={backHref}
-            className="rounded-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            {t(($) => $.page.title)}
-          </AppLink>
-          <span aria-hidden="true">/</span>
-          <span className="truncate text-foreground">{agent.name}</span>
-        </div>
-
-        <div className="mt-4 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div className="flex min-w-0 items-start gap-4">
-            <ActorAvatar
-              actorType="agent"
-              actorId={agent.id}
-              size="2xl"
-              profileLink={false}
-              className="ring-1 ring-border"
-            />
-            <div className="min-w-0 pt-0.5">
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                <h1 className="min-w-0 text-balance text-title-lg font-semibold tracking-tight sm:text-display-sm">
-                  {agent.name}
-                </h1>
-                {/* Runtime, model and access live in the Activity rail and
-                    the configuration page; the header only says whether the
-                    agent can work right now. */}
-                <span className="inline-flex h-6 items-center rounded-full border border-surface-border bg-surface px-2.5">
-                  <AgentPresenceIndicator detail={presence} />
-                </span>
-              </div>
-              {agent.description ? (
-                <ExpandableDescription>{agent.description}</ExpandableDescription>
-              ) : null}
-            </div>
-          </div>
-
-          <div className="flex shrink-0 items-center gap-2 self-end lg:self-start">
-            {!isArchived && (
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={dmPending}
-                // An anchor never matches `:disabled`, so the base variant's
-                // `disabled:` rules never fire here — Base UI's data-disabled
-                // is what carries the dimmed, inert look.
-                className="data-disabled:pointer-events-none data-disabled:opacity-50"
-                render={<AppLink href={dmHref} onClick={onDm} />}
-                nativeButton={false}
+    <EntityDetailHeader
+      parent={{ href: backHref, label: t(($) => $.page.title) }}
+      media={
+        <ActorAvatar
+          actorType="agent"
+          actorId={agent.id}
+          size="2xl"
+          profileLink={false}
+          className="ring-1 ring-border"
+        />
+      }
+      title={agent.name}
+      // Runtime, model and access live in the Activity rail and the
+      // configuration page; the header only says whether the agent can
+      // work right now.
+      status={
+        <DetailStatusPill>
+          <AgentPresenceIndicator detail={presence} />
+        </DetailStatusPill>
+      }
+      description={
+        agent.description ? (
+          <ExpandableDescription>{agent.description}</ExpandableDescription>
+        ) : null
+      }
+      actions={
+        <>
+          {!isArchived && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={dmPending}
+              // An anchor never matches `:disabled`, so the base variant's
+              // `disabled:` rules never fire here — Base UI's data-disabled
+              // is what carries the dimmed, inert look.
+              className="data-disabled:pointer-events-none data-disabled:opacity-50"
+              render={<AppLink href={dmHref} onClick={onDm} />}
+              nativeButton={false}
+            >
+              <MessageSquare className="h-4 w-4" aria-hidden="true" />
+              {t(($) => $.detail.dm)}
+            </Button>
+          )}
+          {!isArchived && canAssign && (
+            <Button type="button" size="sm" onClick={onAssign}>
+              <Plus className="h-4 w-4" aria-hidden="true" />
+              {t(($) => $.detail.assign_work)}
+            </Button>
+          )}
+          {!isArchived && canArchive && hasMoreActions ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={<Button variant="ghost" size="icon-sm" />}
+                aria-label={t(($) => $.detail.more_actions_aria)}
               >
-                <MessageSquare className="h-4 w-4" aria-hidden="true" />
-                {t(($) => $.detail.dm)}
-              </Button>
-            )}
-            {!isArchived && canAssign && (
-              <Button type="button" size="sm" onClick={onAssign}>
-                <Plus className="h-4 w-4" aria-hidden="true" />
-                {t(($) => $.detail.assign_work)}
-              </Button>
-            )}
-            {!isArchived && canArchive && hasMoreActions ? (
-              <DropdownMenu>
-                <DropdownMenuTrigger
-                  render={<Button variant="ghost" size="icon-sm" />}
-                  aria-label={t(($) => $.detail.more_actions_aria)}
-                >
-                  <MoreHorizontal
-                    className="h-4 w-4 text-muted-foreground"
-                    aria-hidden="true"
-                  />
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-auto">
-                  {onArchive && (
-                    <DropdownMenuItem variant="destructive" onClick={onArchive}>
-                      <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                      {t(($) => $.detail.more_archive)}
-                    </DropdownMenuItem>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            ) : null}
-          </div>
-        </div>
-      </div>
-    </header>
+                <MoreHorizontal
+                  className="h-4 w-4 text-muted-foreground"
+                  aria-hidden="true"
+                />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-auto">
+                {onArchive && (
+                  <DropdownMenuItem variant="destructive" onClick={onArchive}>
+                    <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                    {t(($) => $.detail.more_archive)}
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
+        </>
+      }
+    />
   );
 }
 
