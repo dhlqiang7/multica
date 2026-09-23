@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { AlertCircle, Brain, Check, ChevronRight, CirclePause, Clock3, CornerDownRight, ExternalLink, Loader2, MessageSquare, RotateCcw, ScrollText, Square, Terminal } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -61,12 +61,14 @@ export function PlacedInlineCommentRun({ presentation = "inline", ...props }: Pa
   return <InlineCommentRun {...props} presentation={presentation} />;
 }
 
-export function InlineCommentRun({ run, className, viewState, showIdentity = false, presentation = "inline" }: {
+export function InlineCommentRun({ run, className, viewState, showIdentity = false, presentation = "inline", replyTo }: {
   run: CommentRun;
   className?: string;
   viewState?: InlineCommentRunState;
   showIdentity?: boolean;
   presentation?: "inline" | "header";
+  /** The input this run answers, under its identity like a reply's. */
+  replyTo?: ReactNode;
 }) {
   const { task, hasReply } = run;
   const { t } = useT("issues");
@@ -196,6 +198,7 @@ export function InlineCommentRun({ run, className, viewState, showIdentity = fal
         </Button>}
       </div>
       <div className={cn(showIdentity && "pl-8")}>
+        {replyTo}
         {output && <div className="mt-2 text-body"><ReadonlyContent content={redactSecrets(output)} /></div>}
         {failure && <p className="mt-1 text-caption text-destructive">{failure}</p>}
         {expanded && <div id={regionId} className="mt-2 min-w-0 space-y-1">
