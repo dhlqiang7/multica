@@ -470,6 +470,17 @@ describe("AttachmentPreviewModal — controls", () => {
     expect(downloadMock).toHaveBeenCalledWith("att-1");
   });
 
+  it("describes the file by type and size instead of its MIME type", () => {
+    const att = makeAttachment({
+      filename: "manual.pdf",
+      content_type: "application/pdf",
+      size_bytes: 2 * 1024 * 1024,
+    });
+    render(<AttachmentPreviewModal source={{ kind: "full", attachment: att }} open onClose={() => {}} />);
+    expect(screen.getByText("PDF · 2.0 MB")).toBeInTheDocument();
+    expect(screen.queryByText("application/pdf")).toBeNull();
+  });
+
   it("clicking the backdrop closes the modal", () => {
     const onClose = vi.fn();
     const att = makeAttachment({ filename: "manual.pdf", content_type: "application/pdf" });

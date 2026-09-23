@@ -38,7 +38,7 @@ import type { Attachment as AttachmentRecord } from "@multica/core/types";
 import { useT } from "../i18n";
 import { useAttachmentDownloadResolver } from "./attachment-download-context";
 import { useAttachmentPreview } from "./attachment-preview-modal";
-import { useImageSequencePreview } from "./image-sequence-context";
+import { usePreviewSequence } from "./preview-sequence-context";
 import {
   isObjectURL,
   useResignedInlineMediaURL,
@@ -323,7 +323,7 @@ export function Attachment({
   const cdnSigned = useConfigStore((s) => s.cdnSigned);
   const download = useDownloadAttachment();
   const preview = useAttachmentPreview();
-  const sequence = useImageSequencePreview();
+  const sequence = usePreviewSequence();
 
   const state = normalize(attachment, resolveAttachment, cdnDomain, cdnSigned);
   const forceKind =
@@ -348,18 +348,18 @@ export function Attachment({
   // to another surface keeps the durable pick instead.
   const shareUrl = isObjectURL(mediaUrl) ? state.url : mediaUrl;
 
-  // Identity this image has in the surrounding surface's sequence: the
+  // Identity this attachment has in the surrounding surface's sequence: the
   // attachment id once the URL resolves to a record, otherwise the URL exactly
-  // as written in the body — the same pair `collectImageSequence` keys on.
+  // as written in the body — the same pair `collectAttachmentSequence` keys on.
   const sequenceKey =
     state.attachmentId ?? (attachment.kind === "url" ? attachment.url : "");
 
   const openPreview = () => {
-    // Inside an issue / chat, an image opens the surface's shared viewer at
-    // its real position so the reader can page through the rest. Anything the
+    // Inside an issue / chat, a file opens the surface's shared viewer at its
+    // real position so the reader can page through the rest. Anything the
     // sequence doesn't know — a composer's in-flight upload, a surface with no
-    // provider — falls through to the single-image preview below.
-    if (kind === "image" && sequence.openAt(sequenceKey)) return;
+    // provider — falls through to the single-file preview below.
+    if (kind && sequence.openAt(sequenceKey)) return;
     if (state.record) {
       preview.tryOpen({
         kind: "full",

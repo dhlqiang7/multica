@@ -102,6 +102,7 @@ import {
   formatUsd,
   summarizeTaskUsage,
 } from "../../runtimes/utils";
+import { formatBytes } from "../format-bytes";
 import "../../editor/styles/code.css";
 import "./task-transcript.css";
 
@@ -1854,8 +1855,3 @@ function readPathFromInput(input: Record<string, unknown> | undefined): string |
   return typeof path === "string" ? path : undefined;
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
