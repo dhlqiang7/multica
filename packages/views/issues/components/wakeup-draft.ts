@@ -1,4 +1,4 @@
-import type { IssueWakeupInput } from "@multica/core/types";
+import type { IssueWakeupInput, WakeupCondition as PlatformCondition } from "@multica/core/types";
 
 /** The 25 issue-scoped events, in catalog order. */
 export const WAKEUP_EVENT_TYPES = [
@@ -31,10 +31,21 @@ export const WAKEUP_EVENT_TYPES = [
 
 const RUN_END_EVENTS = ["task.completed", "task.failed", "task.cancelled"];
 
-export type WakeupCondition = "at" | "recurring" | "reply" | "run_end" | "custom";
+export type WakeupCondition =
+  | "at"
+  | "recurring"
+  | "reply"
+  | "field"
+  | "run_end"
+  | "children"
+  | "pull_request"
+  | "other_issue"
+  | "custom";
+export type WakeupField = "status" | "assignee" | "label" | "property";
 export type WakeupAtPreset = "10m" | "1h" | "tomorrow" | "custom";
 export type WakeupRecurrence = "hourly" | "daily" | "weekdays";
 export const WAKEUP_WAIT_DAYS = [1, 3, 7, 30] as const;
+export const WAKEUP_MAX_FIRES = [5, 10, 20, 50] as const;
 
 export interface WakeupDraft {
   condition: WakeupCondition | null;
@@ -49,6 +60,18 @@ export interface WakeupDraft {
   /** Empty waits for any agent's run. */
   runAgentId: string;
   events: string[];
+  field: WakeupField;
+  /** Status key, label id or property id, depending on the field. */
+  fieldTarget: string;
+  /** Property value; select options store their option id. */
+  fieldValue: string;
+  assignee: { type: "member" | "agent" | "squad"; id: string } | null;
+  /** Null waits for every sub-issue. */
+  stage: number | null;
+  prEvent: "checks_finished" | "merged";
+  otherIssue: { id: string; identifier: string } | null;
+  otherState: "done" | "ended" | "in_review";
+  maxFires: number;
   agentId: string;
   instruction: string;
   mode: "once" | "continuous";
@@ -60,6 +83,8 @@ export interface WakeupDraft {
 
 export type WakeupDraftError =
   | "missing_condition"
+  | "missing_value"
+  | "missing_issue"
   | "missing_agent"
   | "missing_events"
   | "instruction_invalid"
@@ -86,6 +111,15 @@ export function emptyWakeupDraft(agentId: string, timezone: string, now = new Da
     replyActor: null,
     runAgentId: "",
     events: [],
+    field: "status",
+    fieldTarget: "",
+    fieldValue: "",
+    assignee: null,
+    stage: null,
+    prEvent: "checks_finished",
+    otherIssue: null,
+    otherState: "done",
+    maxFires: 20,
     agentId,
     instruction: "",
     mode: "once",
@@ -95,14 +129,63 @@ export function emptyWakeupDraft(agentId: string, timezone: string, now = new Da
   };
 }
 
+/** Conditions that wait for something to happen, with a deadline. */
 export function isEventCondition(condition: WakeupCondition | null) {
-  return condition === "reply" || condition === "run_end" || condition === "custom";
+  return !!condition && condition !== "at" && condition !== "recurring";
+}
+
+/** A property value typed as the property stores it. */
+export function propertyConditionValue(type: string | undefined, raw: string): unknown {
+  if (type === "checkbox") return raw === "true";
+  if (type === "number") {
+    const n = Number(raw);
+    return raw.trim() !== "" && Number.isFinite(n) ? n : raw;
+  }
+  return raw;
+}
+
+/** The platform-evaluated predicate for a condition choice, if it is one. */
+export function platformCondition(
+  d: WakeupDraft,
+  propertyType?: string,
+): { condition: PlatformCondition } | { error: WakeupDraftError } | null {
+  switch (d.condition) {
+    case "field":
+      if (d.field === "assignee") {
+        return d.assignee
+          ? { condition: { type: "issue_field", field: "assignee", assignee_type: d.assignee.type, assignee_id: d.assignee.id } }
+          : { error: "missing_value" };
+      }
+      if (!d.fieldTarget) return { error: "missing_value" };
+      if (d.field === "status") return { condition: { type: "issue_field", field: "status", value: d.fieldTarget } };
+      if (d.field === "label") return { condition: { type: "issue_field", field: "label", label_id: d.fieldTarget } };
+      if (!d.fieldValue.trim()) return { error: "missing_value" };
+      return {
+        condition: {
+          type: "issue_field",
+          field: "property",
+          property_id: d.fieldTarget,
+          value: propertyConditionValue(propertyType, d.fieldValue.trim()),
+        },
+      };
+    case "children":
+      return { condition: d.stage ? { type: "children_done", stage: d.stage } : { type: "children_done" } };
+    case "pull_request":
+      return { condition: { type: "pull_request", event: d.prEvent } };
+    case "other_issue":
+      return d.otherIssue
+        ? { condition: { type: "other_issue", issue_id: d.otherIssue.id, state: d.otherState } }
+        : { error: "missing_issue" };
+    default:
+      return null;
+  }
 }
 
 /** Maps what a person chose onto the wakeup API; the server re-validates. */
 export function buildWakeupInput(
   d: WakeupDraft,
   now = new Date(),
+  propertyType?: string,
 ): { input: IssueWakeupInput } | { error: WakeupDraftError } {
   if (!d.condition) return { error: "missing_condition" };
   if (!d.agentId) return { error: "missing_agent" };
@@ -141,7 +224,12 @@ export function buildWakeupInput(
         expires_in_seconds: d.waitDays * 86400,
         on_timeout: d.onTimeout,
       };
-      if (d.condition === "reply") {
+      if (d.mode === "continuous") input.max_fires = d.maxFires;
+      const platform = platformCondition(d, propertyType);
+      if (platform && "error" in platform) return { error: platform.error };
+      if (platform) {
+        input.condition = platform.condition;
+      } else if (d.condition === "reply") {
         input.event_types = ["comment.created"];
         if (d.replyActor) {
           input.filter_actor_type = d.replyActor.type;

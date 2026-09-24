@@ -1,16 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { IssueWakeup, SystemWakeup } from "@multica/core/types";
 import { renderWithI18n } from "../../test/i18n";
 import { WakeupsSection } from "./wakeups-section";
 const mutate = vi.fn();
 const enable = vi.fn();
 const updateSystem = vi.fn();
+const trigger = vi.fn();
+const remove = vi.fn();
+let runs: unknown[] = [];
 let systemRules: SystemWakeup[] = [];
 let pending = false;
 let wakeup: IssueWakeup;
 let status = "queued";
 let viewTZ = "UTC";
+vi.mock("./wakeup-condition-names", () => ({
+  useConditionNames: () => ({ status: (key: string) => key, label: () => undefined, property: () => undefined, actor: (_type: string, id: string) => id }),
+}));
 vi.mock("@multica/core/paths", () => ({
   useCurrentWorkspace: () => ({ id: "ws" }),
 }));
@@ -22,6 +28,9 @@ vi.mock("@multica/core/issues", () => ({
   useEnableIssueWakeup: () => ({ mutateAsync: enable, isPending: pending }),
   useCreateIssueWakeup: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useUpdateIssueSystemWakeup: () => ({ mutateAsync: updateSystem, isPending: false }),
+  useTriggerIssueWakeup: () => ({ mutate: trigger, isPending: false }),
+  useDeleteIssueWakeup: () => ({ mutate: remove, isPending: false }),
+  issueWakeupRunsOptions: () => ({ queryKey: ["runs"] }),
 }));
 vi.mock("@tanstack/react-query", () => ({
   useQuery: ({ queryKey }: { queryKey: string[] }) => ({
@@ -32,7 +41,9 @@ vi.mock("@tanstack/react-query", () => ({
           ? systemRules
           : queryKey[0] === "tasks"
             ? [{ id: "task", status }]
-            : [],
+            : queryKey[0] === "runs"
+              ? runs
+              : [],
   }),
 }));
 vi.mock("../../common/use-viewing-timezone", () => ({
@@ -46,6 +57,9 @@ vi.mock("./wakeup-instruction-editor", () => ({
 }));
 beforeEach(() => {
   mutate.mockReset();
+  trigger.mockReset();
+  remove.mockReset();
+  runs = [];
   updateSystem.mockReset().mockResolvedValue(undefined);
   systemRules = [];
   enable.mockReset().mockResolvedValue(undefined);
@@ -359,7 +373,7 @@ describe("v2 sidebar", () => {
 
   it("shows the child-done system rule and turns it off for this issue", async () => {
     systemRules = [{
-      rule: "child_done", enabled: true, instruction: "", staged: true, stage: 1, total: 2, remaining: 1,
+      rule: "child_done", workspace_default: true, enabled: true, instruction: "", staged: true, stage: 1, total: 2, remaining: 1,
       waiting: ["MUL-7704"], target: { type: "agent", id: "a", name: "Emacs" }, blocked: "",
     }];
     renderWithI18n(<WakeupsSection issueId="issue" />, { locale: "zh-Hans" });
@@ -373,7 +387,7 @@ describe("v2 sidebar", () => {
 
   it("explains why the system rule would not wake anyone", () => {
     systemRules = [{
-      rule: "child_done", enabled: true, instruction: "", staged: false, stage: null, total: 3, remaining: 2,
+      rule: "child_done", workspace_default: true, enabled: true, instruction: "", staged: false, stage: null, total: 3, remaining: 2,
       waiting: [], target: null, blocked: "member_assignee",
     }];
     renderWithI18n(<WakeupsSection issueId="issue" />);
@@ -382,7 +396,7 @@ describe("v2 sidebar", () => {
 
   it("saves a supplementary instruction for the system rule", async () => {
     systemRules = [{
-      rule: "child_done", enabled: true, instruction: "", staged: false, stage: null, total: 1, remaining: 1,
+      rule: "child_done", workspace_default: true, enabled: true, instruction: "", staged: false, stage: null, total: 1, remaining: 1,
       waiting: ["MUL-2"], target: { type: "agent", id: "a", name: "Emacs" }, blocked: "",
     }];
     renderWithI18n(<WakeupsSection issueId="issue" />);
@@ -392,5 +406,68 @@ describe("v2 sidebar", () => {
     fireEvent.change(input, { target: { value: "Ask Jiayuan first" } });
     fireEvent.submit(input.closest("form")!);
     await waitFor(() => expect(updateSystem).toHaveBeenCalledWith({ rule: "child_done", enabled: true, instruction: "Ask Jiayuan first" }));
+  });
+});
+
+describe("conditions, limits and history", () => {
+  it("reads a platform condition as its own sentence, without the hint events", async () => {
+    Object.assign(wakeup, {
+      kind: "event", mode: "once", event_types: ["issue.status_changed"], interval_seconds: null,
+      condition: { type: "issue_field", field: "status", value: "in_review" },
+    });
+    renderWithI18n(<WakeupsSection issueId="issue" />, { locale: "zh-Hans" });
+    const row = screen.getByRole("button", { name: /当状态变为in_review时/ });
+    fireEvent.click(row);
+    await screen.findByRole("dialog");
+    expect(screen.queryByText(/以下任一事件发生时/)).toBeNull();
+  });
+
+  it("says why the platform paused a rule and how many times it fired", async () => {
+    Object.assign(wakeup, {
+      kind: "event", mode: "continuous", event_types: ["comment.created"], interval_seconds: null,
+      enabled: false, paused_reason: "max_fires", max_fires: 5, fire_count: 5,
+    });
+    status = "completed";
+    renderWithI18n(<WakeupsSection issueId="issue" />);
+    fireEvent.click(screen.getByRole("button", { name: "Wakeup history 1" }));
+    const row = screen.getByRole("button", { name: /Wake Emacs/ });
+    expect(row).toHaveTextContent("Paused automatically");
+    expect(row).toHaveTextContent("Stopped after reaching 5 runs");
+    fireEvent.click(row);
+    expect(await screen.findByText("Triggered 5 of at most 5 times")).toBeVisible();
+    expect(screen.getByText(/Turn it back on to resume/)).toBeVisible();
+  });
+
+  it("lists the rule's runs, with a silent check's note", async () => {
+    runs = [
+      { id: "r2", status: "completed", created_at: "2026-09-24T01:00:00Z", started_at: null, completed_at: null, checkin_note: "Progress 38%", triggers: ["time.due"], commented: false },
+      { id: "r1", status: "completed", created_at: "2026-09-23T01:00:00Z", started_at: null, completed_at: null, checkin_note: "", triggers: ["time.due"], commented: true },
+    ];
+    renderWithI18n(<WakeupsSection issueId="issue" />, { locale: "zh-Hans" });
+    fireEvent.click(screen.getByRole("button", { name: /每小时唤醒/ }));
+    expect(await screen.findByText("触发记录")).toBeVisible();
+    expect(screen.getByText("静默检查")).toBeVisible();
+    expect(screen.getByText(/Progress 38%/)).toBeVisible();
+    expect(screen.getByText("运行成功 · 发表了评论")).toBeVisible();
+  });
+
+  it("wakes the agent now and deletes the rule after confirmation", async () => {
+    renderWithI18n(<WakeupsSection issueId="issue" />);
+    fireEvent.click(screen.getByRole("button", { name: /Wake every hour/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Wake now" }));
+    expect(trigger).toHaveBeenCalledWith("wake", expect.anything());
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    const confirm = await screen.findByRole("alertdialog");
+    expect(confirm).toHaveTextContent("Emacs is no longer woken by it");
+    fireEvent.click(within(confirm).getByRole("button", { name: "Delete" }));
+    expect(remove).toHaveBeenCalledWith("wake", expect.anything());
+  });
+
+  it("offers neither action on an ended issue", async () => {
+    renderWithI18n(<WakeupsSection issueId="issue" closed />);
+    fireEvent.click(screen.getByRole("button", { name: /Wake every hour/ }));
+    await screen.findByRole("dialog");
+    expect(screen.queryByRole("button", { name: "Wake now" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
   });
 });

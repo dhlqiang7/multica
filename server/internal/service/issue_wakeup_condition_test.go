@@ -136,6 +136,11 @@ func TestWakeupConditionChildrenAndOtherIssue(t *testing.T) {
 	if wakeRuns(t, f, stage.ID)+wakeRuns(t, f, watch.ID) != 0 {
 		t.Fatal("unmet conditions started runs")
 	}
+	var watched WakeupCondition
+	_ = json.Unmarshal(watch.Condition, &watched)
+	if !strings.Contains(watched.Identifier, "-") {
+		t.Fatalf("watched issue identifier not recorded: %s", watch.Condition)
+	}
 	f.Exec(t, "UPDATE issue SET status='cancelled' WHERE id=$1", first)
 	f.Exec(t, "UPDATE issue SET status='done' WHERE id=$1", other)
 	wakeTick(t, f, s, stage.ID)

@@ -50,6 +50,7 @@ it("preserves empty summaries", async () => {
 const inventoryFilters = {
   scope: "active",
   kind: "all",
+  source: "",
   search: "",
   agent_id: "",
   offset: 0,
@@ -83,7 +84,7 @@ it("preserves an empty page and its inventory counts", async () => {
       offset: 150,
       search: "CI & release",
     }),
-  ).resolves.toEqual(page);
+  ).resolves.toEqual({ ...page, counts: { ...page.counts, paused: 0 } });
   expect(fetcher.mock.calls[0]![0]).toContain("search=CI+%26+release");
   expect(fetcher.mock.calls[0]![0]).toContain("offset=150");
 });
@@ -185,5 +186,54 @@ it("rejects malformed system wakeups instead of hiding the rule", async () => {
 it("parses system wakeups and falls back on an unknown blocked reason", async () => {
   const rule = { rule: "child_done", enabled: true, instruction: "", staged: true, stage: 1, total: 2, remaining: 1, waiting: ["MUL-2"], target: { type: "agent", id: "a", name: "Emacs" }, blocked: "paused" };
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify([rule]))));
-  await expect(client.listIssueSystemWakeups("issue")).resolves.toEqual([{ ...rule, blocked: "" }]);
+  // Older servers omit the workspace default; the rule then reads as on.
+  await expect(client.listIssueSystemWakeups("issue")).resolves.toEqual([{ ...rule, blocked: "", workspace_default: true }]);
+});
+
+it("reads conditions, caps and pauses, and drops shapes it does not know", async () => {
+  const base = {
+    id: "w", issue_id: "i", agent_id: "a", agent_name: "Emacs", instruction: "go", kind: "event", mode: "continuous",
+    event_types: ["issue.status_changed"], filter_agent_id: null, filter_task_id: null, interval_seconds: null,
+    cron_expression: null, timezone: "UTC", next_fire_at: null, enabled: false, disabled_at: null,
+    last_task_id: null, last_error: null,
+  };
+  const rows = [
+    { ...base, condition: { type: "issue_field", field: "status", value: "in_review" }, max_fires: 20, fire_count: 20, paused_reason: "max_fires" },
+    { ...base, id: "w2", condition: { type: "future_kind" }, paused_reason: "someday" },
+    { ...base, id: "w3", condition: { type: "other_issue", issue_id: "x", state: "done", identifier: "MUL-2" } },
+  ];
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(rows))));
+  const [known, unknown, other] = await client.listIssueWakeups("i");
+  expect(known).toMatchObject({ condition: { field: "status", value: "in_review" }, max_fires: 20, fire_count: 20, paused_reason: "max_fires" });
+  expect(unknown).toMatchObject({ condition: null, paused_reason: null });
+  expect(other!.condition).toEqual({ type: "other_issue", issue_id: "x", state: "done", identifier: "MUL-2" });
+});
+
+it("reads system rule rows in the workspace list", async () => {
+  const page = {
+    items: [{
+      id: "p", issue_id: "p", issue_title: "Parent", issue_identifier: "MUL-1", issue_closed: false, can_manage: true,
+      active_runs: 0, task: null, agent_id: null, agent_name: "", instruction: undefined, kind: "event", mode: "continuous",
+      event_types: [], filter_agent_id: null, filter_task_id: null, interval_seconds: null, cron_expression: null,
+      timezone: "UTC", next_fire_at: null, enabled: true, disabled_at: null, last_task_id: null, last_error: null,
+      revision: null, source: "system", rule: "child_done", system_stage: 2, system_remaining: 1, runs_7d: 3,
+    }],
+    total: 1, counts: { all: 1, active: 1, paused: 0, disabled: 0, ended: 0 }, agents: [],
+  };
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(page))));
+  const result = await client.listWorkspaceWakeups(inventoryFilters);
+  expect(result.items[0]).toMatchObject({ agent_id: "", source: "system", rule: "child_done", system_stage: 2, runs_7d: 3 });
+  expect(result.items[0]!.revision).toBeUndefined();
+});
+
+it("loads a rule's runs and the paused list", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(new Response(JSON.stringify([
+    { id: "r", status: "completed", created_at: "2026-09-24T00:00:00Z", started_at: null, completed_at: null, checkin_note: "ok", triggers: ["time.due"], commented: false },
+  ]))).mockResolvedValueOnce(new Response(JSON.stringify([
+    { issue_id: "i", id: "w", agent_id: "a", paused_reason: "loop" },
+  ]))));
+  await expect(client.listIssueWakeupRuns("i", "w")).resolves.toEqual([
+    expect.objectContaining({ id: "r", checkin_note: "ok", triggers: ["time.due"], commented: false }),
+  ]);
+  await expect(client.listPausedWakeups()).resolves.toEqual([{ issue_id: "i", id: "w", agent_id: "a", paused_reason: "loop" }]);
 });

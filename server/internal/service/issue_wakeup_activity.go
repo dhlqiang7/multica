@@ -78,7 +78,16 @@ func recordWakeupActivity(ctx context.Context, q *db.Queries, w db.IssueWakeup, 
 	if details == nil {
 		details = map[string]any{}
 	}
-	details["wakeup"] = wakeupPreview(w)
+	preview := wakeupPreview(w)
+	// Who the rule belongs to, for the entry's source: the agent whose run
+	// created it, else the member.
+	preview["created_by"] = util.UUIDToString(w.CreatedBy)
+	if w.SourceTaskID.Valid {
+		if source, err := q.GetAgentTask(ctx, w.SourceTaskID); err == nil {
+			preview["created_by_agent_id"] = util.UUIDToString(source.AgentID)
+		}
+	}
+	details["wakeup"] = preview
 	raw, _ := json.Marshal(details)
 	row, err := q.CreateActivity(ctx, db.CreateActivityParams{
 		ID: dbid.NewV7(), WorkspaceID: w.WorkspaceID, IssueID: w.IssueID,

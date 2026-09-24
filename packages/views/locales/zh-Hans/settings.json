@@ -87,7 +87,9 @@
     "pr_auto_complete_description": "任务关联的 PR 全部合并，且至少一个 PR 写了关闭语句时，状态改为「已完成」。只对之后合并的 PR 生效。",
     "pr_auto_complete_example": "关闭语句写在 PR 标题或正文里，例如",
     "pr_auto_complete_example_title": "Closes MUL-123",
-    "pr_auto_complete_badge": "PR 全部合并时自动进入"
+    "pr_auto_complete_badge": "PR 全部合并时自动进入",
+    "child_done_label": "子任务阶段结束时唤醒父任务负责人",
+    "child_done_description": "所有有子任务的任务都使用这个默认值；可在单个任务的「唤醒」区单独调整。"
   },
   "quick_actions": {
     "title": "快捷操作",

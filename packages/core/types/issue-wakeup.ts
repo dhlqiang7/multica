@@ -35,6 +35,46 @@ export interface IssueWakeup {
   created_by_name?: string | null;
   source_agent_id?: string | null;
   source_agent_name?: string | null;
+  /** A fact the platform checks itself; null for event and time rules. */
+  condition?: WakeupCondition | null;
+  /** Repeating rules stop after this many runs. */
+  max_fires?: number | null;
+  fire_count?: number;
+  /** Why the platform, not a person, stopped the rule. */
+  paused_reason?: WakeupPausedReason | null;
+}
+
+export type WakeupPausedReason = "max_fires" | "loop" | "rate";
+
+/** Structured predicates the platform evaluates (see WakeupCondition in Go). */
+export type WakeupCondition =
+  | { type: "issue_field"; field: "status"; value: string }
+  | { type: "issue_field"; field: "assignee"; assignee_type: "member" | "agent" | "squad"; assignee_id: string }
+  | { type: "issue_field"; field: "label"; label_id: string }
+  | { type: "issue_field"; field: "property"; property_id: string; value: unknown }
+  | { type: "children_done"; stage?: number | null }
+  | { type: "pull_request"; event: "checks_finished" | "merged" }
+  | { type: "other_issue"; issue_id: string; state: "done" | "ended" | "in_review"; identifier?: string };
+
+/** One run a rule started, for its trigger history. */
+export interface WakeupRun {
+  id: string;
+  status: string;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  /** Set when a scheduled check ended silently. */
+  checkin_note: string;
+  triggers: string[];
+  commented: boolean;
+}
+
+/** A rule the platform paused on an open issue. */
+export interface PausedWakeup {
+  issue_id: string;
+  id: string;
+  agent_id: string;
+  paused_reason: WakeupPausedReason;
 }
 
 /** Body accepted by POST /api/issues/:id/wakeups. */
@@ -54,6 +94,8 @@ export interface IssueWakeupInput {
   expires_at?: string;
   expires_in_seconds?: number;
   on_timeout?: "wake" | "end";
+  condition?: WakeupCondition;
+  max_fires?: number;
 }
 
 /**
@@ -71,6 +113,8 @@ export interface SystemWakeup {
   waiting: string[];
   target: { type: "agent" | "squad"; id: string; name: string } | null;
   blocked: "" | "backlog" | "member_assignee" | "no_assignee";
+  /** The workspace-wide setting, which applies until the issue sets its own. */
+  workspace_default: boolean;
 }
 
 export type WakeupPreview = Pick<
@@ -91,13 +135,15 @@ export type WakeupPreview = Pick<
   | "cron_expression"
   | "timezone"
   | "next_fire_at"
+  | "condition"
 >;
 export interface IssueWakeupSummaryRow extends WakeupPreview {
   active_count: number;
   event_count: number;
 }
 
-export type WakeupScope = "active" | "all" | "disabled" | "ended";
+export type WakeupScope = "active" | "all" | "paused" | "disabled" | "ended";
+export type WakeupSource = "member" | "agent" | "system";
 export interface WorkspaceWakeup extends Omit<IssueWakeup, "instruction"> {
   issue_title: string;
   issue_identifier: string;
@@ -105,6 +151,14 @@ export interface WorkspaceWakeup extends Omit<IssueWakeup, "instruction"> {
   can_manage: boolean;
   active_runs: number;
   task: import("./agent").AgentTask | null;
+  source: WakeupSource;
+  /** Runs the rule started in the last seven days. */
+  runs_7d: number;
+  /** Set on a system rule row, whose id is its issue's id. */
+  rule?: SystemWakeup["rule"] | null;
+  system_stage?: number | null;
+  system_remaining?: number | null;
+  target_type?: string | null;
 }
 export interface WorkspaceWakeupPage {
   items: WorkspaceWakeup[];
@@ -115,6 +169,7 @@ export interface WorkspaceWakeupPage {
 export interface WorkspaceWakeupFilters {
   scope: WakeupScope;
   kind: "all" | "event" | "at" | "recurring";
+  source: "" | WakeupSource;
   search: string;
   agent_id: string;
   offset: number;

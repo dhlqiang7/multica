@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Bell, Clock3, AlertCircle } from "lucide-react";
+import { Bell, Clock3, AlertCircle, ListChecks, Plus, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
@@ -11,11 +11,14 @@ import {
   useDisableWorkspaceWakeups,
   useDisableIssueWakeup,
   useEnableIssueWakeup,
+  useUpdateIssueSystemWakeup,
 } from "@multica/core/issues/wakeups";
 import type {
+  Issue,
   WorkspaceWakeup,
   WorkspaceWakeupFilters,
 } from "@multica/core/types";
+import { Switch } from "@multica/ui/components/ui/switch";
 import { Button } from "@multica/ui/components/ui/button";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import { Input } from "@multica/ui/components/ui/input";
@@ -43,17 +46,134 @@ import {
   DialogFooter,
 } from "@multica/ui/components/ui/dialog";
 import { AppLink } from "../../navigation";
-import { useLocale, useT, useTimeAgo } from "../../i18n";
+import { useLocale, useT } from "../../i18n";
 import { CollectionPageState } from "../../layout/collection-page";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { TranscriptButton } from "../../common/task-transcript";
 import { useViewingTimezone } from "../../common/use-viewing-timezone";
 import { WakeupInstructionEditor } from "../../issues/components/wakeup-instruction-editor";
 import { WakeupControl } from "../../issues/components/wakeup-control";
+import { WakeupCreateForm } from "../../issues/components/wakeup-create";
+import { conditionIcon } from "../../issues/components/wakeups-section";
+import { IssuePickerModal } from "../../modals/issue-picker-modal";
 import {
   isActiveWakeupRun,
   useWakeupText,
 } from "../../issues/components/wakeup-presentation";
+
+/** Who a rule came from: a member, an agent run, or the platform. */
+function SourceCell({ row }: { row: WorkspaceWakeup }) {
+  const { t } = useT("autopilots");
+  if (row.source === "system") {
+    return (
+      <span className="rounded-xs bg-muted px-1.5 py-0.5 text-caption text-muted-foreground">
+        {t(($) => $.wakeups.sources.system)}
+      </span>
+    );
+  }
+  const agent = row.source === "agent" && row.source_agent_id;
+  return (
+    <span className="flex min-w-0 items-center gap-2">
+      <ActorAvatar
+        actorType={agent ? "agent" : "member"}
+        actorId={agent ? (row.source_agent_id ?? "") : ""}
+        name={agent ? (row.source_agent_name ?? "") : (row.created_by_name ?? "")}
+        size="sm"
+      />
+      <span className="truncate">{agent ? row.source_agent_name : row.created_by_name}</span>
+    </span>
+  );
+}
+
+/** Runs in the last seven days, and the current run when there is one. */
+function RunsCell({ row }: { row: WorkspaceWakeup }) {
+  const { t: ti } = useT("issues");
+  const text = useWakeupText();
+  const status = row.task?.status;
+  const active = isActiveWakeupRun(status);
+  return (
+    <div className="flex items-center gap-1 tabular-nums">
+      <span>{row.runs_7d}</span>
+      {row.task && active && (
+        <>
+          <span aria-hidden="true" className="text-muted-foreground">·</span>
+          <span className="text-primary">{text.runState(status)}</span>
+        </>
+      )}
+      {row.task && (
+        <TranscriptButton task={row.task} agentName={row.agent_name} title={ti(($) => $.wakeups.last_run)} isLive={active} />
+      )}
+    </div>
+  );
+}
+
+/** The sub-issue system rule on one parent issue. */
+function SystemWakeupListRow({ row, busy }: { row: WorkspaceWakeup; busy: boolean }) {
+  const { t } = useT("autopilots");
+  const { t: ti } = useT("issues");
+  const wsId = useWorkspaceId();
+  const paths = useWorkspacePaths();
+  const update = useUpdateIssueSystemWakeup(wsId, row.issue_id);
+  const title =
+    row.system_stage != null
+      ? ti(($) => $.wakeups.system.title_stage, { stage: row.system_stage })
+      : ti(($) => $.wakeups.system.title_all);
+  return (
+    <TableRow>
+      <TableCell className="w-10 pl-4" />
+      <IssueCell row={row} href={paths.issueDetail(row.issue_id)} />
+      <TableCell className="max-w-64">
+        <span className="flex items-center gap-1.5">
+          <ListChecks className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <span className="line-clamp-2 break-words">{title}</span>
+        </span>
+      </TableCell>
+      <TableCell className="max-w-44">
+        {row.agent_id ? (
+          <span className="flex items-center gap-2">
+            <ActorAvatar actorType="agent" actorId={row.agent_id} name={row.agent_name} size="sm" />
+            <span className="truncate">{t(($) => $.wakeups.assignee_target, { name: row.agent_name })}</span>
+          </span>
+        ) : (
+          <span className="text-muted-foreground">{t(($) => $.wakeups.no_target)}</span>
+        )}
+      </TableCell>
+      <TableCell>
+        <SourceCell row={row} />
+      </TableCell>
+      <TableCell className="text-muted-foreground">{t(($) => $.wakeups.until_issue_ends)}</TableCell>
+      <TableCell>
+        <RunsCell row={row} />
+      </TableCell>
+      <TableCell className="w-px">
+        <div className="flex items-center justify-end px-2">
+          <Switch
+            checked={row.enabled}
+            disabled={busy || update.isPending}
+            aria-label={`${row.issue_identifier} · ${ti(($) => $.wakeups.system.toggle)}`}
+            onCheckedChange={(enabled) =>
+              update.mutate({ rule: "child_done", enabled }, { onError: () => toast.error(ti(($) => $.wakeups.system.save_error)) })
+            }
+          />
+        </div>
+      </TableCell>
+      <TableCell className="w-px pl-0 pr-4" />
+    </TableRow>
+  );
+}
+
+function IssueCell({ row, href }: { row: WorkspaceWakeup; href: string }) {
+  return (
+    <TableCell className="max-w-72">
+      <AppLink href={href} className="block rounded-sm focus-visible:outline-2 focus-visible:outline-ring">
+        <span className="block truncate font-medium" title={row.issue_title}>
+          {row.issue_title}
+        </span>
+        <span className="text-caption text-muted-foreground">{row.issue_identifier}</span>
+      </AppLink>
+    </TableCell>
+  );
+}
 
 function WakeupListRow({
   row,
@@ -71,14 +191,15 @@ function WakeupListRow({
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
   const locale = useLocale();
-  const timeAgo = useTimeAgo();
   const text = useWakeupText();
   const viewTZ = useViewingTimezone();
   const disable = useDisableIssueWakeup(wsId, row.issue_id);
   const enable = useEnableIssueWakeup(wsId, row.issue_id);
-  const Icon = row.kind === "event" ? Bell : Clock3;
-  const next = text.state(row, row.issue_closed);
-  const status = row.task?.status;
+  const Icon = conditionIcon(row.condition) ?? (row.kind === "event" ? Bell : Clock3);
+  // While enabled, a rule reads as when it ends; otherwise as its state.
+  const ends = row.enabled && !row.issue_closed
+    ? (text.ending(row) ?? (row.mode === "once" ? t(($) => $.wakeups.fires_once) : text.state(row)))
+    : (text.paused(row) ?? text.state(row, row.issue_closed));
   return (
     <TableRow data-state={selected ? "selected" : undefined}>
       <TableCell className="w-10 pl-4">
@@ -92,30 +213,7 @@ function WakeupListRow({
           })}
         />
       </TableCell>
-      <TableCell className="max-w-72">
-        <AppLink
-          href={paths.issueDetail(row.issue_id)}
-          className="block rounded-sm focus-visible:outline-2 focus-visible:outline-ring"
-        >
-          <span className="block truncate font-medium" title={row.issue_title}>
-            {row.issue_title}
-          </span>
-          <span className="text-caption text-muted-foreground">
-            {row.issue_identifier}
-          </span>
-        </AppLink>
-      </TableCell>
-      <TableCell className="max-w-44">
-        <span className="flex items-center gap-2">
-          <ActorAvatar
-            actorType="agent"
-            actorId={row.agent_id}
-            name={row.agent_name}
-            size="sm"
-          />
-          <span className="truncate">{row.agent_name}</span>
-        </span>
-      </TableCell>
+      <IssueCell row={row} href={paths.issueDetail(row.issue_id)} />
       <TableCell className="max-w-64">
         <span
           className="flex items-center gap-1.5"
@@ -132,16 +230,30 @@ function WakeupListRow({
           {row.kind === "cron" ? row.timezone : text.frequency(row)}
         </span>
       </TableCell>
+      <TableCell className="max-w-44">
+        <span className="flex items-center gap-2">
+          <ActorAvatar
+            actorType="agent"
+            actorId={row.agent_id}
+            name={row.agent_name}
+            size="sm"
+          />
+          <span className="truncate">{row.agent_name}</span>
+        </span>
+      </TableCell>
+      <TableCell className="max-w-40">
+        <SourceCell row={row} />
+      </TableCell>
       <TableCell className="max-w-48">
         <span
-          className="block truncate"
+          className={row.paused_reason ? "block truncate text-warning" : "block truncate"}
           title={
             row.next_fire_at && row.enabled
               ? `${new Date(row.next_fire_at).toLocaleString(locale, { timeZone: viewTZ })} · ${viewTZ}`
               : undefined
           }
         >
-          {next}
+          {ends}
         </span>
         {row.last_error && (
           <AppLink
@@ -153,37 +265,11 @@ function WakeupListRow({
         )}
       </TableCell>
       <TableCell>
-        {row.task ? (
-          <div className="flex items-center gap-1">
-            <div>
-              <span
-                className={
-                  isActiveWakeupRun(status)
-                    ? "text-primary"
-                    : "text-muted-foreground"
-                }
-              >
-                {text.runState(status)}
-              </span>
-              <span className="block text-caption text-muted-foreground">
-                {row.active_runs > 1
-                  ? t(($) => $.wakeups.active_runs, { count: row.active_runs })
-                  : timeAgo(
-                      row.task.completed_at ??
-                        row.task.started_at ??
-                        row.task.created_at,
-                    )}
-              </span>
-            </div>
-            <TranscriptButton
-              task={row.task}
-              agentName={row.agent_name}
-              title={ti(($) => $.wakeups.last_run)}
-              isLive={isActiveWakeupRun(status)}
-            />
-          </div>
-        ) : (
-          <span className="text-muted-foreground">{text.runState()}</span>
+        <RunsCell row={row} />
+        {row.active_runs > 1 && (
+          <span className="block text-caption text-muted-foreground">
+            {t(($) => $.wakeups.active_runs, { count: row.active_runs })}
+          </span>
         )}
       </TableCell>
       <TableCell className="w-px">
@@ -242,14 +328,17 @@ export function WorkspaceWakeups() {
   const { t } = useT("autopilots");
   const { t: ti } = useT("issues");
   const wsId = useWorkspaceId();
+  const text = useWakeupText();
   const [filters, setFilters] = useState<WorkspaceWakeupFilters>({
     scope: "active",
     kind: "all",
+    source: "",
     search: "",
     agent_id: "",
     offset: 0,
     limit: 50,
   });
+  const [creating, setCreating] = useState<"pick" | Issue | null>(null);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmation, setConfirmation] = useState<WorkspaceWakeup[]>([]);
@@ -258,9 +347,14 @@ export function WorkspaceWakeups() {
     succeeded: number;
   } | null>(null);
   const query = useQuery(workspaceWakeupsOptions(wsId, filters));
+  // The newest rule the platform paused, for the banner above the list.
+  const pausedQuery = useQuery({
+    ...workspaceWakeupsOptions(wsId, { scope: "paused", kind: "all", source: "", search: "", agent_id: "", offset: 0, limit: 1 }),
+    enabled: !!wsId && (query.data?.counts.paused ?? 0) > 0,
+  });
   const batch = useDisableWorkspaceWakeups(wsId);
   const rows = query.data?.items ?? [];
-  const selectable = rows.filter((row) => row.enabled && row.can_manage);
+  const selectable = rows.filter((row) => row.enabled && row.can_manage && row.source !== "system");
   const picked = selectable.filter((row) => selected.has(row.id));
   const change = (patch: Partial<WorkspaceWakeupFilters>) => {
     setFilters((prev) => ({ ...prev, offset: 0, ...patch }));
@@ -277,15 +371,42 @@ export function WorkspaceWakeups() {
     { value: "", label: t(($) => $.wakeups.all_agents) },
     ...(query.data?.agents ?? []).map((a) => ({ value: a.id, label: a.name })),
   ];
+  const sources = [
+    { value: "", label: t(($) => $.wakeups.sources.all) },
+    { value: "member", label: t(($) => $.wakeups.sources.member) },
+    { value: "agent", label: t(($) => $.wakeups.sources.agent) },
+    { value: "system", label: t(($) => $.wakeups.sources.system) },
+  ];
+  const pausedCount = query.data?.counts.paused ?? 0;
+  const latestPaused = pausedQuery.data?.items[0];
   return (
     <>
+      {pausedCount > 0 && latestPaused && filters.scope !== "paused" && (
+        <div
+          role="status"
+          className="mx-4 mt-3 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-caption"
+        >
+          <TriangleAlert className="size-4 shrink-0 text-destructive" aria-hidden="true" />
+          <span className="min-w-0 flex-1">
+            {t(($) => $.wakeups.banner, {
+              count: pausedCount,
+              issue: latestPaused.issue_identifier,
+              condition: text.trigger(latestPaused),
+              reason: text.paused(latestPaused) ?? "",
+            })}
+          </span>
+          <Button size="sm" variant="outline" onClick={() => change({ scope: "paused" })}>
+            {t(($) => $.wakeups.banner_view)}
+          </Button>
+        </div>
+      )}
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-4 py-2">
         <div
           className="flex gap-1"
           role="group"
           aria-label={t(($) => $.wakeups.scope)}
         >
-          {(["active", "all", "disabled", "ended"] as const).map((scope) => (
+          {(["active", "paused", "disabled", "ended", "all"] as const).map((scope) => (
             <Button
               key={scope}
               size="sm"
@@ -302,6 +423,10 @@ export function WorkspaceWakeups() {
           ))}
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
+          <Button size="sm" onClick={() => setCreating("pick")}>
+            <Plus aria-hidden="true" />
+            {t(($) => $.wakeups.create)}
+          </Button>
           <form
             onSubmit={(event) => {
               event.preventDefault();
@@ -331,6 +456,26 @@ export function WorkspaceWakeups() {
               {t(($) => $.wakeups.search_action)}
             </Button>
           </form>
+          <Select
+            items={sources}
+            value={filters.source}
+            disabled={batch.isPending}
+            onValueChange={(source) => {
+              if (source === "" || source === "member" || source === "agent" || source === "system")
+                change({ source });
+            }}
+          >
+            <SelectTrigger size="sm" aria-label={t(($) => $.wakeups.source)}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {sources.map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  {item.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Select
             items={kinds}
             value={filters.kind}
@@ -480,10 +625,11 @@ export function WorkspaceWakeups() {
                   />
                 </TableHead>
                 <TableHead>{t(($) => $.wakeups.issue)}</TableHead>
-                <TableHead>{t(($) => $.wakeups.target_agent)}</TableHead>
                 <TableHead>{t(($) => $.wakeups.trigger)}</TableHead>
-                <TableHead>{t(($) => $.wakeups.next)}</TableHead>
-                <TableHead>{t(($) => $.wakeups.wakeup_run)}</TableHead>
+                <TableHead>{t(($) => $.wakeups.target_agent)}</TableHead>
+                <TableHead>{t(($) => $.wakeups.source)}</TableHead>
+                <TableHead>{t(($) => $.wakeups.ends)}</TableHead>
+                <TableHead>{t(($) => $.wakeups.runs_7d)}</TableHead>
                 <TableHead className="w-px pr-4 text-right">
                   {t(($) => $.wakeups.enabled)}
                 </TableHead>
@@ -495,7 +641,10 @@ export function WorkspaceWakeups() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((row) => (
+              {rows.map((row) =>
+                row.source === "system" ? (
+                  <SystemWakeupListRow key={`system-${row.id}`} row={row} busy={batch.isPending} />
+                ) : (
                 <WakeupListRow
                   key={row.id}
                   row={row}
@@ -510,7 +659,8 @@ export function WorkspaceWakeups() {
                     })
                   }
                 />
-              ))}
+                ),
+              )}
             </TableBody>
           </Table>
         </div>
@@ -609,6 +759,37 @@ export function WorkspaceWakeups() {
                 : t(($) => $.wakeups.confirm)}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {/* A wakeup belongs to one issue: choose it, then fill in the same form
+          as the issue sidebar. */}
+      <IssuePickerModal
+        open={creating === "pick"}
+        onOpenChange={(open) => {
+          if (!open && creating === "pick") setCreating(null);
+        }}
+        title={t(($) => $.wakeups.create_pick_issue)}
+        description={t(($) => $.wakeups.create_pick_issue_description)}
+        excludeIds={[]}
+        isSelectable={(issue) => issue.status !== "done" && issue.status !== "cancelled"}
+        onSelect={(issue) => setCreating(issue)}
+      />
+      <Dialog
+        open={!!creating && creating !== "pick"}
+        onOpenChange={(open) => {
+          if (!open) setCreating(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-[460px]">
+          {creating && creating !== "pick" && (
+            <WakeupCreateForm
+              workspaceId={wsId}
+              issueId={creating.id}
+              defaultAgentId={creating.assignee_type === "agent" ? (creating.assignee_id ?? "") : ""}
+              inDialog
+              onClose={() => setCreating(null)}
+            />
+          )}
         </DialogContent>
       </Dialog>
     </>

@@ -39,7 +39,15 @@ import { Button } from "@multica/ui/components/ui/button";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@multica/ui/components/ui/resizable";
 import { Sheet, SheetContent } from "@multica/ui/components/ui/sheet";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
-import { ContentEditor, type ContentEditorRef, TitleEditor, type TitleEditorRef, useFileDropZone, FileDropOverlay, useLazyEditor, useEditorUpload, PreviewSequenceProvider, collectPreviewSequence } from "../../editor";
+import { ContentEditor, type ContentEditorRef, TitleEditor, type TitleEditorRef, useFileDropZone, FileDropOverlay, useLazyEditor, useEditorUpload, PreviewSequenceProvider, collectPreviewSequence, ReadonlyContent } from "../../editor";
+import {
+  WAKEUP_ACTIVITY_ACTIONS,
+  WakeupActivityIcon,
+  childDoneNoticeId,
+  formatWakeupActivity,
+  wakeupActivityChip,
+} from "./wakeup-activity";
+import { useWakeupText } from "./wakeup-presentation";
 import type { ImageSequenceBlock } from "@multica/core/attachments/image-sequence";
 import { FileUploadButton } from "@multica/ui/components/common/file-upload-button";
 import {
@@ -99,6 +107,7 @@ import { ResolvedThreadBar } from "./resolved-thread-bar";
 import { ThreadMinimap, type ThreadMinimapThread } from "./thread-minimap";
 import { collectThreadParticipants, collectThreadReplies, deriveThreadResolution } from "./thread-utils";
 import { IssueAgentHeaderChip } from "./issue-agent-header-chip";
+import { IssueWakeupHeaderChip } from "./issue-wakeup-header-chip";
 import { ExecutionLogSection } from "./execution-log-section";
 import { WakeupsSection } from "./wakeups-section";
 import { QuickActionsSection } from "./quick-actions-section";
@@ -631,6 +640,7 @@ function ActivityBlock({
   t,
   timeAgo,
   locale,
+  notices,
 }: {
   entries: TimelineEntry[];
   expanded: boolean;
@@ -650,7 +660,11 @@ function ActivityBlock({
   t: ActivityT;
   timeAgo: (dateStr: string) => string;
   locale: string;
+  /** System comments that child-done entries stand in for, by comment id. */
+  notices: ReadonlyMap<string, TimelineEntry>;
 }) {
+  const wakeupText = useWakeupText();
+  const [openNotices, setOpenNotices] = useState<ReadonlySet<string>>(() => new Set());
   if (!expanded) {
     const count = entries.length;
     return (
@@ -712,8 +726,16 @@ function ActivityBlock({
         const isStartDateChange = entry.action === "start_date_changed";
         const isDueDateChange = entry.action === "due_date_changed";
 
+        const isWakeup = WAKEUP_ACTIVITY_ACTIONS.has(entry.action ?? "");
+        const chip = isWakeup ? wakeupActivityChip(entry, t, wakeupText, getActorName) : null;
+        const noticeId = childDoneNoticeId(entry);
+        const notice = noticeId ? notices.get(noticeId) : undefined;
+        const noticeOpen = !!notice && openNotices.has(entry.id);
+
         let leadIcon: React.ReactNode;
-        if ((isStatusChange && details.to) || markedDuplicate || unmarkedDuplicate) {
+        if (isWakeup) {
+          leadIcon = <WakeupActivityIcon entry={entry} />;
+        } else if ((isStatusChange && details.to) || markedDuplicate || unmarkedDuplicate) {
           const to = markedDuplicate ? "cancelled" : details.to;
           leadIcon = (
             <StatusIcon
@@ -744,20 +766,50 @@ function ActivityBlock({
         }
 
         return (
-          <div key={entry.id} className="flex items-center text-caption text-muted-foreground">
+          <Fragment key={entry.id}>
+          <div className="flex items-center text-caption text-muted-foreground">
             <div className="mr-2 flex w-4 shrink-0 justify-center">
               {leadIcon}
             </div>
             <div className="flex min-w-0 flex-1 items-center gap-1">
-              <span className="shrink-0 font-medium">
-                {entry.actor_name || getActorName(entry.actor_type, entry.actor_id)}
-              </span>
+              {/* The platform's own entries read as a sentence without an actor. */}
+              {!(isWakeup && entry.actor_type === "system") && (
+                <span className="shrink-0 font-medium">
+                  {entry.actor_name || getActorName(entry.actor_type, entry.actor_id)}
+                </span>
+              )}
               <span className="truncate">
                 <ActivityText
                   entry={entry}
-                  text={formatActivity(entry, t, locale, getActorName, resolveStatusLabel)}
+                  text={
+                    isWakeup
+                      ? formatWakeupActivity(entry, t, wakeupText, getActorName)
+                      : formatActivity(entry, t, locale, getActorName, resolveStatusLabel)
+                  }
                 />
               </span>
+              {notice && (
+                <button
+                  type="button"
+                  aria-expanded={noticeOpen}
+                  className="shrink-0 rounded-sm px-1 text-caption text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+                  onClick={() =>
+                    setOpenNotices((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(entry.id)) next.delete(entry.id);
+                      else next.add(entry.id);
+                      return next;
+                    })
+                  }
+                >
+                  {noticeOpen ? t(($) => $.activity.wakeup_hide_notice) : t(($) => $.activity.wakeup_show_notice)}
+                </button>
+              )}
+              {chip && (
+                <span className="ml-auto inline-flex max-w-48 shrink-0 items-center gap-1 truncate rounded-xs bg-muted px-1.5 py-0.5 text-micro text-muted-foreground">
+                  {chip}
+                </span>
+              )}
               {(entry.coalesced_count ?? 1) > 1 &&
                 entry.action !== "task_completed" &&
                 entry.action !== "task_failed" && (
@@ -768,7 +820,7 @@ function ActivityBlock({
               <Tooltip>
                 <TooltipTrigger
                   render={
-                    <span className="ml-auto shrink-0 cursor-default">
+                    <span className={cn("shrink-0 cursor-default", !chip && "ml-auto")}>
                       {timeAgo(entry.created_at)}
                     </span>
                   }
@@ -779,6 +831,12 @@ function ActivityBlock({
               </Tooltip>
             </div>
           </div>
+          {noticeOpen && notice && (
+            <div className="ml-6 rounded-md border border-border px-3 py-2 text-body text-foreground">
+              <ReadonlyContent content={notice.content ?? ""} attachments={notice.attachments} />
+            </div>
+          )}
+          </Fragment>
         );
       })}
     </div>
@@ -1591,9 +1649,6 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     // bucketed under their parent's id and rendered nested inside CommentCard.
     // No orphan rescue needed: the timeline is fetched in full, so every
     // reply's parent is always in the same array.
-    const topLevel = displayTimeline.filter(
-      (e) => e.type === "activity" || !e.parent_id,
-    );
     const repliesByParent = new Map<string, TimelineEntry[]>();
     for (const e of displayTimeline) {
       if (e.type === "comment" && e.parent_id) {
@@ -1602,6 +1657,20 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
         repliesByParent.set(e.parent_id, list);
       }
     }
+    // A child-done timeline entry stands in for the system comment it names:
+    // the comment stays the woken agent's instruction, and people read one
+    // quiet line. A notice someone replied to stays a thread.
+    const noticeIds = new Set(
+      displayTimeline.map(childDoneNoticeId).filter((id): id is string => !!id && !repliesByParent.has(id)),
+    );
+    const notices = new Map<string, TimelineEntry>();
+    const topLevel = displayTimeline.filter((e) => {
+      if (e.type === "comment" && e.actor_type === "system" && noticeIds.has(e.id)) {
+        notices.set(e.id, e);
+        return false;
+      }
+      return e.type === "activity" || !e.parent_id;
+    });
 
     // Pre-flatten each top-level comment's thread subtree (parent + every
     // descendant in render order). Reuse the previous array reference when
@@ -1624,10 +1693,14 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     // - all other actions: within a 2-minute window
     // - squad_leader_evaluated: never coalesce; outcome/reason are audit data
     const COALESCE_MS = 2 * 60 * 1000;
-    const NO_TIME_LIMIT_ACTIONS = new Set(["task_completed", "task_failed"]);
+    const NO_TIME_LIMIT_ACTIONS = new Set(["task_completed", "task_failed", "wakeup_checkin"]);
     // Duplicate marks name a different issue on every row.
     const NEVER_COALESCE_ACTIONS = new Set([
       "squad_leader_evaluated",
+      "wakeup_created",
+      "wakeup_triggered",
+      "wakeup_timed_out",
+      "wakeup_paused",
       "duplicate_marked",
       "duplicate_unmarked",
       "duplicate_added",
@@ -1678,7 +1751,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
       }
     }
 
-    return { threadReplies, groups };
+    return { threadReplies, groups, notices };
   }, [displayTimeline, standaloneRuns]);
 
   // Flat array consumed by <Virtuoso>. Recomputed when timelineView.groups
@@ -2342,6 +2415,17 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     });
   }, [beginDesktopSidebarToggle, isMobile, sidebarRef]);
 
+  // The header's wakeup chip opens the sidebar and brings the Wakeups section
+  // into view with focus on its heading.
+  const openWakeups = useCallback(() => {
+    if (!sidebarOpen) handleToggleSidebar();
+    window.requestAnimationFrame(() => {
+      const heading = document.getElementById(`issue-wakeups-${id}`);
+      heading?.scrollIntoView({ block: "nearest" });
+      heading?.focus({ preventScroll: true });
+    });
+  }, [handleToggleSidebar, id, sidebarOpen]);
+
   useRightSidebarShortcut(rightSidebarShortcutTargetRef, handleToggleSidebar);
 
   useIssueDetailScrollRestore({
@@ -2858,6 +2942,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
         t={t}
         timeAgo={timeAgo}
         locale={locale}
+        notices={timelineView.notices}
       />
     );
   };
@@ -2926,6 +3011,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                 it never overlaps the title (which truncates to make room).
                 It self-hides when no agent is active. */}
             <IssueAgentHeaderChip issueId={id} />
+            <IssueWakeupHeaderChip issueId={id} onOpen={openWakeups} />
             {onDone && !issueBehavesAsAny(issue, ["done", "closed"]) && (
               <Tooltip>
                 <TooltipTrigger

@@ -87,7 +87,9 @@
     "pr_auto_complete_description": "Une tâche passe à Terminé dès que toutes ses PR liées sont fusionnées et que l’une d’elles la ferme par un mot-clé. S’applique aux PR fusionnées à partir de maintenant.",
     "pr_auto_complete_example": "Écrivez le mot-clé dans le titre ou la description de la PR, par ex.",
     "pr_auto_complete_example_title": "Closes MUL-123",
-    "pr_auto_complete_badge": "Définie à la fusion des PR"
+    "pr_auto_complete_badge": "Définie à la fusion des PR",
+    "child_done_label": "Réveiller le responsable du ticket parent à la fin d’une étape de sous-tickets",
+    "child_done_description": "Valeur par défaut pour tout ticket ayant des sous-tickets. Chaque ticket peut la modifier dans sa section Réveils."
   },
   "quick_actions": {
     "title": "Actions rapides",

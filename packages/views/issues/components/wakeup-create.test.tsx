@@ -5,8 +5,12 @@ import { renderWithI18n } from "../../test/i18n";
 import { WakeupCreate } from "./wakeup-create";
 
 const create = vi.fn();
+vi.mock("./wakeup-condition-names", () => ({
+  useConditionNames: () => ({ status: (key: string) => key, label: () => undefined, property: () => undefined, actor: (_type: string, id: string) => id }),
+}));
 vi.mock("@multica/core/issues", () => ({
   useCreateIssueWakeup: () => ({ mutateAsync: create, isPending: false }),
+  childIssuesOptions: () => ({ queryKey: ["children"] }),
 }));
 vi.mock("@tanstack/react-query", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-query")>()),
@@ -54,6 +58,8 @@ describe("WakeupCreateForm", () => {
     expect(screen.getByRole("button", { name: /超时后: 唤醒 Emacs 处理/ })).toBeVisible();
     fireEvent.change(screen.getByLabelText("唤醒后要做什么"), { target: { value: "按回复继续实现阶段 2" } });
     fireEvent.click(screen.getByRole("radio", { name: "重复唤醒" }));
+    // A repeating wait gets a cap on how many runs it may start.
+    expect(screen.getByRole("button", { name: /最多触发: 20 次/ })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: /创建/ }));
     await waitFor(() =>
       expect(create).toHaveBeenCalledWith({
@@ -61,6 +67,7 @@ describe("WakeupCreateForm", () => {
         instruction: "按回复继续实现阶段 2",
         kind: "event",
         mode: "continuous",
+        max_fires: 20,
         event_types: ["comment.created"],
         expires_in_seconds: 604800,
         on_timeout: "wake",
@@ -107,5 +114,51 @@ describe("WakeupCreateForm", () => {
     fireEvent.change(input, { target: { value: "看一下 CI" } });
     fireEvent.keyDown(input, { key: "Enter", metaKey: true });
     await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({ kind: "at", mode: "once" })));
+  });
+});
+
+describe("platform conditions in the form", () => {
+  it("groups conditions by what they wait for", async () => {
+    await renderForm();
+    fireEvent.click(screen.getByRole("button", { name: /选择条件/ }));
+    for (const label of ["字段变为某个值", "子任务完成", "关联 PR 的 CI 结束", "其他任务的状态变化"]) {
+      expect(await screen.findByRole("menuitem", { name: new RegExp(label) })).toBeVisible();
+    }
+    for (const group of ["协作", "运行与子任务", "关联"]) expect(screen.getByText(group)).toBeVisible();
+  });
+
+  it("creates a sub-issue wait that the platform checks", async () => {
+    await renderForm();
+    await chooseCondition("子任务完成");
+    expect(screen.getByRole("button", { name: /子任务完成: 全部子任务/ })).toBeVisible();
+    fireEvent.change(screen.getByLabelText("唤醒后要做什么"), { target: { value: "汇总子任务结果" } });
+    fireEvent.click(screen.getByRole("button", { name: /创建/ }));
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "event", mode: "once", condition: { type: "children_done" }, expires_in_seconds: 604800 }),
+      ),
+    );
+    expect(create.mock.calls[0]![0]).not.toHaveProperty("event_types");
+  });
+
+  it("waits for a linked PR's CI by default and can wait for the merge instead", async () => {
+    await renderForm();
+    await chooseCondition("关联 PR 的 CI 结束");
+    fireEvent.click(screen.getByRole("button", { name: /关联 PR 的 CI 结束: CI 结束/ }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "合并" }));
+    fireEvent.change(screen.getByLabelText("唤醒后要做什么"), { target: { value: "发布" } });
+    fireEvent.click(screen.getByRole("button", { name: /创建/ }));
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({ condition: { type: "pull_request", event: "merged" } })),
+    );
+  });
+
+  it("asks for the value a field has to reach", async () => {
+    await renderForm();
+    await chooseCondition("字段变为某个值");
+    fireEvent.change(screen.getByLabelText("唤醒后要做什么"), { target: { value: "继续" } });
+    fireEvent.click(screen.getByRole("button", { name: /创建/ }));
+    expect(screen.getByRole("alert")).toHaveTextContent("请选择一个值");
+    expect(create).not.toHaveBeenCalled();
   });
 });

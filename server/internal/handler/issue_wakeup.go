@@ -177,10 +177,16 @@ func (h *Handler) ListWorkspaceWakeupSummaries(w http.ResponseWriter, r *http.Re
 		wakeupError(w, err)
 		return
 	}
-	if rows == nil {
-		rows = []db.ListWorkspaceWakeupSummaryRowsRow{}
+	// The condition is JSON; sqlc cannot type it through the window CTE.
+	type summaryRow struct {
+		db.ListWorkspaceWakeupSummaryRowsRow
+		Condition json.RawMessage `json:"condition"`
 	}
-	writeJSON(w, 200, rows)
+	out := make([]summaryRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, summaryRow{ListWorkspaceWakeupSummaryRowsRow: row, Condition: json.RawMessage(row.Condition)})
+	}
+	writeJSON(w, 200, out)
 }
 
 func (h *Handler) CreateIssueWakeup(w http.ResponseWriter, r *http.Request) {

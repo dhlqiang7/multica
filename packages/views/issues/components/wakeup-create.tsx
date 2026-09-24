@@ -6,18 +6,25 @@ import {
   Bot,
   ChevronDown,
   CircleDashed,
+  CircleDot,
   Clock3,
+  GitPullRequest,
   Info,
+  Link2,
+  ListChecks,
   MessageSquare,
   Plus,
   RefreshCw,
   Zap,
   type LucideIcon,
 } from "lucide-react";
-import { useCreateIssueWakeup } from "@multica/core/issues";
+import { childIssuesOptions, useCreateIssueWakeup } from "@multica/core/issues";
+import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
+import { labelListOptions } from "@multica/core/labels/queries";
+import { propertyListOptions } from "@multica/core/properties/queries";
 import { isAgentRuntimeBound } from "@multica/core/agents";
 import { ApiError } from "@multica/core/api";
-import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
+import { agentListOptions, memberListOptions, squadListOptions } from "@multica/core/workspace/queries";
 import { shortcutMatchesEvent, useShortcut } from "@multica/core/shortcuts";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
@@ -28,6 +35,7 @@ import {
   PopoverTitle,
   PopoverTrigger,
 } from "@multica/ui/components/ui/popover";
+import { DialogTitle } from "@multica/ui/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -47,9 +55,11 @@ import { useViewingTimezone } from "../../common/use-viewing-timezone";
 import { useT } from "../../i18n";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { PickerEmpty, PickerItem, PickerSection, PropertyPicker } from "./pickers/property-picker";
+import { IssuePickerModal } from "../../modals/issue-picker-modal";
 import { useWakeupText } from "./wakeup-presentation";
 import {
   WAKEUP_EVENT_TYPES,
+  WAKEUP_MAX_FIRES,
   WAKEUP_WAIT_DAYS,
   buildWakeupInput,
   emptyWakeupDraft,
@@ -58,6 +68,7 @@ import {
   type WakeupCondition,
   type WakeupDraft,
   type WakeupDraftError,
+  type WakeupField,
   type WakeupRecurrence,
 } from "./wakeup-draft";
 
@@ -125,13 +136,17 @@ export function WakeupCreateForm({
   defaultAgentId,
   onBusy,
   onClose,
+  inDialog = false,
 }: {
   workspaceId: string;
   issueId: string;
   defaultAgentId: string;
   onBusy?: (busy: boolean) => void;
   onClose: () => void;
+  /** Rendered in a dialog (the workspace list) rather than the sidebar popover. */
+  inDialog?: boolean;
 }) {
+  const Title = inDialog ? DialogTitle : PopoverTitle;
   const { t } = useT("issues");
   const text = useWakeupText();
   const timezone = useViewingTimezone();
@@ -141,6 +156,7 @@ export function WakeupCreateForm({
   const create = useCreateIssueWakeup(workspaceId, issueId);
   const sendShortcut = useShortcut("send");
   const { data: agents = [] } = useQuery(agentListOptions(workspaceId));
+  const { data: properties = [] } = useQuery(propertyListOptions(workspaceId));
   const update = (patch: Partial<WakeupDraft>) => {
     setDraft((prev) => ({ ...prev, ...patch }));
     setError("");
@@ -148,6 +164,8 @@ export function WakeupCreateForm({
   const agentName = agents.find((a) => a.id === draft.agentId)?.name;
   const draftErrors: Record<WakeupDraftError, string> = {
     missing_condition: t(($) => $.wakeups.create.missing_condition),
+    missing_value: t(($) => $.wakeups.create.missing_value),
+    missing_issue: t(($) => $.wakeups.create.missing_issue),
     missing_agent: t(($) => $.wakeups.create.missing_agent),
     missing_events: t(($) => $.wakeups.create.missing_events),
     instruction_invalid: t(($) => $.wakeups.instruction_invalid),
@@ -157,7 +175,9 @@ export function WakeupCreateForm({
 
   const submit = async () => {
     if (create.isPending) return;
-    const result = buildWakeupInput(draft);
+    const propertyType =
+      draft.field === "property" ? properties.find((p) => p.id === draft.fieldTarget)?.type : undefined;
+    const result = buildWakeupInput(draft, new Date(), propertyType);
     if ("error" in result) {
       setError(draftErrors[result.error]);
       return;
@@ -195,14 +215,14 @@ export function WakeupCreateForm({
         }
       }}
     >
-      <PopoverTitle id={`${id}-title`} className="text-title-sm font-semibold">
+      <Title id={`${id}-title`} className="text-title-sm font-semibold">
         {t(($) => $.wakeups.create.title)}
-      </PopoverTitle>
+      </Title>
       <div className="mt-3.5 grid grid-cols-[2.5rem_minmax(0,1fr)] items-center gap-y-2.5">
         <span className="text-label text-muted-foreground">{t(($) => $.wakeups.create.when)}</span>
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           <ConditionMenu value={draft.condition} onChange={(condition) => update({ condition })} />
-          <ConditionParams draft={draft} workspaceId={workspaceId} update={update} />
+          <ConditionParams draft={draft} workspaceId={workspaceId} issueId={issueId} update={update} onBusy={onBusy} />
         </div>
         <span className="text-label text-muted-foreground">{t(($) => $.wakeups.create.wake)}</span>
         <div className="flex min-w-0 items-center gap-1.5">
@@ -260,6 +280,22 @@ export function WakeupCreateForm({
             ]}
             onChange={(mode) => update({ mode })}
           />
+          {draft.mode === "continuous" && (
+            <>
+              <span className="text-caption text-muted-foreground">{t(($) => $.wakeups.create.max_fires)}</span>
+              <div className="flex min-w-0">
+                <PillMenu
+                  label={t(($) => $.wakeups.create.max_fires)}
+                  value={String(draft.maxFires)}
+                  options={WAKEUP_MAX_FIRES.map((count) => ({
+                    value: String(count),
+                    label: t(($) => $.wakeups.create.max_fires_times, { count }),
+                  }))}
+                  onChange={(value) => update({ maxFires: Number(value) })}
+                />
+              </div>
+            </>
+          )}
           <span className="text-caption text-muted-foreground">{t(($) => $.wakeups.create.max_wait)}</span>
           <div className="flex min-w-0">
             <PillMenu
@@ -332,13 +368,18 @@ function ConditionMenu({
     at: { icon: Clock3, label: t(($) => $.wakeups.create.cond_at), hint: t(($) => $.wakeups.create.cond_at_hint) },
     recurring: { icon: RefreshCw, label: t(($) => $.wakeups.create.cond_recurring), hint: t(($) => $.wakeups.create.cond_recurring_hint) },
     reply: { icon: MessageSquare, label: t(($) => $.wakeups.create.cond_reply), hint: t(($) => $.wakeups.create.cond_reply_hint) },
+    field: { icon: CircleDot, label: t(($) => $.wakeups.create.cond_field), hint: t(($) => $.wakeups.create.cond_field_hint) },
     run_end: { icon: Bot, label: t(($) => $.wakeups.create.cond_run_end), hint: t(($) => $.wakeups.create.cond_run_end_hint) },
+    children: { icon: ListChecks, label: t(($) => $.wakeups.create.cond_children), hint: t(($) => $.wakeups.create.cond_children_hint) },
+    pull_request: { icon: GitPullRequest, label: t(($) => $.wakeups.create.cond_pr), hint: t(($) => $.wakeups.create.cond_pr_hint) },
+    other_issue: { icon: Link2, label: t(($) => $.wakeups.create.cond_issue), hint: t(($) => $.wakeups.create.cond_issue_hint) },
     custom: { icon: Zap, label: t(($) => $.wakeups.create.cond_custom), hint: t(($) => $.wakeups.create.cond_custom_hint, { count: WAKEUP_EVENT_TYPES.length }) },
   };
   const groups: [string, WakeupCondition[]][] = [
     [t(($) => $.wakeups.create.group_time), ["at", "recurring"]],
-    [t(($) => $.wakeups.create.group_collaboration), ["reply"]],
-    [t(($) => $.wakeups.create.group_runs), ["run_end"]],
+    [t(($) => $.wakeups.create.group_collaboration), ["reply", "field"]],
+    [t(($) => $.wakeups.create.group_runs), ["run_end", "children"]],
+    [t(($) => $.wakeups.create.group_linked), ["pull_request", "other_issue"]],
   ];
   const selected = value ? items[value] : null;
   const SelectedIcon = selected?.icon ?? CircleDashed;
@@ -380,15 +421,51 @@ function ConditionMenu({
 function ConditionParams({
   draft,
   workspaceId,
+  issueId,
   update,
+  onBusy,
 }: {
   draft: WakeupDraft;
   workspaceId: string;
+  issueId: string;
   update: (patch: Partial<WakeupDraft>) => void;
+  onBusy?: (busy: boolean) => void;
 }) {
   const { t } = useT("issues");
   const text = useWakeupText();
   switch (draft.condition) {
+    case "field":
+      return <FieldParams draft={draft} workspaceId={workspaceId} update={update} />;
+    case "children":
+      return <StageChoice workspaceId={workspaceId} issueId={issueId} value={draft.stage} onChange={(stage) => update({ stage })} />;
+    case "pull_request":
+      return (
+        <PillMenu
+          label={t(($) => $.wakeups.create.cond_pr)}
+          value={draft.prEvent}
+          options={[
+            { value: "checks_finished", label: t(($) => $.wakeups.create.pr_checks) },
+            { value: "merged", label: t(($) => $.wakeups.create.pr_merged) },
+          ]}
+          onChange={(prEvent) => update({ prEvent: prEvent as WakeupDraft["prEvent"] })}
+        />
+      );
+    case "other_issue":
+      return (
+        <>
+          <OtherIssueChoice issueId={issueId} value={draft.otherIssue} onChange={(otherIssue) => update({ otherIssue })} onBusy={onBusy} />
+          <PillMenu
+            label={t(($) => $.wakeups.create.cond_issue)}
+            value={draft.otherState}
+            options={[
+              { value: "done", label: t(($) => $.wakeups.create.other_done) },
+              { value: "ended", label: t(($) => $.wakeups.create.other_ended) },
+              { value: "in_review", label: t(($) => $.wakeups.create.other_in_review) },
+            ]}
+            onChange={(otherState) => update({ otherState: otherState as WakeupDraft["otherState"] })}
+          />
+        </>
+      );
     case "at":
       return (
         <PillMenu
@@ -467,20 +544,23 @@ function PillMenu({
   value,
   options,
   onChange,
+  placeholder,
 }: {
   label: string;
   value: string;
   options: { value: string; label: string }[];
   onChange: (value: string) => void;
+  /** Shown until a value is chosen. */
+  placeholder?: string;
 }) {
   const current = options.find((option) => option.value === value);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger render={<button type="button" className={pillClass} aria-label={`${label}: ${current?.label ?? ""}`} />}>
-        <span className="truncate">{current?.label}</span>
+        <span className={cn("truncate", !current && "text-muted-foreground")}>{current?.label ?? placeholder}</span>
         <ChevronDown className="size-3 text-muted-foreground" aria-hidden="true" />
       </DropdownMenuTrigger>
-      <DropdownMenuContent>
+      <DropdownMenuContent className="max-h-80">
         <DropdownMenuRadioGroup value={value} onValueChange={(next) => onChange(String(next))}>
           {options.map((option) => (
             <DropdownMenuRadioItem key={option.value} value={option.value}>
@@ -678,6 +758,266 @@ function ActorChoice({
             >
               <ActorAvatar actorType="agent" actorId={a.id} size="sm" />
               <span className="truncate">{a.name}</span>
+            </PickerItem>
+          )),
+      )}
+    </PropertyPicker>
+  );
+}
+
+/** Field, then the value it has to reach. */
+function FieldParams({
+  draft,
+  workspaceId,
+  update,
+}: {
+  draft: WakeupDraft;
+  workspaceId: string;
+  update: (patch: Partial<WakeupDraft>) => void;
+}) {
+  const { t } = useT("issues");
+  const statuses = useIssueStatuses(workspaceId);
+  const { data: labels = [] } = useQuery(labelListOptions(workspaceId));
+  const { data: allProperties = [] } = useQuery(propertyListOptions(workspaceId));
+  const properties = allProperties.filter((p) => !p.archived);
+  const property = properties.find((p) => p.id === draft.fieldTarget);
+  const choose = (field: WakeupField) => update({ field, fieldTarget: "", fieldValue: "", assignee: null });
+  const fieldMenu = (
+    <PillMenu
+      label={t(($) => $.wakeups.create.field_kind)}
+      value={draft.field}
+      options={[
+        { value: "status", label: t(($) => $.wakeups.create.field_status) },
+        { value: "assignee", label: t(($) => $.wakeups.create.field_assignee) },
+        { value: "label", label: t(($) => $.wakeups.create.field_label) },
+        { value: "property", label: t(($) => $.wakeups.create.field_property) },
+      ]}
+      onChange={(field) => choose(field as WakeupField)}
+    />
+  );
+  let value: ReactNode = null;
+  if (draft.field === "status") {
+    value = (
+      <PillMenu
+        label={t(($) => $.wakeups.create.choose_status)}
+        placeholder={t(($) => $.wakeups.create.choose_status)}
+        value={draft.fieldTarget}
+        options={statuses.activeStatuses.map((s) => ({ value: s.key, label: statuses.labelOf(s.key) }))}
+        onChange={(fieldTarget) => update({ fieldTarget })}
+      />
+    );
+  } else if (draft.field === "assignee") {
+    value = <AssigneeChoice workspaceId={workspaceId} value={draft.assignee} onChange={(assignee) => update({ assignee })} />;
+  } else if (draft.field === "label") {
+    value = (
+      <PillMenu
+        label={t(($) => $.wakeups.create.choose_label)}
+        placeholder={t(($) => $.wakeups.create.choose_label)}
+        value={draft.fieldTarget}
+        options={labels.map((l) => ({ value: l.id, label: l.name }))}
+        onChange={(fieldTarget) => update({ fieldTarget })}
+      />
+    );
+  } else {
+    value = (
+      <>
+        <PillMenu
+          label={t(($) => $.wakeups.create.choose_property)}
+          placeholder={t(($) => $.wakeups.create.choose_property)}
+          value={draft.fieldTarget}
+          options={properties.map((p) => ({ value: p.id, label: p.name }))}
+          onChange={(fieldTarget) => update({ fieldTarget, fieldValue: "" })}
+        />
+        {property &&
+          (property.type === "select" || property.type === "multi_select" ? (
+            <PillMenu
+              label={property.name}
+              placeholder={t(($) => $.wakeups.create.value_placeholder)}
+              value={draft.fieldValue}
+              options={(property.config.options ?? []).map((o) => ({ value: o.id, label: o.name }))}
+              onChange={(fieldValue) => update({ fieldValue })}
+            />
+          ) : property.type === "checkbox" ? (
+            <PillMenu
+              label={property.name}
+              placeholder={t(($) => $.wakeups.create.value_placeholder)}
+              value={draft.fieldValue}
+              options={[
+                { value: "true", label: t(($) => $.wakeups.create.checked) },
+                { value: "false", label: t(($) => $.wakeups.create.unchecked) },
+              ]}
+              onChange={(fieldValue) => update({ fieldValue })}
+            />
+          ) : (
+            <Input
+              aria-label={property.name}
+              placeholder={t(($) => $.wakeups.create.value_placeholder)}
+              type={property.type === "number" ? "number" : "text"}
+              className="h-7 w-32 text-base md:text-label"
+              value={draft.fieldValue}
+              onChange={(event) => update({ fieldValue: event.target.value })}
+            />
+          ))}
+      </>
+    );
+  }
+  return (
+    <>
+      {fieldMenu}
+      {value}
+    </>
+  );
+}
+
+/** Every sub-issue, or one of the stages this issue's sub-issues use. */
+function StageChoice({
+  workspaceId,
+  issueId,
+  value,
+  onChange,
+}: {
+  workspaceId: string;
+  issueId: string;
+  value: number | null;
+  onChange: (stage: number | null) => void;
+}) {
+  const { t } = useT("issues");
+  const { data: children = [] } = useQuery(childIssuesOptions(workspaceId, issueId));
+  const stages = [...new Set(children.map((c) => c.stage).filter((s): s is number => typeof s === "number"))].sort((a, b) => a - b);
+  return (
+    <PillMenu
+      label={t(($) => $.wakeups.create.cond_children)}
+      value={value === null ? "all" : String(value)}
+      options={[
+        { value: "all", label: t(($) => $.wakeups.create.children_all) },
+        ...stages.map((stage) => ({ value: String(stage), label: t(($) => $.wakeups.create.children_stage, { stage }) })),
+      ]}
+      onChange={(next) => onChange(next === "all" ? null : Number(next))}
+    />
+  );
+}
+
+function OtherIssueChoice({
+  issueId,
+  value,
+  onChange,
+  onBusy,
+}: {
+  issueId: string;
+  value: WakeupDraft["otherIssue"];
+  onChange: (value: WakeupDraft["otherIssue"]) => void;
+  onBusy?: (busy: boolean) => void;
+}) {
+  const { t } = useT("issues");
+  const [open, setOpen] = useState(false);
+  // The picker is a dialog over this popover; keep the popover open while it is.
+  const toggle = (next: boolean) => {
+    onBusy?.(next);
+    setOpen(next);
+  };
+  return (
+    <>
+      <button type="button" className={pillClass} onClick={() => toggle(true)}>
+        <Link2 className="size-3.5 text-muted-foreground" aria-hidden="true" />
+        <span className={cn("truncate", !value && "text-muted-foreground")}>
+          {value?.identifier ?? t(($) => $.wakeups.create.choose_issue)}
+        </span>
+      </button>
+      <IssuePickerModal
+        open={open}
+        onOpenChange={toggle}
+        title={t(($) => $.wakeups.create.pick_issue_title)}
+        description={t(($) => $.wakeups.create.pick_issue_description)}
+        excludeIds={[issueId]}
+        onSelect={(issue) => {
+          onChange({ id: issue.id, identifier: issue.identifier });
+          toggle(false);
+        }}
+      />
+    </>
+  );
+}
+
+function AssigneeChoice({
+  workspaceId,
+  value,
+  onChange,
+}: {
+  workspaceId: string;
+  value: WakeupDraft["assignee"];
+  onChange: (value: WakeupDraft["assignee"]) => void;
+}) {
+  const { t } = useT("issues");
+  const [open, setOpen] = useState(false);
+  const { setFilter, matches } = useMatches();
+  const { data: members = [] } = useQuery(memberListOptions(workspaceId));
+  const { data: agentRows = [] } = useQuery(agentListOptions(workspaceId));
+  const { data: squads = [] } = useQuery(squadListOptions(workspaceId));
+  const agents = agentRows.filter((a) => !a.archived_at);
+  const name =
+    value?.type === "member"
+      ? members.find((m) => m.user_id === value.id)?.name
+      : value?.type === "agent"
+        ? agents.find((a) => a.id === value.id)?.name
+        : value?.type === "squad"
+          ? squads.find((s) => s.id === value.id)?.name
+          : undefined;
+  const pick = (next: WakeupDraft["assignee"]) => {
+    onChange(next);
+    setOpen(false);
+  };
+  const section = (label: string, rows: ReactNode[]) =>
+    rows.length > 0 && <PickerSection label={label}>{rows}</PickerSection>;
+  return (
+    <PropertyPicker
+      open={open}
+      onOpenChange={setOpen}
+      width="w-56"
+      align="start"
+      searchable
+      onSearchChange={setFilter}
+      triggerRender={<button type="button" className={pillClass} />}
+      trigger={
+        <>
+          {value && value.type !== "squad" ? <ActorAvatar actorType={value.type} actorId={value.id} size="sm" /> : null}
+          <span className={cn("truncate", !name && "text-muted-foreground")}>{name ?? t(($) => $.wakeups.create.choose_assignee)}</span>
+          <ChevronDown className="size-3 text-muted-foreground" aria-hidden="true" />
+        </>
+      }
+    >
+      {section(
+        t(($) => $.wakeups.create.members),
+        members
+          .filter((m) => matches(m.name))
+          .map((m) => (
+            <PickerItem
+              key={m.user_id}
+              selected={value?.type === "member" && value.id === m.user_id}
+              onClick={() => pick({ type: "member", id: m.user_id })}
+            >
+              <ActorAvatar actorType="member" actorId={m.user_id} size="sm" />
+              <span className="truncate">{m.name}</span>
+            </PickerItem>
+          )),
+      )}
+      {section(
+        t(($) => $.wakeups.create.agents),
+        agents
+          .filter((a) => matches(a.name))
+          .map((a) => (
+            <PickerItem key={a.id} selected={value?.type === "agent" && value.id === a.id} onClick={() => pick({ type: "agent", id: a.id })}>
+              <ActorAvatar actorType="agent" actorId={a.id} size="sm" />
+              <span className="truncate">{a.name}</span>
+            </PickerItem>
+          )),
+      )}
+      {section(
+        t(($) => $.wakeups.create.squads),
+        squads
+          .filter((s) => matches(s.name))
+          .map((s) => (
+            <PickerItem key={s.id} selected={value?.type === "squad" && value.id === s.id} onClick={() => pick({ type: "squad", id: s.id })}>
+              <span className="truncate">{s.name}</span>
             </PickerItem>
           )),
       )}

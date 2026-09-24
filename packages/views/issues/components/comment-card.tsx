@@ -55,6 +55,7 @@ import { EMPTY_COMMENT_RUNS, orderThreadWithRuns, type CommentRun, type ThreadRu
 import { descriptionPreview } from "./description-preview";
 import { useCommentAnnotations } from "./use-comment-annotations";
 import { useRunCommentMotion } from "./use-run-comment-motion";
+import { WakeupSourceChip } from "./wakeup-source-chip";
 
 const commentActionClassName =
   "text-muted-foreground aria-expanded:bg-transparent aria-expanded:hover:bg-muted dark:aria-expanded:hover:bg-muted/50";
@@ -759,6 +760,10 @@ function CommentRow({
 
         {runHeader}
 
+        {entry.actor_type === "agent" && entry.source_task_id && (
+          <WakeupSourceChip issueId={issueId} taskId={entry.source_task_id} />
+        )}
+
         {isResolution && (
           <span className="text-caption font-medium text-success">
             {t(($) => $.comment.resolve.resolution_badge)}
@@ -1244,6 +1249,9 @@ function CommentCardImpl({
                   </Tooltip>
 
                   {renderRuns(entry.id, "header")}
+                  {entry.actor_type === "agent" && entry.source_task_id && (
+                    <WakeupSourceChip issueId={issueId} taskId={entry.source_task_id} />
+                  )}
                 </>
               )}
 

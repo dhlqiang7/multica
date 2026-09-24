@@ -87,7 +87,9 @@
     "pr_auto_complete_description": "An issue moves to Done once every linked PR is merged and one of them closes it with a keyword. Applies to PRs merged from now on.",
     "pr_auto_complete_example": "Write the keyword in the PR title or description, e.g.",
     "pr_auto_complete_example_title": "Closes MUL-123",
-    "pr_auto_complete_badge": "Set when PRs merge"
+    "pr_auto_complete_badge": "Set when PRs merge",
+    "child_done_label": "Wake the parent's assignee when a stage of sub-issues finishes",
+    "child_done_description": "Default for every issue with sub-issues. Each issue can override it in its Wakeups section."
   },
   "quick_actions": {
     "title": "Quick Actions",

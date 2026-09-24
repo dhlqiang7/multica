@@ -42,9 +42,11 @@ type WakeupCondition struct {
 	Stage *int32 `json:"stage,omitempty"`
 	// pull_request: checks_finished | merged
 	Event string `json:"event,omitempty"`
-	// other_issue: the watched issue and done | ended | in_review
-	IssueID string `json:"issue_id,omitempty"`
-	State   string `json:"state,omitempty"`
+	// other_issue: the watched issue and done | ended | in_review. The
+	// identifier is recorded for display; clients never set it.
+	IssueID    string `json:"issue_id,omitempty"`
+	State      string `json:"state,omitempty"`
+	Identifier string `json:"identifier,omitempty"`
 }
 
 var errBadCondition = errors.New("invalid condition")
@@ -177,14 +179,15 @@ func validateCondition(ctx context.Context, tx pgx.Tx, issue db.Issue, raw json.
 		if c.State != "done" && c.State != "ended" && c.State != "in_review" {
 			return nil, nil, badCondition("state must be done, ended or in_review")
 		}
-		ok, err := exists("SELECT 1 FROM issue WHERE workspace_id=$1 AND id=$2", ws, id)
+		var identifier string
+		err = tx.QueryRow(ctx, "SELECT ws.issue_prefix||'-'||i.number FROM issue i JOIN workspace ws ON ws.id=i.workspace_id WHERE i.workspace_id=$1 AND i.id=$2", ws, id).Scan(&identifier)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil, badCondition("unknown issue")
+		}
 		if err != nil {
 			return nil, nil, err
 		}
-		if !ok {
-			return nil, nil, badCondition("unknown issue")
-		}
-		out = WakeupCondition{Type: c.Type, IssueID: util.UUIDToString(id), State: c.State}
+		out = WakeupCondition{Type: c.Type, IssueID: util.UUIDToString(id), State: c.State, Identifier: identifier}
 	default:
 		return nil, nil, badCondition("type must be issue_field, children_done, pull_request or other_issue")
 	}

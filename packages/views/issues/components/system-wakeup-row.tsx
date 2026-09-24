@@ -106,6 +106,9 @@ export function SystemWakeupRow({
               onCheckedChange={toggle}
             />
           </div>
+          <p className="text-caption text-muted-foreground">
+            {rule.workspace_default ? t(($) => $.wakeups.system.default_on) : t(($) => $.wakeups.system.default_off)}
+          </p>
         </PopoverContent>
       </Popover>
       <div className="z-10 col-start-2 row-start-1 flex min-h-11 items-center self-start px-2">

@@ -70,3 +70,50 @@ describe("buildWakeupInput", () => {
     });
   });
 });
+
+describe("platform conditions", () => {
+  const input = (patch: Partial<WakeupDraft>, propertyType?: string) => buildWakeupInput(draft(patch), now, propertyType);
+
+  it("turns each condition choice into the predicate the platform checks", () => {
+    expect(input({ condition: "field", field: "status", fieldTarget: "in_review" })).toMatchObject({
+      input: { kind: "event", mode: "once", condition: { type: "issue_field", field: "status", value: "in_review" }, expires_in_seconds: 604800 },
+    });
+    expect(input({ condition: "field", field: "assignee", assignee: { type: "squad", id: "sq" } })).toMatchObject({
+      input: { condition: { type: "issue_field", field: "assignee", assignee_type: "squad", assignee_id: "sq" } },
+    });
+    expect(input({ condition: "field", field: "label", fieldTarget: "lbl" })).toMatchObject({
+      input: { condition: { type: "issue_field", field: "label", label_id: "lbl" } },
+    });
+    expect(input({ condition: "children", stage: 2 })).toMatchObject({ input: { condition: { type: "children_done", stage: 2 } } });
+    expect(input({ condition: "children", stage: null })).toMatchObject({ input: { condition: { type: "children_done" } } });
+    expect(input({ condition: "pull_request", prEvent: "merged" })).toMatchObject({ input: { condition: { type: "pull_request", event: "merged" } } });
+    expect(input({ condition: "other_issue", otherIssue: { id: "i2", identifier: "MUL-2" }, otherState: "ended" })).toMatchObject({
+      input: { condition: { type: "other_issue", issue_id: "i2", state: "ended" } },
+    });
+    // Conditions never send raw events.
+    const children = input({ condition: "children" });
+    expect("input" in children && children.input.event_types).toBeUndefined();
+  });
+
+  it("types a property value the way the property stores it", () => {
+    const property = (fieldValue: string, type: string) =>
+      input({ condition: "field", field: "property", fieldTarget: "p", fieldValue }, type);
+    expect(property("opt-1", "select")).toMatchObject({ input: { condition: { property_id: "p", value: "opt-1" } } });
+    expect(property("false", "checkbox")).toMatchObject({ input: { condition: { value: false } } });
+    expect(property("3", "number")).toMatchObject({ input: { condition: { value: 3 } } });
+    expect(property("3a", "number")).toMatchObject({ input: { condition: { value: "3a" } } });
+  });
+
+  it("asks for the missing value or issue", () => {
+    expect(input({ condition: "field", field: "status" })).toEqual({ error: "missing_value" });
+    expect(input({ condition: "field", field: "assignee" })).toEqual({ error: "missing_value" });
+    expect(input({ condition: "field", field: "property", fieldTarget: "p", fieldValue: "  " })).toEqual({ error: "missing_value" });
+    expect(input({ condition: "other_issue" })).toEqual({ error: "missing_issue" });
+  });
+
+  it("caps a repeating wait and leaves a single one uncapped", () => {
+    expect(input({ condition: "reply", mode: "continuous", maxFires: 10 })).toMatchObject({ input: { max_fires: 10 } });
+    const once = input({ condition: "reply" });
+    expect("input" in once && once.input.max_fires).toBeUndefined();
+  });
+});
