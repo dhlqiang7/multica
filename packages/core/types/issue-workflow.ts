@@ -67,8 +67,15 @@ export interface IssueWorkflowMappingRequirement {
   suggested_status_key: string;
 }
 
+/** A status some issues are on that both workflows list, so they keep it. */
+export interface IssueWorkflowStatusCount {
+  status_key: string;
+  issue_count: number;
+}
+
 export interface IssueWorkflowMappingPlan {
   required: IssueWorkflowMappingRequirement[];
+  unchanged: IssueWorkflowStatusCount[];
   total_issues: number;
   affected_issues: number;
 }
@@ -83,4 +90,31 @@ export interface SetProjectWorkflowRequest {
 export interface IssueWorkflowDryRunResponse {
   dry_run: true;
   plan: IssueWorkflowMappingPlan;
+}
+
+/** An active run of the agent a handoff takes the issue from. */
+export interface WorkflowHandoffRun {
+  task_id: string;
+  agent_id: string;
+  status: string;
+  started_at: string | null;
+}
+
+/**
+ * What moving an issue to a status would do under its project's workflow
+ * (MUL-7420). `handoff` is false for the Default workflow and for steps that
+ * keep the assignee.
+ */
+export interface WorkflowHandoffPreview {
+  handoff: boolean;
+  workflow_name: string;
+  from_status: string;
+  to_status: string;
+  handler_type: "agent" | "squad" | "member" | null;
+  handler_id: string | null;
+  previous_assignee_type: string | null;
+  previous_assignee_id: string | null;
+  previous_runs: WorkflowHandoffRun[];
+  /** The brief the handler's run receives; empty for a member handler. */
+  brief: string;
 }

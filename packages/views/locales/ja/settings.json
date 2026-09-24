@@ -87,7 +87,10 @@
     "pr_auto_complete_description": "関連する PR がすべてマージされ、そのうち 1 つがクローズキーワードでタスクを指定していると、タスクは「完了」になります。今後マージされる PR にのみ適用されます。",
     "pr_auto_complete_example": "キーワードは PR のタイトルか説明に書きます。例:",
     "pr_auto_complete_example_title": "Closes MUL-123",
-    "pr_auto_complete_badge": "PR のマージで自動設定"
+    "pr_auto_complete_badge": "PR のマージで自動設定",
+    "builtin_badge": "組み込み",
+    "workflow_usage_other": "{{count}} 件のワークフローで使用中",
+    "workflow_usage_none": "ワークフローで未使用"
   },
   "quick_actions": {
     "title": "クイックアクション",

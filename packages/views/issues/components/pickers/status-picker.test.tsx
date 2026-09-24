@@ -30,6 +30,10 @@ vi.mock("@multica/core/issue-workflows", async (importOriginal) => ({
   useProjectWithWorkflow: () => ({ project: null, workflow: projectWorkflow }),
 }));
 
+vi.mock("../../../common/actor-avatar", () => ({
+  ActorAvatar: ({ actorId }: { actorId: string }) => <span data-testid={`avatar-${actorId}`} />,
+}));
+
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({ getActorName: (_type: string, id: string) => (id === "agent-1" ? "Sentinel" : "Unknown") }),
 }));
@@ -206,8 +210,13 @@ describe("StatusPicker in a project that uses a workflow", () => {
     const rows = Array.from(document.querySelectorAll("button[data-picker-item]")).map(
       (el) => el.textContent?.trim(),
     );
-    expect(rows).toEqual(["Todo", "QAHands off to SentinelSentinel", "Done"]);
+    // The current step shows its check; the others say who entering them
+    // hands the issue to, or that the assignee stays.
+    expect(rows).toEqual(["Todo", "QAHands off to SentinelSentinel", "DoneKeep assignee"]);
     expect(screen.getByText("Hands off to Sentinel").className).toContain("sr-only");
+    expect(screen.getByTestId("avatar-agent-1")).toBeTruthy();
+    expect(screen.getByText("Delivery")).toBeTruthy();
+    expect(screen.getByText(/Only this issue’s workflow statuses are shown/)).toBeTruthy();
     expect(screen.queryByText("In Review")).toBeNull();
   });
 

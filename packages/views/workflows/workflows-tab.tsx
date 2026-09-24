@@ -1,47 +1,38 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react";
-import { toast } from "sonner";
-import { clientErrorMessage } from "@multica/core/api";
+import { ChevronRight, Plus } from "lucide-react";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
-import { useDeleteIssueWorkflow, useIssueWorkflows } from "@multica/core/issue-workflows";
+import { statusColumnKeys } from "@multica/core/issues";
+import { handoffStepCount, useIssueWorkflows } from "@multica/core/issue-workflows";
 import { projectListOptions } from "@multica/core/projects/queries";
 import { memberListOptions } from "@multica/core/workspace/queries";
-import type { IssueWorkflow } from "@multica/core/types";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@multica/ui/components/ui/alert-dialog";
+import type { IssueWorkflow, IssueWorkflowStep, Project } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@multica/ui/components/ui/dropdown-menu";
+import { ActorAvatar } from "../common/actor-avatar";
 import { StatusIcon } from "../issues/components/status-icon";
+import { useStatusLabel } from "../issues/utils/status-label";
+import { useNavigation } from "../navigation";
+import { IssueStatusesTab } from "../settings/components/issue-statuses-tab";
 import { SettingsTab } from "../settings/components/settings-layout";
 import { useT } from "../i18n";
-import { useStepHandlerLabel } from "./step-handler";
-import { WorkflowEditorDialog } from "./workflow-editor-dialog";
+import { WorkflowEditorPage } from "./workflow-editor-page";
+
+const WORKFLOW_PARAM = "workflow";
+const DUPLICATE_PARAM = "from";
+const NEW_WORKFLOW = "new";
 
 /**
- * Settings → Workflows (MUL-7420). The Default workflow heads the list: it is
- * what every project without a workflow uses, and it cannot be edited here —
- * its statuses are the library itself.
+ * Settings → Workflows (MUL-7420): the workflows, then the status library
+ * they all draw from. `?workflow=<id>` (or `new`) opens the editor in place,
+ * so a workflow is a linkable page rather than a dialog.
  */
 export function WorkflowsTab() {
   const { t } = useT("issues");
+  const navigation = useNavigation();
   const wsId = useWorkspaceId();
   const { workflows, isLoaded } = useIssueWorkflows(wsId);
   const { data: projects = [] } = useQuery(projectListOptions(wsId));
@@ -49,176 +40,217 @@ export function WorkflowsTab() {
   const currentUser = useAuthStore((s) => s.user);
   const role = members.find((m) => m.user_id === currentUser?.id)?.role;
   const isAdmin = role === "owner" || role === "admin";
-  const deleteWorkflow = useDeleteIssueWorkflow();
 
-  const [editorOpen, setEditorOpen] = useState(false);
-  const [editing, setEditing] = useState<IssueWorkflow | null>(null);
-  const [deleting, setDeleting] = useState<IssueWorkflow | null>(null);
-
-  const defaultProjectCount = projects.filter((p) => !p.workflow_id).length;
-
-  const openEditor = (workflow: IssueWorkflow | null) => {
-    setEditing(workflow);
-    setEditorOpen(true);
-  };
-
-  const confirmDelete = async () => {
-    if (!deleting) return;
-    try {
-      await deleteWorkflow.mutateAsync(deleting.id);
-      toast.success(t(($) => $.workflows.settings.deleted));
-      setDeleting(null);
-    } catch (err) {
-      toast.error(clientErrorMessage(err) ?? t(($) => $.workflows.settings.delete_error));
+  const open = navigation.searchParams.get(WORKFLOW_PARAM);
+  const duplicateOf = navigation.searchParams.get(DUPLICATE_PARAM);
+  const hrefWith = (params: Record<string, string | null>) => {
+    const next = new URLSearchParams(navigation.searchParams);
+    for (const [key, value] of Object.entries(params)) {
+      if (value === null) next.delete(key);
+      else next.set(key, value);
     }
+    return `${navigation.pathname}?${next.toString()}`;
   };
+  const openEditor = (id: string) => navigation.push(hrefWith({ [WORKFLOW_PARAM]: id, [DUPLICATE_PARAM]: null }));
+  const backToList = () => navigation.push(hrefWith({ [WORKFLOW_PARAM]: null, [DUPLICATE_PARAM]: null }));
+
+  const usage = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const workflow of workflows) {
+      for (const step of workflow.steps) counts.set(step.status_key, (counts.get(step.status_key) ?? 0) + 1);
+    }
+    return (key: string) => counts.get(key) ?? 0;
+  }, [workflows]);
+
+  if (open) {
+    const seed = open === NEW_WORKFLOW && duplicateOf ? workflows.find((w) => w.id === duplicateOf) ?? null : null;
+    return (
+      <WorkflowEditorPage
+        key={`${open}:${duplicateOf ?? ""}`}
+        workflowId={open === NEW_WORKFLOW ? null : open}
+        seed={seed}
+        canEdit={isAdmin}
+        onBack={backToList}
+        onOpen={(target) =>
+          "id" in target
+            ? navigation.replace(hrefWith({ [WORKFLOW_PARAM]: target.id, [DUPLICATE_PARAM]: null }))
+            : navigation.push(hrefWith({ [WORKFLOW_PARAM]: NEW_WORKFLOW, [DUPLICATE_PARAM]: target.duplicateOf }))
+        }
+      />
+    );
+  }
+
+  const defaultProjects = projects.filter((p) => !p.workflow_id);
 
   return (
-    <SettingsTab
-      title={t(($) => $.workflows.settings.title)}
-      description={t(($) => $.workflows.settings.description)}
-    >
-      <div className="space-y-3">
-        {isAdmin && (
-          <div className="flex justify-end">
-            <Button className="gap-2" onClick={() => openEditor(null)}>
-              <Plus className="size-4" />
+    <SettingsTab title={t(($) => $.workflows.settings.title)} description={t(($) => $.workflows.settings.description)}>
+      <section className="space-y-4">
+        <header className="flex items-end gap-4">
+          <div className="min-w-0 flex-1">
+            <h3 className="text-title-sm font-semibold">{t(($) => $.workflows.settings.section_title)}</h3>
+            <p className="mt-1 text-caption text-muted-foreground">{t(($) => $.workflows.settings.section_description)}</p>
+          </div>
+          {isAdmin && (
+            <Button variant="outline" className="gap-1.5" onClick={() => openEditor(NEW_WORKFLOW)}>
+              <Plus className="size-3.5" />
               {t(($) => $.workflows.settings.new)}
             </Button>
-          </div>
-        )}
+          )}
+        </header>
         <div className="divide-y divide-surface-border overflow-hidden rounded-lg border border-surface-border bg-card">
-          <div className="flex items-center gap-4 px-4 py-3">
-            <div className="min-w-0 flex-1">
-              <div className="text-body font-medium">{t(($) => $.workflows.default_name)}</div>
-              <div className="text-caption text-muted-foreground">{t(($) => $.workflows.default_summary)}</div>
-            </div>
-            <span className="shrink-0 text-caption text-muted-foreground">
-              {t(($) => $.workflows.settings.default_projects)} · {defaultProjectCount}
-            </span>
-            <span className="w-7 shrink-0" />
-          </div>
+          <DefaultWorkflowRow projects={defaultProjects} />
           {isLoaded &&
             workflows.map((workflow) => (
               <WorkflowRow
                 key={workflow.id}
                 workflow={workflow}
-                isAdmin={isAdmin}
-                onEdit={() => openEditor(workflow)}
-                onDelete={() => setDeleting(workflow)}
+                projects={projects.filter((p) => workflow.project_ids.includes(p.id))}
+                onOpen={() => openEditor(workflow.id)}
               />
             ))}
         </div>
-      </div>
+      </section>
 
-      <WorkflowEditorDialog open={editorOpen} onOpenChange={setEditorOpen} workflow={editing} />
-
-      <AlertDialog open={deleting !== null} onOpenChange={(open) => !open && setDeleting(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {t(($) => $.workflows.settings.delete_title, { name: deleting?.name ?? "" })}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {deleting && deleting.project_ids.length > 0
-                ? t(($) => $.workflows.settings.delete_in_use)
-                : t(($) => $.workflows.settings.delete_description)}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t(($) => $.workflows.editor.cancel)}</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              disabled={!deleting || deleting.project_ids.length > 0 || deleteWorkflow.isPending}
-              onClick={() => void confirmDelete()}
-            >
-              {t(($) => $.workflows.settings.delete)}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <IssueStatusesTab
+        embedded={{
+          title: t(($) => $.workflows.settings.statuses_title),
+          description: t(($) => $.workflows.settings.statuses_description),
+        }}
+        workflowUsage={usage}
+      />
     </SettingsTab>
+  );
+}
+
+function RowMeta({ statuses, handoffs }: { statuses: number; handoffs: number }) {
+  const { t } = useT("issues");
+  return (
+    <span className="text-caption text-muted-foreground">
+      {t(($) => $.workflows.settings.statuses, { count: statuses })}
+      {" · "}
+      {handoffs > 0
+        ? t(($) => $.workflows.settings.handoffs, { count: handoffs })
+        : t(($) => $.workflows.settings.no_handoffs)}
+    </span>
+  );
+}
+
+/** The implicit workflow of every project without one: the library itself. */
+function DefaultWorkflowRow({ projects }: { projects: Project[] }) {
+  const { t } = useT("issues");
+  const wsId = useWorkspaceId();
+  const catalog = useIssueStatuses(wsId);
+  const keys = statusColumnKeys(catalog);
+  const separator = t(($) => $.workflows.list_separator);
+  return (
+    <button
+      type="button"
+      className="flex w-full items-center gap-4 px-4 py-3.5 text-left transition-colors hover:bg-accent/40"
+      onClick={() => document.getElementById("status-library")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+    >
+      <div className="min-w-0 flex-1 space-y-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-body font-semibold">{t(($) => $.workflows.default_name)}</span>
+          <span className="rounded bg-muted px-1.5 py-0.5 text-micro text-muted-foreground">
+            {t(($) => $.workflows.settings.workspace_default)}
+          </span>
+          <RowMeta statuses={keys.length} handoffs={0} />
+        </div>
+        <StepChain steps={keys.map((key) => ({ status_key: key, handler: { type: "none" }, instructions: "" }))} />
+        <p className="text-caption text-muted-foreground">
+          {projects.length > 0
+            ? t(($) => $.workflows.settings.used_by_default, {
+                count: projects.length,
+                names: projects.map((p) => p.title).join(separator),
+              })
+            : t(($) => $.workflows.settings.used_by_default_none)}
+        </p>
+      </div>
+      <ChevronRight aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+    </button>
   );
 }
 
 function WorkflowRow({
   workflow,
-  isAdmin,
-  onEdit,
-  onDelete,
+  projects,
+  onOpen,
 }: {
   workflow: IssueWorkflow;
-  isAdmin: boolean;
-  onEdit: () => void;
-  onDelete: () => void;
+  projects: Project[];
+  onOpen: () => void;
 }) {
+  const { t } = useT("issues");
+  const separator = t(($) => $.workflows.list_separator);
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="flex w-full items-center gap-4 px-4 py-3.5 text-left transition-colors hover:bg-accent/40"
+    >
+      <div className="min-w-0 flex-1 space-y-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-body font-semibold">{workflow.name}</span>
+          <RowMeta statuses={workflow.steps.length} handoffs={handoffStepCount(workflow)} />
+          {workflow.description && (
+            <span className="truncate text-caption text-muted-foreground">· {workflow.description}</span>
+          )}
+        </div>
+        <StepChain steps={workflow.steps} />
+        <p className="text-caption text-muted-foreground">
+          {projects.length > 0
+            ? t(($) => $.workflows.settings.used_by, {
+                count: projects.length,
+                names: projects.map((p) => p.title).join(separator),
+              })
+            : t(($) => $.workflows.settings.no_projects)}
+        </p>
+      </div>
+      <ChevronRight aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+    </button>
+  );
+}
+
+/**
+ * A workflow's steps as a chain of chips, each with its handler. Side states
+ * (the closed category and `blocked`) are left out so the chain reads as the
+ * path an issue takes.
+ */
+function StepChain({ steps }: { steps: IssueWorkflowStep[] }) {
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
   const catalog = useIssueStatuses(wsId);
-  // Project-relative handlers render generically in the settings list; the
-  // project board names the concrete lead.
-  const handlerLabel = useStepHandlerLabel(null);
-  const chain = useMemo(() => workflow.steps, [workflow.steps]);
-
+  const labelOf = useStatusLabel(wsId);
+  const path = steps.filter((s) => s.status_key !== "blocked" && catalog.categoryOf(s.status_key) !== "closed");
   return (
-    <div className="flex items-start gap-4 px-4 py-3">
-      <div className="min-w-0 flex-1 space-y-1.5">
-        <div className="flex items-baseline gap-2">
-          <span className="truncate text-body font-medium">{workflow.name}</span>
-          {workflow.description && (
-            <span className="truncate text-caption text-muted-foreground">{workflow.description}</span>
-          )}
-        </div>
-        <div className="flex flex-wrap items-center gap-x-1 gap-y-1">
-          {chain.map((step, index) => {
-            const handler = handlerLabel(step);
-            return (
-              <Fragment key={step.status_key}>
-                {index > 0 && <ChevronRight aria-hidden className="size-3 text-muted-foreground" />}
-                <span className="inline-flex items-center gap-1 rounded-md bg-muted/50 px-1.5 py-0.5 text-caption">
-                  <StatusIcon
-                    status={step.status_key}
-                    category={catalog.categoryOf(step.status_key)}
-                    color={catalog.colorOf(step.status_key)}
-                    icon={catalog.iconOf(step.status_key)}
-                    className="h-3 w-3"
-                  />
-                  {catalog.labelOf(step.status_key)}
-                  {handler && <span className="text-muted-foreground">· {handler}</span>}
-                </span>
-              </Fragment>
-            );
-          })}
-        </div>
-      </div>
-      <span className="shrink-0 pt-0.5 text-caption text-muted-foreground">
-        {workflow.project_ids.length > 0
-          ? t(($) => $.workflows.settings.projects, { count: workflow.project_ids.length })
-          : t(($) => $.workflows.settings.no_projects)}
-      </span>
-      {isAdmin ? (
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <Button variant="ghost" size="icon-xs" aria-label={workflow.name}>
-                <MoreHorizontal className="size-4" />
-              </Button>
-            }
-          />
-          <DropdownMenuContent align="end" className="w-40">
-            <DropdownMenuItem onClick={onEdit}>
-              <Pencil className="size-3.5" />
-              {t(($) => $.workflows.settings.edit)}
-            </DropdownMenuItem>
-            <DropdownMenuItem variant="destructive" onClick={onDelete}>
-              <Trash2 className="size-3.5" />
-              {t(($) => $.workflows.settings.delete)}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      ) : (
-        <span className="w-7 shrink-0" />
-      )}
+    <div className="flex flex-wrap items-center gap-x-1 gap-y-1.5">
+      {path.map((step, index) => {
+        const { type, id } = step.handler;
+        return (
+          <Fragment key={step.status_key}>
+            {index > 0 && <ChevronRight aria-hidden className="size-3 text-muted-foreground" />}
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-surface-border px-2 py-0.5 text-caption">
+              <StatusIcon
+                status={step.status_key}
+                category={catalog.categoryOf(step.status_key)}
+                color={catalog.colorOf(step.status_key)}
+                icon={catalog.iconOf(step.status_key)}
+                className="h-3 w-3"
+              />
+              {labelOf(step.status_key)}
+              {(type === "agent" || type === "squad" || type === "member") && id && (
+                <ActorAvatar actorType={type} actorId={id} size="xs" profileLink={false} />
+              )}
+              {type === "project_lead" && (
+                <span className="text-muted-foreground">· {t(($) => $.workflows.handler.project_lead)}</span>
+              )}
+              {type === "creator" && (
+                <span className="text-muted-foreground">· {t(($) => $.workflows.handler.creator)}</span>
+              )}
+            </span>
+          </Fragment>
+        );
+      })}
     </div>
   );
 }

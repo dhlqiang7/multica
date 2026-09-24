@@ -87,7 +87,10 @@
     "pr_auto_complete_description": "任务关联的 PR 全部合并，且至少一个 PR 写了关闭语句时，状态改为「已完成」。只对之后合并的 PR 生效。",
     "pr_auto_complete_example": "关闭语句写在 PR 标题或正文里，例如",
     "pr_auto_complete_example_title": "Closes MUL-123",
-    "pr_auto_complete_badge": "PR 全部合并时自动进入"
+    "pr_auto_complete_badge": "PR 全部合并时自动进入",
+    "builtin_badge": "内置",
+    "workflow_usage_other": "{{count}} 个工作流在用",
+    "workflow_usage_none": "未被工作流使用"
   },
   "quick_actions": {
     "title": "快捷操作",

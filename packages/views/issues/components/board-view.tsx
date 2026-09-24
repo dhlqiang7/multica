@@ -33,9 +33,13 @@ import { BoardColumn, BOARD_CARD_WIDTH, type BoardColumnGroup } from "./board-co
 import { BoardWorkflowContext, type BoardWorkflowContextValue } from "./board-workflow-context";
 import {
   resolveProjectWorkflow,
+  stepHandsOff,
   useIssueWorkflows,
   workflowAllowsStatus,
+  workflowStep,
 } from "@multica/core/issue-workflows";
+import { WorkflowHandoffConfirmDialog } from "../../workflows/handoff-confirm-dialog";
+import { stepHandlerActor, useStepHandlerLabel } from "../../workflows/step-handler";
 import { projectListOptions } from "@multica/core/projects/queries";
 import { BoardCardContent } from "./board-card";
 import { HiddenColumnsPanel, HiddenColumnRow } from "./hidden-columns-panel";
@@ -69,6 +73,7 @@ import {
   propertyGroupId,
   projectGroupId,
 } from "../utils/drag-utils";
+import { useStatusLabel } from "../utils/status-label";
 
 function isStatusGroup(
   group: BoardColumnGroup,
@@ -280,6 +285,7 @@ function BoardViewImpl({
   const sortBy = useViewStore((s) => s.sortBy);
   const boardWsId = useWorkspaceId();
   const catalog = useIssueStatuses(boardWsId);
+  const labelOf = useStatusLabel(boardWsId);
   const { data: workspaceProperties = [] } = useQuery(propertyListOptions(boardWsId));
   const groupingPropertyId = propertyIdFromViewKey(storeGrouping);
   const groupingProperty = groupingPropertyId
@@ -477,6 +483,12 @@ function BoardViewImpl({
 
   // --- Drag state ---
   const [activeIssue, setActiveIssue] = useState<Issue | null>(null);
+  const [pendingHandoff, setPendingHandoff] = useState<{
+    issue: Issue;
+    status: IssueStatus;
+    updates: ReturnType<typeof getMoveUpdates>;
+    anchors: ReturnType<typeof getMoveAnchors>;
+  } | null>(null);
 
   // Project workflows (MUL-7420): a card can only move to a status its
   // project's workflow lists, and a project board names each step's handler.
@@ -494,6 +506,10 @@ function BoardViewImpl({
   );
   const scopeProject = projectId ? workspaceProjects?.find((p) => p.id === projectId) ?? null : null;
   const activeWorkflow = workflowOfIssue(activeIssue);
+  const activeProject = activeIssue?.project_id
+    ? workspaceProjects?.find((p) => p.id === activeIssue.project_id) ?? null
+    : null;
+  const activeHandlerLabel = useStepHandlerLabel(activeProject);
   const boardWorkflow = useMemo<BoardWorkflowContextValue>(
     () => ({
       scopeWorkflow: resolveProjectWorkflow(workflows, scopeProject),
@@ -502,8 +518,16 @@ function BoardViewImpl({
         activeWorkflow && activeIssue?.status !== status && !workflowAllowsStatus(activeWorkflow, status)
           ? t(($) => $.workflows.not_in_workflow, { name: activeWorkflow.name })
           : null,
+      dropHint: (status) => {
+        if (!activeWorkflow || activeIssue?.status === status) return null;
+        const step = workflowStep(activeWorkflow, status);
+        const name = activeHandlerLabel(step);
+        if (!step || !name) return null;
+        const actor = stepHandlerActor(step, activeProject);
+        return { name, actor, run: actor ? actor.type !== "member" : step.handler.type === "creator" };
+      },
     }),
-    [activeIssue?.status, activeWorkflow, scopeProject, t, workflows],
+    [activeHandlerLabel, activeIssue?.status, activeProject, activeWorkflow, scopeProject, t, workflows],
   );
   // Shared drag/settle primitive: owns the local column mirror, the
   // dragging/settling locks, the post-move animation-frame throttle, and the
@@ -658,12 +682,23 @@ function BoardViewImpl({
         resetColumns();
         toast.info(
           t(($) => $.workflows.drop_blocked, {
-            status: catalog.labelOf(finalGroup.status),
+            status: labelOf(finalGroup.status),
             name: movingWorkflow.name,
           }),
         );
         return;
       }
+
+      // Entering a step that hands the issue off is confirmed first: who it
+      // goes to, the previous agent's run, and the brief. The card returns to
+      // its column until then. (MUL-7420)
+      const handoffTarget =
+        finalGroup.status &&
+        movingWorkflow &&
+        map.get(activeId)?.status !== finalGroup.status &&
+        stepHandsOff(workflowStep(movingWorkflow, finalGroup.status))
+          ? finalGroup.status
+          : null;
 
       if (sortBy !== "position") {
         // Cross-column: only update group (status/assignee), keep original position.
@@ -675,6 +710,19 @@ function BoardViewImpl({
               id: "issue-manual-reorder-hint",
             });
           }
+          return;
+        }
+        if (handoffTarget) {
+          resetColumns();
+          setPendingHandoff({
+            issue: currentIssue,
+            status: handoffTarget,
+            updates: getMoveUpdates(finalGroup, currentIssue.position, currentIssue),
+            anchors: getMoveAnchors(
+              insertIdByPosition((cols[overCol] ?? []).filter((id) => id !== activeId), activeId, currentIssue.position, map),
+              activeId,
+            ),
+          });
           return;
         }
         // Optimistically move the card into the target column *now*. Without
@@ -718,6 +766,17 @@ function BoardViewImpl({
         return;
       }
 
+      if (handoffTarget && currentIssue) {
+        resetColumns();
+        setPendingHandoff({
+          issue: currentIssue,
+          status: handoffTarget,
+          updates: getMoveUpdates(finalGroup, newPosition, currentIssue),
+          anchors: getMoveAnchors(finalIds, activeId),
+        });
+        return;
+      }
+
       // beginSettle() holds the lock and returns the onSettled callback that
       // releases it and resyncs local columns from the cache: a no-op on
       // success (onSuccess already patched the moved card in place), the revert
@@ -733,7 +792,7 @@ function BoardViewImpl({
       );
       applyPropertyGroupValue(finalGroup, activeId);
     },
-    [groupedIssues, groups, grouping, groupingOptionIds, onMoveIssue, groupIds, groupMap, sortBy, beginSettle, columnsRef, isDraggingRef, setColumns, applyPropertyGroupValue, catalog, t, workflowOfIssue],
+    [groupedIssues, groups, grouping, groupingOptionIds, onMoveIssue, groupIds, groupMap, sortBy, beginSettle, columnsRef, isDraggingRef, setColumns, applyPropertyGroupValue, catalog, labelOf, t, workflowOfIssue],
   );
 
   // An aborted drag (pointercancel, window resize, tab hide, Escape) fires
@@ -859,6 +918,25 @@ function BoardViewImpl({
         ) : null}
       </DragOverlay>
     </DndContext>
+    <WorkflowHandoffConfirmDialog
+      issue={pendingHandoff?.issue ?? null}
+      toStatus={pendingHandoff?.status ?? ""}
+      onCancel={() => setPendingHandoff(null)}
+      onConfirm={({ stopPreviousRuns }) => {
+        const pending = pendingHandoff;
+        setPendingHandoff(null);
+        if (!pending) return;
+        onMoveIssue(
+          pending.issue.id,
+          {
+            ...pending.updates,
+            ...pending.anchors,
+            ...(stopPreviousRuns ? { stop_previous_assignee_runs: true } : {}),
+          },
+          beginSettle(),
+        );
+      }}
+    />
     </BoardWorkflowContext.Provider>
   );
 }

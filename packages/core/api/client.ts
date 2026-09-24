@@ -133,6 +133,7 @@ import type {
   IssueWorkflowDryRunResponse,
   ListIssueWorkflowsResponse,
   SetProjectWorkflowRequest,
+  WorkflowHandoffPreview,
   IssueLabelsResponse,
   LabelResourceType,
   ResourceLabelsResponse,
@@ -410,6 +411,9 @@ import {
   EMPTY_LIST_ISSUE_WORKFLOWS_RESPONSE,
   EMPTY_ISSUE_WORKFLOW,
   EMPTY_ISSUE_WORKFLOW_DRY_RUN,
+  WorkflowHandoffPreviewSchema,
+  EMPTY_WORKFLOW_HANDOFF_PREVIEW,
+  IssueWorkflowBriefPreviewSchema,
   IssuePropertySchema,
   ListPropertiesResponseSchema,
   IssuePropertiesResponseSchema,
@@ -4068,6 +4072,32 @@ export class ApiClient {
 
   async deleteIssueWorkflow(id: string): Promise<void> {
     await this.fetch(`/api/issue-workflows/${id}`, { method: "DELETE" });
+  }
+
+  /** Renders the brief a step's handler would receive, from an unsaved workflow. */
+  async previewIssueWorkflowBrief(data: IssueWorkflowWriteRequest & { status_key: string }): Promise<string> {
+    const raw = await this.fetch<unknown>(`/api/issue-workflows/preview-brief`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    const parsed = parseWithFallback(raw, IssueWorkflowBriefPreviewSchema, { brief: "" }, {
+      endpoint: "POST /api/issue-workflows/preview-brief",
+    });
+    return parsed.brief;
+  }
+
+  /**
+   * What moving an issue to `status` would do under its project's workflow:
+   * who it goes to, the current agent's active runs, and the brief. Writes
+   * nothing; a status outside the workflow answers 400.
+   */
+  async previewWorkflowHandoff(issueId: string, status: string): Promise<WorkflowHandoffPreview> {
+    const raw = await this.fetch<unknown>(
+      `/api/issues/${issueId}/workflow-handoff?status=${encodeURIComponent(status)}`,
+    );
+    return parseWithFallback(raw, WorkflowHandoffPreviewSchema, EMPTY_WORKFLOW_HANDOFF_PREVIEW, {
+      endpoint: "GET /api/issues/{id}/workflow-handoff",
+    });
   }
 
   /** Switches a project's workflow; issues on unlisted statuses need a mapping. */

@@ -87,7 +87,10 @@
     "pr_auto_complete_description": "연결된 PR이 모두 병합되고 그중 하나가 닫기 키워드로 태스크를 지정하면 태스크가 완료로 바뀝니다. 앞으로 병합되는 PR에만 적용됩니다.",
     "pr_auto_complete_example": "키워드는 PR 제목이나 설명에 씁니다. 예:",
     "pr_auto_complete_example_title": "Closes MUL-123",
-    "pr_auto_complete_badge": "PR 병합 시 자동 설정"
+    "pr_auto_complete_badge": "PR 병합 시 자동 설정",
+    "builtin_badge": "기본 제공",
+    "workflow_usage_other": "워크플로 {{count}}개에서 사용 중",
+    "workflow_usage_none": "사용하는 워크플로 없음"
   },
   "quick_actions": {
     "title": "퀵 액션",

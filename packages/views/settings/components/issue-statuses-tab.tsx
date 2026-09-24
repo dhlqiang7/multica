@@ -140,7 +140,18 @@ const EMPTY_DRAFT: StatusDraft = {
   icon: "",
 };
 
-export function IssueStatusesTab() {
+/**
+ * The status library. Rendered as its own settings tab, or `embedded` under
+ * Settings → Workflows (MUL-7420), where each row also says how many
+ * workflows use the status.
+ */
+export function IssueStatusesTab({
+  embedded,
+  workflowUsage,
+}: {
+  embedded?: { title: string; description: string };
+  workflowUsage?: (statusKey: string) => number;
+} = {}) {
   const { t } = useT("settings");
   const wsId = useWorkspaceId();
 
@@ -188,12 +199,11 @@ export function IssueStatusesTab() {
     setInspectionOpen(true);
   };
 
-  return (
-    <SettingsTab
-      title={t(($) => $.issue_statuses.title)}
-    >
+  const body = (
+    <>
       <div className="space-y-4">
-        {isAdmin && (
+        {/* Embedded under Workflows, the section description already covers reordering. */}
+        {isAdmin && !embedded && (
           <p className="text-caption text-muted-foreground">{t(($) => $.issue_statuses.reorder_hint)}</p>
         )}
         {/* Offered only once the workspace has something archived. A permanently
@@ -222,6 +232,7 @@ export function IssueStatusesTab() {
                 entries={group.entries}
                 canManage={isAdmin}
                 prAutoComplete={prAutoComplete}
+                workflowUsage={workflowUsage}
                 onCreate={() => setCreateCategory(group.category)}
                 onEdit={(entry) => entry.is_system ? setShowBuiltInNotice(true) : setEditing(entry)}
                 onArchive={(entry) => {
@@ -269,7 +280,19 @@ export function IssueStatusesTab() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </SettingsTab>
+    </>
+  );
+
+  return embedded ? (
+    <section id="status-library" className="space-y-4">
+      <header>
+        <h3 className="text-title-sm font-semibold">{embedded.title}</h3>
+        <p className="mt-1 max-w-3xl text-caption leading-5 text-muted-foreground">{embedded.description}</p>
+      </header>
+      {body}
+    </section>
+  ) : (
+    <SettingsTab title={t(($) => $.issue_statuses.title)}>{body}</SettingsTab>
   );
 }
 
@@ -278,6 +301,7 @@ function CategorySection({
   entries,
   canManage,
   prAutoComplete,
+  workflowUsage,
   onCreate,
   onEdit,
   onArchive,
@@ -288,6 +312,7 @@ function CategorySection({
   canManage: boolean;
   /** Badge the built-in Done row: PR auto-complete writes that status. */
   prAutoComplete: boolean;
+  workflowUsage?: (statusKey: string) => number;
   onCreate: () => void;
   onEdit: (status: IssueStatusEntry) => void;
   onArchive: (status: IssueStatusEntry) => void;
@@ -395,6 +420,7 @@ function CategorySection({
                     ? t(($) => $.issue_statuses.built_in_descriptions[entry.key as BuiltInIssueStatus])
                     : entry.description}
                   canManage={canManage}
+                  workflowUsage={workflowUsage?.(entry.key)}
                   canReorder={canReorder && !entry.archived_at}
                   isReordering={reorder.isPending}
                   onEdit={() => onEdit(entry)}
@@ -422,6 +448,7 @@ function StatusRow({
   label,
   description,
   canManage,
+  workflowUsage,
   canReorder,
   isReordering,
   onEdit,
@@ -435,6 +462,8 @@ function StatusRow({
   label: string;
   description: string;
   canManage: boolean;
+  /** How many workflows list this status; undefined outside Workflows. */
+  workflowUsage?: number;
   canReorder: boolean;
   isReordering: boolean;
   onEdit: () => void;
@@ -482,6 +511,14 @@ function StatusRow({
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate text-body font-medium">{label}</span>
+          {workflowUsage !== undefined && entry.is_system && (
+            <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-micro text-muted-foreground">
+              {t(($) => $.issue_statuses.builtin_badge)}
+            </span>
+          )}
+          {workflowUsage !== undefined && (
+            <span className="shrink-0 font-mono text-caption text-muted-foreground">{entry.key}</span>
+          )}
           {autoCompleteBadge && (
             <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-info/10 px-1.5 py-0.5 text-micro font-medium text-info">
               <Zap className="size-3" aria-hidden="true" />
@@ -505,6 +542,13 @@ function StatusRow({
           <p className="truncate text-caption text-muted-foreground">{description}</p>
         )}
       </div>
+      {workflowUsage !== undefined && !archived && (
+        <span className="shrink-0 text-caption text-muted-foreground">
+          {workflowUsage > 0
+            ? t(($) => $.issue_statuses.workflow_usage, { count: workflowUsage })
+            : t(($) => $.issue_statuses.workflow_usage_none)}
+        </span>
+      )}
       {archived && <StatusIssuesButton variant="outline" onClick={onViewIssues} />}
       {canManage && !archived && (
         <DropdownMenu>

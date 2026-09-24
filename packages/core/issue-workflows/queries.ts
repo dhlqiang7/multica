@@ -13,7 +13,22 @@ import type { IssueWorkflow, IssueWorkflowStep, Project } from "../types";
 export const issueWorkflowKeys = {
   all: (wsId: string) => ["issue-workflows", wsId] as const,
   list: (wsId: string) => [...issueWorkflowKeys.all(wsId), "list"] as const,
+  handoffPreview: (wsId: string, issueId: string, status: string) =>
+    [...issueWorkflowKeys.all(wsId), "handoff-preview", issueId, status] as const,
 };
+
+/**
+ * What moving an issue to `status` would do. Short-lived: the answer depends
+ * on the issue's assignee and runs, which change under it.
+ */
+export function workflowHandoffPreviewOptions(wsId: string, issueId: string, status: string) {
+  return queryOptions({
+    queryKey: issueWorkflowKeys.handoffPreview(wsId, issueId, status),
+    queryFn: () => api.previewWorkflowHandoff(issueId, status),
+    staleTime: 0,
+    gcTime: 30_000,
+  });
+}
 
 export function issueWorkflowListOptions(wsId: string) {
   return queryOptions({
@@ -55,4 +70,9 @@ export function workflowAllowsStatus(
 ): boolean {
   if (!workflow) return true;
   return workflow.steps.some((s) => s.status_key === statusKey);
+}
+
+/** Steps whose entry reassigns the issue. */
+export function handoffStepCount(workflow: IssueWorkflow): number {
+  return workflow.steps.filter((s) => s.handler.type !== "none").length;
 }

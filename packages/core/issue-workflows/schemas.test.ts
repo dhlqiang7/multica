@@ -7,6 +7,8 @@ import {
   IssueWorkflowDryRunResponseSchema,
   IssueWorkflowSchema,
   ListIssueWorkflowsResponseSchema,
+  WorkflowHandoffPreviewSchema,
+  EMPTY_WORKFLOW_HANDOFF_PREVIEW,
 } from "../api/schemas";
 
 const baseWorkflow = {
@@ -72,5 +74,33 @@ describe("workflow schemas (MUL-7420)", () => {
       { endpoint: "POST /api/projects/{id}/workflow (dry run)" },
     );
     expect(parsed).toEqual(EMPTY_ISSUE_WORKFLOW_DRY_RUN);
+  });
+
+  it("parses a handoff preview and degrades an unknown handler type", () => {
+    const parsed = WorkflowHandoffPreviewSchema.parse({
+      handoff: true,
+      workflow_name: "Delivery",
+      from_status: "implement",
+      to_status: "code_review",
+      handler_type: "agent",
+      handler_id: "agent-2",
+      previous_assignee_type: "agent",
+      previous_assignee_id: "agent-1",
+      previous_runs: [{ task_id: "t1", agent_id: "agent-1", status: "running", started_at: "2026-09-24T00:00:00Z" }],
+      brief: "This project's workflow — Delivery",
+    });
+    expect(parsed.handler_type).toBe("agent");
+    expect(parsed.previous_runs).toHaveLength(1);
+    expect(WorkflowHandoffPreviewSchema.parse({ handoff: true, handler_type: "robot" }).handler_type).toBeNull();
+  });
+
+  it("treats a malformed handoff preview as no handoff", () => {
+    const parsed = parseWithFallback(
+      { handoff: "yes", previous_runs: 3 },
+      WorkflowHandoffPreviewSchema,
+      EMPTY_WORKFLOW_HANDOFF_PREVIEW,
+      { endpoint: "GET /api/issues/{id}/workflow-handoff" },
+    );
+    expect(parsed).toEqual(EMPTY_WORKFLOW_HANDOFF_PREVIEW);
   });
 });

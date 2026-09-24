@@ -20,6 +20,9 @@ export type {
   IssueWorkflowMappingPlan,
   IssueWorkflowDryRunResponse,
   SetProjectWorkflowRequest,
+  IssueWorkflowStatusCount,
+  WorkflowHandoffPreview,
+  WorkflowHandoffRun,
 } from "./issue-workflow";
 export type {
   Agent,

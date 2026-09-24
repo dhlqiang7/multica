@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { normalizeIssueStatusCategory } from "../issues/config/status";
 import type {
+  WorkflowHandoffPreview,
   IssueWorkflow,
   IssueWorkflowDryRunResponse,
   IssueWorkflowHandlerType,
@@ -601,18 +602,63 @@ export const IssueWorkflowMappingPlanSchema = z.object({
     issue_count: z.number().default(0),
     suggested_status_key: z.string().default(""),
   }).loose()).default([]),
+  unchanged: z.array(z.object({
+    status_key: z.string(),
+    issue_count: z.number().default(0),
+  }).loose()).default([]),
   total_issues: z.number().default(0),
   affected_issues: z.number().default(0),
 }).loose();
 
 export const IssueWorkflowDryRunResponseSchema = z.object({
   dry_run: z.literal(true).default(true),
-  plan: IssueWorkflowMappingPlanSchema.default({ required: [], total_issues: 0, affected_issues: 0 }),
+  plan: IssueWorkflowMappingPlanSchema.default({ required: [], unchanged: [], total_issues: 0, affected_issues: 0 }),
 }).loose();
 
 export const EMPTY_ISSUE_WORKFLOW_DRY_RUN: IssueWorkflowDryRunResponse = {
   dry_run: true,
-  plan: { required: [], total_issues: 0, affected_issues: 0 },
+  plan: { required: [], unchanged: [], total_issues: 0, affected_issues: 0 },
+};
+
+export const IssueWorkflowBriefPreviewSchema = z.object({
+  brief: z.string().default(""),
+}).loose();
+
+const HANDOFF_HANDLER_TYPES = new Set(["agent", "squad", "member"]);
+
+export const WorkflowHandoffPreviewSchema = z.object({
+  handoff: z.boolean().default(false),
+  workflow_name: z.string().default(""),
+  from_status: z.string().default(""),
+  to_status: z.string().default(""),
+  handler_type: z.string().optional().transform((value): WorkflowHandoffPreview["handler_type"] =>
+    value && HANDOFF_HANDLER_TYPES.has(value) ? (value as "agent" | "squad" | "member") : null,
+  ),
+  handler_id: z.string().nullable().optional().transform((value) => value || null),
+  previous_assignee_type: z.string().nullable().default(null),
+  previous_assignee_id: z.string().nullable().default(null),
+  previous_runs: z.array(z.object({
+    task_id: z.string(),
+    agent_id: z.string(),
+    status: z.string().default(""),
+    started_at: z.string().nullable().default(null),
+  }).loose()).default([]),
+  brief: z.string().default(""),
+}).loose();
+
+// A preview the client cannot read says "no handoff": the write path still
+// applies the workflow, it only loses the confirmation.
+export const EMPTY_WORKFLOW_HANDOFF_PREVIEW: WorkflowHandoffPreview = {
+  handoff: false,
+  workflow_name: "",
+  from_status: "",
+  to_status: "",
+  handler_type: null,
+  handler_id: null,
+  previous_assignee_type: null,
+  previous_assignee_id: null,
+  previous_runs: [],
+  brief: "",
 };
 
 export const ResourceLabelsResponseSchema = z.object({

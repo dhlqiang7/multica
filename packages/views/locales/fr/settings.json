@@ -87,7 +87,11 @@
     "pr_auto_complete_description": "Une tâche passe à Terminé dès que toutes ses PR liées sont fusionnées et que l’une d’elles la ferme par un mot-clé. S’applique aux PR fusionnées à partir de maintenant.",
     "pr_auto_complete_example": "Écrivez le mot-clé dans le titre ou la description de la PR, par ex.",
     "pr_auto_complete_example_title": "Closes MUL-123",
-    "pr_auto_complete_badge": "Définie à la fusion des PR"
+    "pr_auto_complete_badge": "Définie à la fusion des PR",
+    "builtin_badge": "Intégré",
+    "workflow_usage_one": "{{count}} workflow l’utilise",
+    "workflow_usage_other": "{{count}} workflows l’utilisent",
+    "workflow_usage_none": "Dans aucun workflow"
   },
   "quick_actions": {
     "title": "Actions rapides",
