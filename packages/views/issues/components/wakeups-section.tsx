@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Bell, Clock3, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import {
+  issueSystemWakeupsOptions,
   issueWakeupsOptions,
   useDisableIssueWakeup,
   useEnableIssueWakeup,
@@ -20,6 +21,8 @@ import {
 } from "@multica/ui/components/ui/popover";
 import { WakeupInstructionEditor } from "./wakeup-instruction-editor";
 import { WakeupControl } from "./wakeup-control";
+import { WakeupCreate } from "./wakeup-create";
+import { SystemWakeupRow } from "./system-wakeup-row";
 import { TranscriptButton } from "../../common/task-transcript";
 import { useViewingTimezone } from "../../common/use-viewing-timezone";
 import { useT } from "../../i18n";
@@ -68,25 +71,18 @@ function WakeupRow({
             />
           }
         >
-          <span className="flex min-h-8 min-w-0 items-center gap-2 pl-2 pr-1">
+          <span className="flex min-h-8 min-w-0 items-start gap-2 py-1 pl-2 pr-1">
             <Icon
-              className="size-3.5 shrink-0 text-muted-foreground"
+              className="mt-px size-3.5 shrink-0 text-muted-foreground"
               aria-hidden="true"
             />
-            <span className="truncate font-medium">
+            <span className="line-clamp-2 min-w-0 break-words font-medium">
               {text.trigger(wakeup)}
             </span>
           </span>
           <span className="col-span-2 min-w-0 break-words pl-7.5 pr-2">
             <span className="block text-muted-foreground">
-              {t(($) => $.wakeups.wake_agent, { agent: wakeup.agent_name })} ·{" "}
-              {wakeup.kind === "event" || wakeup.kind === "at"
-                ? text.frequency(wakeup)
-                : text.state(wakeup, closed)}
-              {!wakeup.enabled &&
-                (wakeup.kind === "event" || wakeup.kind === "at") && (
-                  <> · {text.state(wakeup, closed)}</>
-                )}
+              {text.summary(wakeup, closed)}
             </span>
             {status && (
               <span className="block text-muted-foreground">
@@ -125,6 +121,16 @@ function WakeupRow({
             {t(($) => $.wakeups.scope_title)}:{" "}
             {t(($) => $.wakeups.scope_current)}
           </p>
+          {wakeup.created_by_name && (
+            <p className="break-words text-caption text-muted-foreground">
+              {t(($) => $.wakeups.source_title)}: {text.source(wakeup)}
+            </p>
+          )}
+          {wakeup.expires_at && (
+            <p className="break-words text-caption text-muted-foreground">
+              {t(($) => $.wakeups.expiry_title)}: {text.expiry(wakeup)}
+            </p>
+          )}
           <div className="flex items-center justify-between gap-2">
             <p className="text-caption font-medium">{t(($) => $.wakeups.instruction_title)}</p>
             <WakeupInstructionEditor workspaceId={workspaceId} issueId={wakeup.issue_id} wakeupId={wakeup.id} />
@@ -212,9 +218,12 @@ function WakeupRow({
 export function WakeupsSection({
   issueId,
   closed = false,
+  defaultAgentId,
 }: {
   issueId: string;
   closed?: boolean;
+  /** Preselected target for a new wakeup: the issue's agent assignee. */
+  defaultAgentId?: string;
 }) {
   const { t } = useT("issues");
   const workspaceId = useCurrentWorkspace()?.id ?? "";
@@ -226,10 +235,12 @@ export function WakeupsSection({
     refetch,
   } = useQuery(issueWakeupsOptions(workspaceId, issueId));
   const { data: tasks = [] } = useQuery(issueTasksOptions(issueId));
+  const { data: systemRules = [] } = useQuery(issueSystemWakeupsOptions(workspaceId, issueId));
   const text = useWakeupText();
   const disable = useDisableIssueWakeup(workspaceId, issueId);
   const enable = useEnableIssueWakeup(workspaceId, issueId);
-  if (!data.length && !isError) return null;
+  // Open issues always show the section so people can add a wakeup.
+  if (closed && !data.length && !isError) return null;
   const current = data.filter((w) => isCurrentWakeup(w, wakeupRun(w, tasks)));
   const history = data.filter((w) => !isCurrentWakeup(w, wakeupRun(w, tasks)));
   const row = (wakeup: IssueWakeup) => (
@@ -263,21 +274,26 @@ export function WakeupsSection({
   );
   return (
     <section>
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-        className="mb-1 flex min-h-9 w-full items-center gap-1 rounded-md px-2 py-1 text-caption font-medium hover:bg-accent/70 focus-visible:outline-2 focus-visible:outline-ring"
-      >
-        {t(($) => $.wakeups.title)}{" "}
-        <span className="text-muted-foreground tabular-nums">
-          {current.length}
-        </span>
-        <ChevronRight
-          className={`size-3 text-muted-foreground ${open ? "rotate-90" : ""}`}
-          aria-hidden="true"
-        />
-      </button>
+      <div className="mb-1 flex items-center gap-1">
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+          className="flex min-h-9 flex-1 items-center gap-1 rounded-md px-2 py-1 text-caption font-medium hover:bg-accent/70 focus-visible:outline-2 focus-visible:outline-ring"
+        >
+          {t(($) => $.wakeups.title)}{" "}
+          <span className="text-muted-foreground tabular-nums">
+            {current.length + systemRules.length}
+          </span>
+          <ChevronRight
+            className={`size-3 text-muted-foreground ${open ? "rotate-90" : ""}`}
+            aria-hidden="true"
+          />
+        </button>
+        {!closed && (
+          <WakeupCreate workspaceId={workspaceId} issueId={issueId} defaultAgentId={defaultAgentId} />
+        )}
+      </div>
       {open && (
         <div>
           {isError && (
@@ -294,6 +310,10 @@ export function WakeupsSection({
               {t(($) => $.wakeups.closed_hint)}
             </p>
           )}
+          {!closed &&
+            systemRules.map((rule) => (
+              <SystemWakeupRow key={rule.rule} rule={rule} workspaceId={workspaceId} issueId={issueId} />
+            ))}
           {current.map(row)}
           {history.length > 0 && (
             <>

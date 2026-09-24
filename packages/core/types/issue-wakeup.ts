@@ -23,6 +23,54 @@ export interface IssueWakeup {
   last_error: string | null;
   filter_agent_name?: string | null;
   last_task_status?: string | null;
+  /** When the rule ends if nothing triggered it first. */
+  expires_at?: string | null;
+  /** Set for relative waits: re-enabling restarts the wait from now. */
+  expiry_seconds?: number | null;
+  on_timeout?: "wake" | "end" | null;
+  /** The deadline, not a trigger or a person, ended the rule. */
+  timed_out_at?: string | null;
+  /** True when an agent run created the rule on behalf of created_by_name. */
+  created_by_agent?: boolean;
+  created_by_name?: string | null;
+  source_agent_id?: string | null;
+  source_agent_name?: string | null;
+}
+
+/** Body accepted by POST /api/issues/:id/wakeups. */
+export interface IssueWakeupInput {
+  agent_id: string;
+  instruction: string;
+  kind: IssueWakeup["kind"];
+  mode?: IssueWakeup["mode"];
+  event_types?: string[];
+  filter_agent_id?: string;
+  filter_actor_type?: "member" | "agent";
+  filter_actor_id?: string;
+  at?: string;
+  interval_seconds?: number;
+  cron_expression?: string;
+  timezone?: string;
+  expires_at?: string;
+  expires_in_seconds?: number;
+  on_timeout?: "wake" | "end";
+}
+
+/**
+ * A platform-defined wakeup on one issue. `child_done` wakes the parent's
+ * assignee when a stage of its sub-issues finishes.
+ */
+export interface SystemWakeup {
+  rule: "child_done";
+  enabled: boolean;
+  instruction: string;
+  staged: boolean;
+  stage: number | null;
+  total: number;
+  remaining: number;
+  waiting: string[];
+  target: { type: "agent" | "squad"; id: string; name: string } | null;
+  blocked: "" | "backlog" | "member_assignee" | "no_assignee";
 }
 
 export type WakeupPreview = Pick<

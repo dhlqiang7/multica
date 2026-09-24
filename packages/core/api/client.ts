@@ -1,6 +1,6 @@
-import type { IssueWakeup, IssueWakeupSummaryRow } from "../types/issue-wakeup";
+import type { IssueWakeup, IssueWakeupInput, IssueWakeupSummaryRow, SystemWakeup } from "../types/issue-wakeup";
 import type { WorkspaceWakeupPage, WorkspaceWakeupFilters } from "../types/issue-wakeup";
-import { WorkspaceWakeupPageSchema, IssueWakeupSchema, IssueWakeupSummaryRowSchema } from "./schemas";
+import { WorkspaceWakeupPageSchema, IssueWakeupSchema, IssueWakeupSummaryRowSchema, SystemWakeupSchema } from "./schemas";
 import type { InboxFilters } from "../inbox/filter-store";
 import type { ArchivedInboxPage, ArchivedInboxFacets } from "../types/inbox";
 import { configStore } from "../config";
@@ -1280,6 +1280,21 @@ export class ApiClient {
 
   async editIssueWakeupInstruction(issueId: string, wakeupId: string, input: { instruction: string; expected_instruction: string; revision: number }): Promise<void> {
     await this.fetch(`/api/issues/${encodeURIComponent(issueId)}/wakeups/${encodeURIComponent(wakeupId)}/instruction`, { method: "PATCH", body: JSON.stringify(input) });
+  }
+
+  async createIssueWakeup(issueId: string, input: IssueWakeupInput): Promise<void> {
+    await this.fetch(`/api/issues/${encodeURIComponent(issueId)}/wakeups`, { method: "POST", body: JSON.stringify(input) });
+  }
+
+  async listIssueSystemWakeups(issueId: string): Promise<SystemWakeup[]> {
+    const raw = await this.fetch<unknown>(`/api/issues/${encodeURIComponent(issueId)}/system-wakeups`);
+    const parsed = parseWithFallback<SystemWakeup[] | null>(raw, SystemWakeupSchema.array(), null, { endpoint: "GET /api/issues/:id/system-wakeups" });
+    if (!parsed) throw new Error("Could not load system wakeups");
+    return parsed;
+  }
+
+  async updateIssueSystemWakeup(issueId: string, rule: SystemWakeup["rule"], input: { enabled: boolean; instruction: string }): Promise<void> {
+    await this.fetch(`/api/issues/${encodeURIComponent(issueId)}/system-wakeups/${encodeURIComponent(rule)}`, { method: "PUT", body: JSON.stringify(input) });
   }
 
   async disableIssueWakeup(issueId: string, wakeupId: string): Promise<void> {

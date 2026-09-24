@@ -3531,6 +3531,18 @@ export const IssueWakeupSchema = z.object({
   filter_actor_name: z.string().nullable().optional(),
   revision: z.number().int().positive().optional(),
   filter_agent_name: z.string().nullable().optional(), last_task_status: z.string().nullable().optional(),
+  expires_at: z.string().nullish(), expiry_seconds: z.number().nullish(),
+  on_timeout: z.enum(["wake", "end"]).nullish().catch(null), timed_out_at: z.string().nullish(),
+  created_by_agent: z.boolean().optional(), created_by_name: z.string().nullish(),
+  source_agent_id: z.string().nullish(), source_agent_name: z.string().nullish(),
+});
+
+export const SystemWakeupSchema = z.object({
+  rule: z.literal("child_done"), enabled: z.boolean(), instruction: z.string().default(""),
+  staged: z.boolean(), stage: z.number().int().nullable(), total: z.number().int().nonnegative(),
+  remaining: z.number().int().nonnegative(), waiting: z.array(z.string()).default([]),
+  target: z.object({ type: z.enum(["agent", "squad"]), id: z.string(), name: z.string() }).nullable(),
+  blocked: z.enum(["", "backlog", "member_assignee", "no_assignee"]).catch(""),
 });
 
 export const IssueWakeupSummaryRowSchema = IssueWakeupSchema.pick({

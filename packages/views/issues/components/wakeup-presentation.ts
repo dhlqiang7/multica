@@ -17,6 +17,7 @@ export function wakeupState(
 ) {
   if (closed) return "issue_closed";
   if (w.enabled) return w.kind === "event" ? "waiting" : "scheduled";
+  if (w.timed_out_at) return "timed_out";
   if (w.disabled_at) return "disabled";
   if (w.last_task_id) return "triggered";
   if (w.kind === "at" && w.next_fire_at && Date.parse(w.next_fire_at) <= now)
@@ -233,6 +234,57 @@ export function useWakeupText() {
       ? t(($) => $.wakeups.next_at, { time: time(w.next_fire_at) })
       : t(($) => $.wakeups.rule_states[key]);
   };
+  // Time left before an unanswered wait ends; null once it has passed.
+  const remaining = (value: string, now = Date.now()) => {
+    const ms = Date.parse(value) - now;
+    if (!Number.isFinite(ms) || ms <= 0) return null;
+    const minute = 60_000, hour = 60 * minute, day = 24 * hour;
+    const days = Math.floor(ms / day);
+    const hours = Math.floor((ms % day) / hour);
+    if (days >= 3) return t(($) => $.wakeups.remaining_days, { days });
+    if (days >= 1) return t(($) => $.wakeups.remaining_days_hours, { days, hours });
+    if (hours >= 1) return t(($) => $.wakeups.remaining_hours, { hours });
+    return t(($) => $.wakeups.remaining_minutes, { minutes: Math.max(1, Math.ceil(ms / minute)) });
+  };
+  const date = (value: string) =>
+    new Intl.DateTimeFormat(locale, { timeZone: viewTZ, month: "short", day: "numeric" }).format(new Date(value));
+  // A relative wait reads as time left; a recurring schedule's end date reads
+  // as "until <date>".
+  const ending = (w: Omit<IssueWakeup, "instruction">) => {
+    if (!w.enabled || !w.expires_at) return null;
+    return w.kind === "event" || w.expiry_seconds
+      ? remaining(w.expires_at)
+      : t(($) => $.wakeups.until_date, { date: date(w.expires_at) });
+  };
+  // The row's second line: who is woken, how often, and when the rule ends.
+  const summary = (w: Omit<IssueWakeup, "instruction">, closed = false) =>
+    [
+      t(($) => $.wakeups.wake_agent, { agent: w.agent_name }),
+      w.kind === "event" || w.kind === "at" ? frequency(w) : state(w, closed),
+      !w.enabled && (w.kind === "event" || w.kind === "at") ? state(w, closed) : null,
+      closed ? null : ending(w),
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  const source = (w: Omit<IssueWakeup, "instruction">) => {
+    const name = w.created_by_name ?? "";
+    return w.created_by_agent
+      ? t(($) => $.wakeups.source_agent, {
+          agent: w.source_agent_name || t(($) => $.wakeups.source_agent_unknown),
+          name,
+        })
+      : t(($) => $.wakeups.source_member, { name });
+  };
+  const expiry = (w: Omit<IssueWakeup, "instruction">) => {
+    if (!w.expires_at) return null;
+    const at = time(w.expires_at);
+    if (w.timed_out_at) return t(($) => $.wakeups.expiry_timed_out, { time: time(w.timed_out_at) });
+    const then =
+      w.on_timeout === "wake"
+        ? t(($) => $.wakeups.timeout_then_wake, { agent: w.agent_name })
+        : t(($) => $.wakeups.timeout_then_end);
+    return `${t(($) => $.wakeups.expiry_at, { time: at })} · ${then}`;
+  };
   const error = (err: unknown, fallback: string) => {
     const status =
       err && typeof err === "object" && "status" in err
@@ -244,5 +296,5 @@ export function useWakeupText() {
         ? t(($) => $.wakeups.conflict_error)
         : fallback;
   };
-  return { eventName, eventCondition, actorName, trigger, schedule, frequency, runState, state, error };
+  return { eventName, eventCondition, actorName, trigger, schedule, frequency, runState, state, error, remaining, ending, summary, source, expiry };
 }

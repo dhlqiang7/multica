@@ -3,7 +3,7 @@ import {
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
-import type { WorkspaceWakeupFilters } from "../types";
+import type { IssueWakeupInput, SystemWakeup, WorkspaceWakeupFilters } from "../types";
 import { api } from "../api";
 import { issueKeys } from "./queries";
 
@@ -22,6 +22,40 @@ export function issueWakeupsOptions(workspaceId: string, issueId: string) {
     queryFn: () => api.listIssueWakeups(issueId),
     enabled: !!workspaceId && !!issueId,
     refetchInterval: 10_000,
+  });
+}
+
+export function issueSystemWakeupsOptions(workspaceId: string, issueId: string) {
+  return queryOptions({
+    queryKey: ["issue-system-wakeups", workspaceId, issueId],
+    queryFn: () => api.listIssueSystemWakeups(issueId),
+    enabled: !!workspaceId && !!issueId,
+    refetchInterval: 10_000,
+  });
+}
+
+export function useCreateIssueWakeup(workspaceId: string, issueId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: IssueWakeupInput) => api.createIssueWakeup(issueId, input),
+    onSettled: async () => {
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ["workspace-wakeups", workspaceId] }),
+        client.invalidateQueries({ queryKey: issueWakeupsOptions(workspaceId, issueId).queryKey }),
+        client.invalidateQueries({ queryKey: workspaceWakeupSummariesOptions(workspaceId).queryKey }),
+        client.invalidateQueries({ queryKey: issueKeys.tasks(issueId) }),
+      ]);
+    },
+  });
+}
+
+export function useUpdateIssueSystemWakeup(workspaceId: string, issueId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ rule, ...input }: { rule: SystemWakeup["rule"]; enabled: boolean; instruction: string }) =>
+      api.updateIssueSystemWakeup(issueId, rule, input),
+    onSettled: () =>
+      client.invalidateQueries({ queryKey: issueSystemWakeupsOptions(workspaceId, issueId).queryKey }),
   });
 }
 

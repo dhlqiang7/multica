@@ -154,3 +154,36 @@ it("edits instructions through the scoped endpoint and propagates conflicts", as
   fetch.mockResolvedValue(new Response('{"error":"conflict"}', { status: 409 }));
   await expect(client.editIssueWakeupInstruction("issue", "wake", input)).rejects.toThrow();
 });
+
+it("parses rule deadlines and the creator, tolerating an unknown timeout action", async () => {
+  const row = {
+    id: "wake", issue_id: "issue", agent_id: "agent", agent_name: "Emacs", instruction: "x",
+    kind: "event", mode: "once", event_types: ["comment.created"], filter_agent_id: null,
+    filter_task_id: null, interval_seconds: null, cron_expression: null, timezone: "UTC",
+    next_fire_at: null, enabled: true, disabled_at: null, last_task_id: null, last_error: null,
+    expires_at: "2026-09-27T08:00:00Z", expiry_seconds: 259200, on_timeout: "escalate",
+    timed_out_at: null, created_by_agent: true, created_by_name: "Jiayuan",
+    source_agent_id: "agent", source_agent_name: "Emacs",
+  };
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify([row]))));
+  const [parsed] = await client.listIssueWakeups("issue");
+  expect(parsed).toMatchObject({ expires_at: row.expires_at, expiry_seconds: 259200, on_timeout: null, created_by_agent: true, source_agent_name: "Emacs" });
+});
+it("creates a wakeup with its full configuration", async () => {
+  const fetcher = vi.fn().mockResolvedValue(new Response("{}", { status: 201 }));
+  vi.stubGlobal("fetch", fetcher);
+  await client.createIssueWakeup("issue", { agent_id: "agent", instruction: "x", kind: "event", event_types: ["comment.created"], expires_in_seconds: 3600, on_timeout: "wake" });
+  const [url, init] = fetcher.mock.calls[0]!;
+  expect(String(url)).toContain("/api/issues/issue/wakeups");
+  expect(init.method).toBe("POST");
+  expect(JSON.parse(init.body)).toMatchObject({ expires_in_seconds: 3600, on_timeout: "wake" });
+});
+it("rejects malformed system wakeups instead of hiding the rule", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify([{ rule: "child_done", enabled: "yes" }]))));
+  await expect(client.listIssueSystemWakeups("issue")).rejects.toThrow("Could not load system wakeups");
+});
+it("parses system wakeups and falls back on an unknown blocked reason", async () => {
+  const rule = { rule: "child_done", enabled: true, instruction: "", staged: true, stage: 1, total: 2, remaining: 1, waiting: ["MUL-2"], target: { type: "agent", id: "a", name: "Emacs" }, blocked: "paused" };
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify([rule]))));
+  await expect(client.listIssueSystemWakeups("issue")).resolves.toEqual([{ ...rule, blocked: "" }]);
+});

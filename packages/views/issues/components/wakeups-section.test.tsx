@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
-import type { IssueWakeup } from "@multica/core/types";
+import type { IssueWakeup, SystemWakeup } from "@multica/core/types";
 import { renderWithI18n } from "../../test/i18n";
 import { WakeupsSection } from "./wakeups-section";
 const mutate = vi.fn();
 const enable = vi.fn();
+const updateSystem = vi.fn();
+let systemRules: SystemWakeup[] = [];
 let pending = false;
 let wakeup: IssueWakeup;
 let status = "queued";
@@ -15,12 +17,22 @@ vi.mock("@multica/core/paths", () => ({
 vi.mock("@multica/core/issues", () => ({
   issueWakeupsOptions: () => ({ queryKey: ["wakeups"] }),
   issueTasksOptions: () => ({ queryKey: ["tasks"] }),
+  issueSystemWakeupsOptions: () => ({ queryKey: ["system"] }),
   useDisableIssueWakeup: () => ({ mutate, isPending: false }),
   useEnableIssueWakeup: () => ({ mutateAsync: enable, isPending: pending }),
+  useCreateIssueWakeup: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useUpdateIssueSystemWakeup: () => ({ mutateAsync: updateSystem, isPending: false }),
 }));
 vi.mock("@tanstack/react-query", () => ({
   useQuery: ({ queryKey }: { queryKey: string[] }) => ({
-    data: queryKey[0] === "wakeups" ? [wakeup] : [{ id: "task", status }],
+    data:
+      queryKey[0] === "wakeups"
+        ? [wakeup]
+        : queryKey[0] === "system"
+          ? systemRules
+          : queryKey[0] === "tasks"
+            ? [{ id: "task", status }]
+            : [],
   }),
 }));
 vi.mock("../../common/use-viewing-timezone", () => ({
@@ -34,6 +46,8 @@ vi.mock("./wakeup-instruction-editor", () => ({
 }));
 beforeEach(() => {
   mutate.mockReset();
+  updateSystem.mockReset().mockResolvedValue(undefined);
+  systemRules = [];
   enable.mockReset().mockResolvedValue(undefined);
   pending = false;
   status = "queued";
@@ -300,4 +314,83 @@ it("keeps a redacted actor restriction visible without exposing an ID", () => {
   wakeup.filter_actor_name = null;
   renderWithI18n(<WakeupsSection issueId="issue" />);
   expect(screen.getByRole("button", { name: /triggered by Selected agent/ })).toBeInTheDocument();
+});
+
+describe("v2 sidebar", () => {
+  it("offers a new-wakeup button on open issues only", () => {
+    const { unmount } = renderWithI18n(<WakeupsSection issueId="issue" />);
+    expect(screen.getByRole("button", { name: "New wakeup" })).toBeVisible();
+    unmount();
+    renderWithI18n(<WakeupsSection issueId="issue" closed />);
+    expect(screen.queryByRole("button", { name: "New wakeup" })).toBeNull();
+  });
+
+  it("describes a wait's deadline in the row and who created it in details", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-24T08:00:00Z"));
+    try {
+      Object.assign(wakeup, {
+        kind: "event", mode: "once", event_types: ["comment.created"], interval_seconds: null,
+        filter_actor_type: "member", filter_actor_id: "u", filter_actor_name: "Jiayuan",
+        expires_at: "2026-09-27T06:00:00Z", expiry_seconds: 259200, on_timeout: "wake",
+        created_by_agent: true, created_by_name: "Jiayuan", source_agent_name: "Emacs",
+      });
+      renderWithI18n(<WakeupsSection issueId="issue" />, { locale: "zh-Hans" });
+      const row = screen.getByRole("button", { name: /由 Jiayuan 触发/ });
+      expect(row).toHaveTextContent("唤醒 Emacs · 仅触发一次 · 还剩 2 天 22 小时");
+      fireEvent.click(row);
+      await waitFor(() => expect(screen.getByText(/来源/)).toHaveTextContent("Emacs 创建（代表 Jiayuan）"));
+      expect(screen.getByText(/有效期/)).toHaveTextContent("超时后唤醒 Emacs 处理");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("marks a rule ended by its deadline as timed out", () => {
+    Object.assign(wakeup, {
+      kind: "event", mode: "once", event_types: ["comment.created"], enabled: false,
+      expires_at: "2020-01-01T00:00:00Z", timed_out_at: "2020-01-01T00:00:30Z",
+    });
+    status = "completed";
+    renderWithI18n(<WakeupsSection issueId="issue" />);
+    fireEvent.click(screen.getByRole("button", { name: "Wakeup history 1" }));
+    expect(screen.getByRole("button", { name: /Wake Emacs/ })).toHaveTextContent("Timed out");
+  });
+
+  it("shows the child-done system rule and turns it off for this issue", async () => {
+    systemRules = [{
+      rule: "child_done", enabled: true, instruction: "", staged: true, stage: 1, total: 2, remaining: 1,
+      waiting: ["MUL-7704"], target: { type: "agent", id: "a", name: "Emacs" }, blocked: "",
+    }];
+    renderWithI18n(<WakeupsSection issueId="issue" />, { locale: "zh-Hans" });
+    const row = screen.getByRole("button", { name: /当第 1 阶段的子任务全部结束时/ });
+    expect(row).toHaveTextContent("系统");
+    expect(row).toHaveTextContent("唤醒负责人 Emacs · 还差 1 个");
+    expect(screen.getByRole("button", { name: /唤醒 2/ })).toBeVisible();
+    fireEvent.click(screen.getAllByRole("switch", { name: "子任务结束时唤醒负责人" })[0]!);
+    await waitFor(() => expect(updateSystem).toHaveBeenCalledWith({ rule: "child_done", enabled: false, instruction: "" }));
+  });
+
+  it("explains why the system rule would not wake anyone", () => {
+    systemRules = [{
+      rule: "child_done", enabled: true, instruction: "", staged: false, stage: null, total: 3, remaining: 2,
+      waiting: [], target: null, blocked: "member_assignee",
+    }];
+    renderWithI18n(<WakeupsSection issueId="issue" />);
+    expect(screen.getByRole("button", { name: /When all sub-issues finish/ })).toHaveTextContent("Assignee is a member; nobody is woken");
+  });
+
+  it("saves a supplementary instruction for the system rule", async () => {
+    systemRules = [{
+      rule: "child_done", enabled: true, instruction: "", staged: false, stage: null, total: 1, remaining: 1,
+      waiting: ["MUL-2"], target: { type: "agent", id: "a", name: "Emacs" }, blocked: "",
+    }];
+    renderWithI18n(<WakeupsSection issueId="issue" />);
+    fireEvent.click(screen.getByRole("button", { name: /When all sub-issues finish/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit extra instruction" }));
+    const input = screen.getByLabelText("Extra instruction");
+    fireEvent.change(input, { target: { value: "Ask Jiayuan first" } });
+    fireEvent.submit(input.closest("form")!);
+    await waitFor(() => expect(updateSystem).toHaveBeenCalledWith({ rule: "child_done", enabled: true, instruction: "Ask Jiayuan first" }));
+  });
 });
