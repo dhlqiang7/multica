@@ -219,8 +219,8 @@ func (q *Queries) ConsumeWakeupReceipts(ctx context.Context, arg ConsumeWakeupRe
 }
 
 const createIssueWakeup = `-- name: CreateIssueWakeup :one
-INSERT INTO issue_wakeup(id,workspace_id,issue_id,agent_id,created_by,source_task_id,parent_comment_id,instruction,kind,mode,event_types,filter_agent_id,filter_task_id,filter_actor_type,filter_actor_id,interval_seconds,cron_expression,timezone,next_fire_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING id, workspace_id, issue_id, agent_id, created_by, source_task_id, parent_comment_id, instruction, kind, mode, event_types, filter_agent_id, filter_task_id, interval_seconds, cron_expression, timezone, next_fire_at, enabled, disabled_at, revision, last_task_id, last_error, created_at, updated_at, filter_actor_type, filter_actor_id
+INSERT INTO issue_wakeup(id,workspace_id,issue_id,agent_id,created_by,source_task_id,parent_comment_id,instruction,kind,mode,event_types,filter_agent_id,filter_task_id,filter_actor_type,filter_actor_id,interval_seconds,cron_expression,timezone,next_fire_at,expires_at,expiry_seconds,on_timeout)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) RETURNING id, workspace_id, issue_id, agent_id, created_by, source_task_id, parent_comment_id, instruction, kind, mode, event_types, filter_agent_id, filter_task_id, interval_seconds, cron_expression, timezone, next_fire_at, enabled, disabled_at, revision, last_task_id, last_error, created_at, updated_at, filter_actor_type, filter_actor_id, expires_at, expiry_seconds, on_timeout, timed_out_at
 `
 
 type CreateIssueWakeupParams struct {
@@ -243,6 +243,9 @@ type CreateIssueWakeupParams struct {
 	CronExpression  pgtype.Text        `json:"cron_expression"`
 	Timezone        string             `json:"timezone"`
 	NextFireAt      pgtype.Timestamptz `json:"next_fire_at"`
+	ExpiresAt       pgtype.Timestamptz `json:"expires_at"`
+	ExpirySeconds   pgtype.Int8        `json:"expiry_seconds"`
+	OnTimeout       pgtype.Text        `json:"on_timeout"`
 }
 
 func (q *Queries) CreateIssueWakeup(ctx context.Context, arg CreateIssueWakeupParams) (IssueWakeup, error) {
@@ -266,6 +269,9 @@ func (q *Queries) CreateIssueWakeup(ctx context.Context, arg CreateIssueWakeupPa
 		arg.CronExpression,
 		arg.Timezone,
 		arg.NextFireAt,
+		arg.ExpiresAt,
+		arg.ExpirySeconds,
+		arg.OnTimeout,
 	)
 	var i IssueWakeup
 	err := row.Scan(
@@ -295,6 +301,10 @@ func (q *Queries) CreateIssueWakeup(ctx context.Context, arg CreateIssueWakeupPa
 		&i.UpdatedAt,
 		&i.FilterActorType,
 		&i.FilterActorID,
+		&i.ExpiresAt,
+		&i.ExpirySeconds,
+		&i.OnTimeout,
+		&i.TimedOutAt,
 	)
 	return i, err
 }
@@ -584,7 +594,7 @@ func (q *Queries) FindPendingWakeupTask(ctx context.Context, wakeupID string) (A
 }
 
 const getIssueWakeup = `-- name: GetIssueWakeup :one
-SELECT id, workspace_id, issue_id, agent_id, created_by, source_task_id, parent_comment_id, instruction, kind, mode, event_types, filter_agent_id, filter_task_id, interval_seconds, cron_expression, timezone, next_fire_at, enabled, disabled_at, revision, last_task_id, last_error, created_at, updated_at, filter_actor_type, filter_actor_id FROM issue_wakeup WHERE id= $1 AND workspace_id= $2
+SELECT id, workspace_id, issue_id, agent_id, created_by, source_task_id, parent_comment_id, instruction, kind, mode, event_types, filter_agent_id, filter_task_id, interval_seconds, cron_expression, timezone, next_fire_at, enabled, disabled_at, revision, last_task_id, last_error, created_at, updated_at, filter_actor_type, filter_actor_id, expires_at, expiry_seconds, on_timeout, timed_out_at FROM issue_wakeup WHERE id= $1 AND workspace_id= $2
 `
 
 type GetIssueWakeupParams struct {
@@ -622,6 +632,10 @@ func (q *Queries) GetIssueWakeup(ctx context.Context, arg GetIssueWakeupParams) 
 		&i.UpdatedAt,
 		&i.FilterActorType,
 		&i.FilterActorID,
+		&i.ExpiresAt,
+		&i.ExpirySeconds,
+		&i.OnTimeout,
+		&i.TimedOutAt,
 	)
 	return i, err
 }
@@ -635,8 +649,14 @@ SELECT w.id,w.workspace_id,w.issue_id,w.agent_id,w.created_by,w.source_task_id,w
  (CASE WHEN EXISTS(SELECT 1 FROM agent_task_queue ft JOIN agent fa ON fa.id=ft.agent_id AND fa.workspace_id=w.workspace_id
   WHERE ft.id=w.filter_task_id AND ft.issue_id=w.issue_id AND fa.id=ANY($1::uuid[])) THEN w.filter_task_id END)::uuid AS filter_task_id,
  w.interval_seconds,w.cron_expression,w.timezone,w.next_fire_at,w.enabled,w.disabled_at,w.revision,
- w.last_task_id,w.last_error,w.created_at,w.updated_at,a.name AS agent_name,source.name AS filter_agent_name,t.status AS last_task_status
+ w.last_task_id,w.last_error,w.created_at,w.updated_at,a.name AS agent_name,source.name AS filter_agent_name,t.status AS last_task_status,
+ w.expires_at,w.expiry_seconds,w.on_timeout,w.timed_out_at,
+ (w.source_task_id IS NOT NULL)::bool AS created_by_agent,creator.name AS created_by_name,
+ (CASE WHEN creator_agent.id IS NOT NULL THEN creator_agent.id END)::uuid AS source_agent_id,creator_agent.name AS source_agent_name
 FROM issue_wakeup w JOIN agent a ON a.id=w.agent_id AND a.workspace_id=w.workspace_id
+LEFT JOIN "user" creator ON creator.id=w.created_by
+LEFT JOIN agent_task_queue creator_task ON creator_task.id=w.source_task_id
+LEFT JOIN agent creator_agent ON creator_agent.id=creator_task.agent_id AND creator_agent.workspace_id=w.workspace_id AND creator_agent.id=ANY($1::uuid[])
 LEFT JOIN agent actor_agent ON w.filter_actor_type='agent' AND actor_agent.id=w.filter_actor_id AND actor_agent.workspace_id=w.workspace_id AND actor_agent.id=ANY($1::uuid[])
 LEFT JOIN member actor_member ON w.filter_actor_type='member' AND actor_member.user_id=w.filter_actor_id AND actor_member.workspace_id=w.workspace_id
 LEFT JOIN "user" actor_user ON actor_user.id=actor_member.user_id
@@ -682,6 +702,14 @@ type ListIssueWakeupsRow struct {
 	AgentName       string             `json:"agent_name"`
 	FilterAgentName pgtype.Text        `json:"filter_agent_name"`
 	LastTaskStatus  pgtype.Text        `json:"last_task_status"`
+	ExpiresAt       pgtype.Timestamptz `json:"expires_at"`
+	ExpirySeconds   pgtype.Int8        `json:"expiry_seconds"`
+	OnTimeout       pgtype.Text        `json:"on_timeout"`
+	TimedOutAt      pgtype.Timestamptz `json:"timed_out_at"`
+	CreatedByAgent  bool               `json:"created_by_agent"`
+	CreatedByName   pgtype.Text        `json:"created_by_name"`
+	SourceAgentID   pgtype.UUID        `json:"source_agent_id"`
+	SourceAgentName pgtype.Text        `json:"source_agent_name"`
 }
 
 func (q *Queries) ListIssueWakeups(ctx context.Context, arg ListIssueWakeupsParams) ([]ListIssueWakeupsRow, error) {
@@ -724,6 +752,14 @@ func (q *Queries) ListIssueWakeups(ctx context.Context, arg ListIssueWakeupsPara
 			&i.AgentName,
 			&i.FilterAgentName,
 			&i.LastTaskStatus,
+			&i.ExpiresAt,
+			&i.ExpirySeconds,
+			&i.OnTimeout,
+			&i.TimedOutAt,
+			&i.CreatedByAgent,
+			&i.CreatedByName,
+			&i.SourceAgentID,
+			&i.SourceAgentName,
 		); err != nil {
 			return nil, err
 		}
@@ -779,9 +815,11 @@ const listReadyWakeups = `-- name: ListReadyWakeups :many
 WITH candidates AS (
  SELECT id FROM issue_wakeup WHERE enabled AND kind<>'event' AND next_fire_at<=now()
  UNION
+ SELECT id FROM issue_wakeup WHERE enabled AND expires_at<=now()
+ UNION
  SELECT wakeup_id FROM issue_wakeup_receipt WHERE processed_at IS NULL
 )
-SELECT w.id, w.workspace_id, w.issue_id, w.agent_id, w.created_by, w.source_task_id, w.parent_comment_id, w.instruction, w.kind, w.mode, w.event_types, w.filter_agent_id, w.filter_task_id, w.interval_seconds, w.cron_expression, w.timezone, w.next_fire_at, w.enabled, w.disabled_at, w.revision, w.last_task_id, w.last_error, w.created_at, w.updated_at, w.filter_actor_type, w.filter_actor_id FROM candidates c JOIN issue_wakeup w ON w.id=c.id
+SELECT w.id, w.workspace_id, w.issue_id, w.agent_id, w.created_by, w.source_task_id, w.parent_comment_id, w.instruction, w.kind, w.mode, w.event_types, w.filter_agent_id, w.filter_task_id, w.interval_seconds, w.cron_expression, w.timezone, w.next_fire_at, w.enabled, w.disabled_at, w.revision, w.last_task_id, w.last_error, w.created_at, w.updated_at, w.filter_actor_type, w.filter_actor_id, w.expires_at, w.expiry_seconds, w.on_timeout, w.timed_out_at FROM candidates c JOIN issue_wakeup w ON w.id=c.id
 ORDER BY w.updated_at,w.id LIMIT 100
 `
 
@@ -821,6 +859,10 @@ func (q *Queries) ListReadyWakeups(ctx context.Context) ([]IssueWakeup, error) {
 			&i.UpdatedAt,
 			&i.FilterActorType,
 			&i.FilterActorID,
+			&i.ExpiresAt,
+			&i.ExpirySeconds,
+			&i.OnTimeout,
+			&i.TimedOutAt,
 		); err != nil {
 			return nil, err
 		}
@@ -925,7 +967,7 @@ func (q *Queries) ListWorkspaceWakeupSummaryRows(ctx context.Context, arg ListWo
 }
 
 const lockIssueWakeup = `-- name: LockIssueWakeup :one
-SELECT id, workspace_id, issue_id, agent_id, created_by, source_task_id, parent_comment_id, instruction, kind, mode, event_types, filter_agent_id, filter_task_id, interval_seconds, cron_expression, timezone, next_fire_at, enabled, disabled_at, revision, last_task_id, last_error, created_at, updated_at, filter_actor_type, filter_actor_id FROM issue_wakeup WHERE id= $1 FOR UPDATE
+SELECT id, workspace_id, issue_id, agent_id, created_by, source_task_id, parent_comment_id, instruction, kind, mode, event_types, filter_agent_id, filter_task_id, interval_seconds, cron_expression, timezone, next_fire_at, enabled, disabled_at, revision, last_task_id, last_error, created_at, updated_at, filter_actor_type, filter_actor_id, expires_at, expiry_seconds, on_timeout, timed_out_at FROM issue_wakeup WHERE id= $1 FOR UPDATE
 `
 
 func (q *Queries) LockIssueWakeup(ctx context.Context, id pgtype.UUID) (IssueWakeup, error) {
@@ -958,6 +1000,10 @@ func (q *Queries) LockIssueWakeup(ctx context.Context, id pgtype.UUID) (IssueWak
 		&i.UpdatedAt,
 		&i.FilterActorType,
 		&i.FilterActorID,
+		&i.ExpiresAt,
+		&i.ExpirySeconds,
+		&i.OnTimeout,
+		&i.TimedOutAt,
 	)
 	return i, err
 }
@@ -1081,7 +1127,7 @@ func (q *Queries) LockWakeupSourceTask(ctx context.Context, arg LockWakeupSource
 }
 
 const locklessWakeup = `-- name: LocklessWakeup :one
-SELECT id, workspace_id, issue_id, agent_id, created_by, source_task_id, parent_comment_id, instruction, kind, mode, event_types, filter_agent_id, filter_task_id, interval_seconds, cron_expression, timezone, next_fire_at, enabled, disabled_at, revision, last_task_id, last_error, created_at, updated_at, filter_actor_type, filter_actor_id FROM issue_wakeup WHERE id= $1
+SELECT id, workspace_id, issue_id, agent_id, created_by, source_task_id, parent_comment_id, instruction, kind, mode, event_types, filter_agent_id, filter_task_id, interval_seconds, cron_expression, timezone, next_fire_at, enabled, disabled_at, revision, last_task_id, last_error, created_at, updated_at, filter_actor_type, filter_actor_id, expires_at, expiry_seconds, on_timeout, timed_out_at FROM issue_wakeup WHERE id= $1
 `
 
 func (q *Queries) LocklessWakeup(ctx context.Context, id pgtype.UUID) (IssueWakeup, error) {
@@ -1114,8 +1160,24 @@ func (q *Queries) LocklessWakeup(ctx context.Context, id pgtype.UUID) (IssueWake
 		&i.UpdatedAt,
 		&i.FilterActorType,
 		&i.FilterActorID,
+		&i.ExpiresAt,
+		&i.ExpirySeconds,
+		&i.OnTimeout,
+		&i.TimedOutAt,
 	)
 	return i, err
+}
+
+const markWakeupTimedOut = `-- name: MarkWakeupTimedOut :exec
+UPDATE issue_wakeup SET enabled=false,next_fire_at=NULL,timed_out_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id= $1
+`
+
+// The deadline ended the rule. disabled_at stays NULL: a timeout run created in
+// the same transaction must remain claimable, and the rule reads as timed out,
+// not as turned off by a person.
+func (q *Queries) MarkWakeupTimedOut(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, markWakeupTimedOut, id)
+	return err
 }
 
 const noteWakeupFailure = `-- name: NoteWakeupFailure :exec

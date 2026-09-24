@@ -36,6 +36,7 @@ func newIssueWakeupCommand() *cobra.Command {
 		c.Flags().String("output", "json", "Output format (json or table)")
 		if action == "create" || action == "update" {
 			c.Long = "Create or replace the complete configuration. Events default to once; every/cron use continuous. Updating explicitly re-enables the configuration. Runs use normal comment delivery."
+			c.Long += " Give waits an end with --expires-in or --expires-at; --on-timeout wake runs the target once if the deadline passes first."
 			c.Long += " For task events, use --task-id for one run or --filter-agent-id for its agent. For comment/issue/reaction/attachment changes, use --filter-actor-type member|agent with --filter-actor-id. To wait for a person to comment, use --event comment.created --filter-actor-type member --filter-actor-id USER_ID. Actor filters identify who made the change, not the original author of an edited comment. Without a source filter, all matching events on this issue can wake the target."
 			c.Flags().String("agent-id", "", "Agent to wake (defaults to authenticated agent)")
 			c.Flags().String("instruction", "", "Instruction for the next run")
@@ -53,6 +54,9 @@ func newIssueWakeupCommand() *cobra.Command {
 			c.Flags().String("every", "", "Fixed interval, e.g. 1h (minimum 1m)")
 			c.Flags().String("cron", "", "Five-field cron expression")
 			c.Flags().String("timezone", "UTC", "IANA timezone for cron")
+			c.Flags().String("expires-in", "", "End the rule after this wait, e.g. 72h; restarts when re-enabled (event, every, cron)")
+			c.Flags().String("expires-at", "", "End the rule at this RFC3339 time (event, every, cron)")
+			c.Flags().String("on-timeout", "", "At the deadline: end (default) or wake (event rules run the target once to handle it)")
 		}
 		wake.AddCommand(c)
 	}
@@ -96,7 +100,7 @@ func runIssueWakeup(cmd *cobra.Command, args []string, action string) error {
 		result = row
 	} else {
 		body := map[string]any{}
-		for flag, key := range map[string]string{"agent-id": "agent_id", "kind": "kind", "mode": "mode", "filter-agent-id": "filter_agent_id", "filter-actor-type": "filter_actor_type", "filter-actor-id": "filter_actor_id", "task-id": "filter_task_id", "parent": "parent_comment_id", "at": "at", "cron": "cron_expression", "timezone": "timezone"} {
+		for flag, key := range map[string]string{"agent-id": "agent_id", "kind": "kind", "mode": "mode", "filter-agent-id": "filter_agent_id", "filter-actor-type": "filter_actor_type", "filter-actor-id": "filter_actor_id", "task-id": "filter_task_id", "parent": "parent_comment_id", "at": "at", "cron": "cron_expression", "timezone": "timezone", "expires-at": "expires_at", "on-timeout": "on_timeout"} {
 			v, _ := cmd.Flags().GetString(flag)
 			if v != "" {
 				body[key] = v
@@ -111,7 +115,7 @@ func runIssueWakeup(cmd *cobra.Command, args []string, action string) error {
 		if len(ev) > 0 {
 			body["event_types"] = ev
 		}
-		for flag, key := range map[string]string{"after": "after_seconds", "every": "interval_seconds"} {
+		for flag, key := range map[string]string{"after": "after_seconds", "every": "interval_seconds", "expires-in": "expires_in_seconds"} {
 			v, _ := cmd.Flags().GetString(flag)
 			if v != "" {
 				d, e := time.ParseDuration(v)

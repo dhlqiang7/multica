@@ -951,6 +951,16 @@ type IssueSubscriber struct {
 	OptOutScope    pgtype.Text        `json:"opt_out_scope"`
 }
 
+type IssueSystemWakeup struct {
+	IssueID     pgtype.UUID        `json:"issue_id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	Rule        string             `json:"rule"`
+	Enabled     bool               `json:"enabled"`
+	Instruction string             `json:"instruction"`
+	UpdatedBy   pgtype.UUID        `json:"updated_by"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
 type IssueToLabel struct {
 	IssueID pgtype.UUID `json:"issue_id"`
 	LabelID pgtype.UUID `json:"label_id"`
@@ -1018,6 +1028,10 @@ type IssueWakeup struct {
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 	FilterActorType pgtype.Text        `json:"filter_actor_type"`
 	FilterActorID   pgtype.UUID        `json:"filter_actor_id"`
+	ExpiresAt       pgtype.Timestamptz `json:"expires_at"`
+	ExpirySeconds   pgtype.Int8        `json:"expiry_seconds"`
+	OnTimeout       pgtype.Text        `json:"on_timeout"`
+	TimedOutAt      pgtype.Timestamptz `json:"timed_out_at"`
 }
 
 type IssueWakeupReceipt struct {

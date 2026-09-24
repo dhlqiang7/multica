@@ -43,6 +43,53 @@ type WakeupInput struct {
 	IntervalSeconds int64      `json:"interval_seconds"`
 	CronExpression  string     `json:"cron_expression"`
 	Timezone        string     `json:"timezone"`
+	// A wakeup ends at an absolute deadline (expires_at) or after a relative
+	// wait (expires_in_seconds) that restarts whenever the rule is re-enabled.
+	// on_timeout is "end" (default) or, for event rules, "wake": run the target
+	// once more to handle the missed deadline.
+	ExpiresAt        *time.Time `json:"expires_at"`
+	ExpiresInSeconds int64      `json:"expires_in_seconds"`
+	OnTimeout        string     `json:"on_timeout"`
+}
+
+const maxWakeupSeconds = 31536000
+
+// Expiry validates and resolves the rule's end. A single-time wakeup ends
+// when it fires, so it takes no deadline. Relative waits are stored as a
+// duration so enabling the rule again restarts the wait from "now".
+func (s *IssueWakeupService) Expiry(in *WakeupInput, now time.Time) (pgtype.Timestamptz, pgtype.Int8, error) {
+	bad := func(msg string) (pgtype.Timestamptz, pgtype.Int8, error) {
+		return pgtype.Timestamptz{}, pgtype.Int8{}, fmt.Errorf("%w: %s", ErrWakeupInput, msg)
+	}
+	hasExpiry := in.ExpiresAt != nil || in.ExpiresInSeconds != 0
+	switch {
+	case in.OnTimeout != "" && in.OnTimeout != "end" && in.OnTimeout != "wake":
+		return bad("on_timeout must be end or wake")
+	case in.Kind == "at" && (hasExpiry || in.OnTimeout != ""):
+		return bad("a single-time wakeup ends when it fires; it takes no deadline")
+	case in.ExpiresAt != nil && in.ExpiresInSeconds != 0:
+		return bad("provide expires_at or expires_in_seconds, not both")
+	case !hasExpiry && in.OnTimeout != "":
+		return bad("on_timeout requires a deadline")
+	case in.OnTimeout == "wake" && in.Kind != "event":
+		return bad("only event wakeups can wake the target on timeout")
+	case !hasExpiry:
+		return pgtype.Timestamptz{}, pgtype.Int8{}, nil
+	}
+	if in.OnTimeout == "" {
+		in.OnTimeout = "end"
+	}
+	if in.ExpiresInSeconds != 0 {
+		if in.ExpiresInSeconds < 60 || in.ExpiresInSeconds > maxWakeupSeconds {
+			return bad("expires_in_seconds must be between 60 and 31536000")
+		}
+		return pgtype.Timestamptz{Time: now.Add(time.Duration(in.ExpiresInSeconds) * time.Second), Valid: true}, pgtype.Int8{Int64: in.ExpiresInSeconds, Valid: true}, nil
+	}
+	at := in.ExpiresAt.UTC()
+	if !at.After(now) || at.Sub(now) > maxWakeupSeconds*time.Second {
+		return bad("expires_at must be in the future and within one year")
+	}
+	return pgtype.Timestamptz{Time: at, Valid: true}, pgtype.Int8{}, nil
 }
 
 type IssueWakeupService struct{ Tasks *TaskService }
@@ -319,7 +366,15 @@ func (s *IssueWakeupService) save(ctx context.Context, issueID, member, source, 
 			}
 			return ""
 		}
-		in = WakeupInput{AgentID: optionalID(old.AgentID), Instruction: old.Instruction, Kind: old.Kind, Mode: old.Mode, EventTypes: old.EventTypes, FilterAgentID: optionalID(old.FilterAgentID), FilterTaskID: optionalID(old.FilterTaskID), FilterActorType: old.FilterActorType.String, FilterActorID: optionalID(old.FilterActorID), ParentCommentID: optionalID(old.ParentCommentID), IntervalSeconds: old.IntervalSeconds.Int64, CronExpression: old.CronExpression.String, Timezone: old.Timezone}
+		in = WakeupInput{AgentID: optionalID(old.AgentID), Instruction: old.Instruction, Kind: old.Kind, Mode: old.Mode, EventTypes: old.EventTypes, FilterAgentID: optionalID(old.FilterAgentID), FilterTaskID: optionalID(old.FilterTaskID), FilterActorType: old.FilterActorType.String, FilterActorID: optionalID(old.FilterActorID), ParentCommentID: optionalID(old.ParentCommentID), IntervalSeconds: old.IntervalSeconds.Int64, CronExpression: old.CronExpression.String, Timezone: old.Timezone, OnTimeout: old.OnTimeout.String}
+		// A relative wait restarts from now; an absolute deadline is kept and
+		// must still be in the future.
+		if old.ExpirySeconds.Valid {
+			in.ExpiresInSeconds = old.ExpirySeconds.Int64
+		} else if old.ExpiresAt.Valid {
+			deadline := old.ExpiresAt.Time
+			in.ExpiresAt = &deadline
+		}
 		if enable.At != nil && old.Kind != "at" {
 			return out, fmt.Errorf("%w: only single-time wakeups accept a new time", ErrWakeupInput)
 		}
@@ -352,6 +407,11 @@ func (s *IssueWakeupService) save(ctx context.Context, issueID, member, source, 
 	if err != nil {
 		return out, err
 	}
+	expiresAt, expirySeconds, err := s.Expiry(&in, now)
+	if err != nil {
+		return out, err
+	}
+	onTimeout := pgtype.Text{String: in.OnTimeout, Valid: in.OnTimeout != ""}
 	agentID, err := wakeupUUID(in.AgentID)
 	if err != nil || !agentID.Valid {
 		return out, fmt.Errorf("%w: agent_id is required", ErrWakeupInput)
@@ -451,9 +511,9 @@ func (s *IssueWakeupService) save(ctx context.Context, issueID, member, source, 
 			return out, fmt.Errorf("%w: run and agent filters disagree", ErrWakeupInput)
 		}
 	}
-	params := db.CreateIssueWakeupParams{ID: dbid.NewV7(), WorkspaceID: issue.WorkspaceID, IssueID: issue.ID, AgentID: agent.ID, CreatedBy: member, SourceTaskID: source, ParentCommentID: parent, Instruction: in.Instruction, Kind: in.Kind, Mode: in.Mode, EventTypes: append([]string{}, in.EventTypes...), FilterAgentID: filterAgent, FilterTaskID: filterTask, FilterActorType: pgtype.Text{String: in.FilterActorType, Valid: in.FilterActorType != ""}, FilterActorID: filterActor, IntervalSeconds: pgtype.Int8{Int64: in.IntervalSeconds, Valid: in.IntervalSeconds > 0}, CronExpression: pgtype.Text{String: in.CronExpression, Valid: in.CronExpression != ""}, Timezone: in.Timezone, NextFireAt: next}
+	params := db.CreateIssueWakeupParams{ID: dbid.NewV7(), WorkspaceID: issue.WorkspaceID, IssueID: issue.ID, AgentID: agent.ID, CreatedBy: member, SourceTaskID: source, ParentCommentID: parent, Instruction: in.Instruction, Kind: in.Kind, Mode: in.Mode, EventTypes: append([]string{}, in.EventTypes...), FilterAgentID: filterAgent, FilterTaskID: filterTask, FilterActorType: pgtype.Text{String: in.FilterActorType, Valid: in.FilterActorType != ""}, FilterActorID: filterActor, IntervalSeconds: pgtype.Int8{Int64: in.IntervalSeconds, Valid: in.IntervalSeconds > 0}, CronExpression: pgtype.Text{String: in.CronExpression, Valid: in.CronExpression != ""}, Timezone: in.Timezone, NextFireAt: next, ExpiresAt: expiresAt, ExpirySeconds: expirySeconds, OnTimeout: onTimeout}
 	if existingID.Valid {
-		_, err = tx.Exec(ctx, `UPDATE issue_wakeup SET agent_id=$2,created_by=$3,source_task_id=$4,parent_comment_id=$5,instruction=$6,kind=$7,mode=$8,event_types=$9,filter_agent_id=$10,filter_task_id=$11,interval_seconds=$12,cron_expression=$13,timezone=$14,next_fire_at=$15,filter_actor_type=$16,filter_actor_id=$17,enabled=true,disabled_at=NULL,revision=revision+1,last_task_id=NULL,last_error=NULL,updated_at=now() WHERE id=$1`, existingID, params.AgentID, member, source, parent, in.Instruction, in.Kind, in.Mode, params.EventTypes, filterAgent, filterTask, params.IntervalSeconds, params.CronExpression, in.Timezone, next, params.FilterActorType, filterActor)
+		_, err = tx.Exec(ctx, `UPDATE issue_wakeup SET agent_id=$2,created_by=$3,source_task_id=$4,parent_comment_id=$5,instruction=$6,kind=$7,mode=$8,event_types=$9,filter_agent_id=$10,filter_task_id=$11,interval_seconds=$12,cron_expression=$13,timezone=$14,next_fire_at=$15,filter_actor_type=$16,filter_actor_id=$17,expires_at=$18,expiry_seconds=$19,on_timeout=$20,timed_out_at=NULL,enabled=true,disabled_at=NULL,revision=revision+1,last_task_id=NULL,last_error=NULL,updated_at=now() WHERE id=$1`, existingID, params.AgentID, member, source, parent, in.Instruction, in.Kind, in.Mode, params.EventTypes, filterAgent, filterTask, params.IntervalSeconds, params.CronExpression, in.Timezone, next, params.FilterActorType, filterActor, expiresAt, expirySeconds, onTimeout)
 		if err == nil {
 			out, err = q.LockIssueWakeup(ctx, existingID)
 		}
@@ -639,7 +699,23 @@ func (s *IssueWakeupService) dispatch(ctx context.Context, prev db.IssueWakeup) 
 		}
 		return tx.Commit(ctx)
 	}
-	if w.Enabled && w.Kind != "event" && next.Valid && !next.Time.After(now) {
+	// Reaching the deadline ends the rule. Inputs captured before it still
+	// dispatch; an event rule may also wake the target once to handle the
+	// missed deadline.
+	timedOut := w.Enabled && w.ExpiresAt.Valid && !w.ExpiresAt.Time.After(now)
+	if timedOut {
+		enabled = false
+		next = pgtype.Timestamptz{}
+		if w.Kind == "event" && w.OnTimeout.String == "wake" {
+			deadline := w.ExpiresAt.Time.UTC().Format(time.RFC3339)
+			payload, _ := json.Marshal(map[string]any{"expires_at": deadline, "event_types": w.EventTypes,
+				"note": "The deadline passed before a subscribed event arrived. Read current state, then escalate, extend or stop."})
+			if _, err = q.RecordWakeupReceipt(ctx, db.RecordWakeupReceiptParams{ID: dbid.NewV7(), WakeupID: w.ID, Revision: w.Revision, EventKey: "timeout:" + deadline, EventType: "wakeup.timeout", Payload: payload}); err != nil {
+				return err
+			}
+		}
+	}
+	if w.Enabled && !timedOut && w.Kind != "event" && next.Valid && !next.Time.After(now) {
 		planned := next.Time
 		switch w.Kind {
 		case "at":
@@ -683,6 +759,11 @@ func (s *IssueWakeupService) dispatch(ctx context.Context, prev db.IssueWakeup) 
 		if err := q.AdvanceIssueWakeup(ctx, db.AdvanceIssueWakeupParams{ID: w.ID, Enabled: w.Enabled, NextFireAt: next, LastError: waiting}); err != nil {
 			return err
 		}
+		if timedOut {
+			if err := q.MarkWakeupTimedOut(ctx, w.ID); err != nil {
+				return err
+			}
+		}
 		return tx.Commit(ctx)
 	}
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
@@ -694,6 +775,11 @@ func (s *IssueWakeupService) dispatch(ctx context.Context, prev db.IssueWakeup) 
 		return err
 	}
 	if len(receipts) == 0 {
+		if timedOut {
+			if err = q.MarkWakeupTimedOut(ctx, w.ID); err != nil {
+				return err
+			}
+		}
 		return tx.Commit(ctx)
 	}
 	ids := make([]pgtype.UUID, 0, len(receipts))
@@ -721,6 +807,11 @@ func (s *IssueWakeupService) dispatch(ctx context.Context, prev db.IssueWakeup) 
 	}
 	if err = q.AdvanceIssueWakeup(ctx, db.AdvanceIssueWakeupParams{ID: w.ID, Enabled: enabled, NextFireAt: next, LastTaskID: task.ID}); err != nil {
 		return err
+	}
+	if timedOut {
+		if err = q.MarkWakeupTimedOut(ctx, w.ID); err != nil {
+			return err
+		}
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return err

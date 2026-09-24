@@ -1,6 +1,6 @@
 -- name: CreateIssueWakeup :one
-INSERT INTO issue_wakeup(id,workspace_id,issue_id,agent_id,created_by,source_task_id,parent_comment_id,instruction,kind,mode,event_types,filter_agent_id,filter_task_id,filter_actor_type,filter_actor_id,interval_seconds,cron_expression,timezone,next_fire_at)
-VALUES(@id,@workspace_id,@issue_id,@agent_id,@created_by,sqlc.narg(source_task_id),sqlc.narg(parent_comment_id),@instruction,@kind,@mode,@event_types,sqlc.narg(filter_agent_id),sqlc.narg(filter_task_id),sqlc.narg(filter_actor_type),sqlc.narg(filter_actor_id),sqlc.narg(interval_seconds),sqlc.narg(cron_expression),@timezone,sqlc.narg(next_fire_at)) RETURNING *;
+INSERT INTO issue_wakeup(id,workspace_id,issue_id,agent_id,created_by,source_task_id,parent_comment_id,instruction,kind,mode,event_types,filter_agent_id,filter_task_id,filter_actor_type,filter_actor_id,interval_seconds,cron_expression,timezone,next_fire_at,expires_at,expiry_seconds,on_timeout)
+VALUES(@id,@workspace_id,@issue_id,@agent_id,@created_by,sqlc.narg(source_task_id),sqlc.narg(parent_comment_id),@instruction,@kind,@mode,@event_types,sqlc.narg(filter_agent_id),sqlc.narg(filter_task_id),sqlc.narg(filter_actor_type),sqlc.narg(filter_actor_id),sqlc.narg(interval_seconds),sqlc.narg(cron_expression),@timezone,sqlc.narg(next_fire_at),sqlc.narg(expires_at),sqlc.narg(expiry_seconds),sqlc.narg(on_timeout)) RETURNING *;
 -- name: ListIssueWakeups :many
 SELECT w.id,w.workspace_id,w.issue_id,w.agent_id,w.created_by,w.source_task_id,w.parent_comment_id,w.instruction,
  w.kind,w.mode,w.event_types,w.filter_actor_type,
@@ -10,8 +10,14 @@ SELECT w.id,w.workspace_id,w.issue_id,w.agent_id,w.created_by,w.source_task_id,w
  (CASE WHEN EXISTS(SELECT 1 FROM agent_task_queue ft JOIN agent fa ON fa.id=ft.agent_id AND fa.workspace_id=w.workspace_id
   WHERE ft.id=w.filter_task_id AND ft.issue_id=w.issue_id AND fa.id=ANY(@agent_ids::uuid[])) THEN w.filter_task_id END)::uuid AS filter_task_id,
  w.interval_seconds,w.cron_expression,w.timezone,w.next_fire_at,w.enabled,w.disabled_at,w.revision,
- w.last_task_id,w.last_error,w.created_at,w.updated_at,a.name AS agent_name,source.name AS filter_agent_name,t.status AS last_task_status
+ w.last_task_id,w.last_error,w.created_at,w.updated_at,a.name AS agent_name,source.name AS filter_agent_name,t.status AS last_task_status,
+ w.expires_at,w.expiry_seconds,w.on_timeout,w.timed_out_at,
+ (w.source_task_id IS NOT NULL)::bool AS created_by_agent,creator.name AS created_by_name,
+ (CASE WHEN creator_agent.id IS NOT NULL THEN creator_agent.id END)::uuid AS source_agent_id,creator_agent.name AS source_agent_name
 FROM issue_wakeup w JOIN agent a ON a.id=w.agent_id AND a.workspace_id=w.workspace_id
+LEFT JOIN "user" creator ON creator.id=w.created_by
+LEFT JOIN agent_task_queue creator_task ON creator_task.id=w.source_task_id
+LEFT JOIN agent creator_agent ON creator_agent.id=creator_task.agent_id AND creator_agent.workspace_id=w.workspace_id AND creator_agent.id=ANY(@agent_ids::uuid[])
 LEFT JOIN agent actor_agent ON w.filter_actor_type='agent' AND actor_agent.id=w.filter_actor_id AND actor_agent.workspace_id=w.workspace_id AND actor_agent.id=ANY(@agent_ids::uuid[])
 LEFT JOIN member actor_member ON w.filter_actor_type='member' AND actor_member.user_id=w.filter_actor_id AND actor_member.workspace_id=w.workspace_id
 LEFT JOIN "user" actor_user ON actor_user.id=actor_member.user_id
@@ -65,6 +71,8 @@ WHERE issue_id= @issue_id AND context->>'wakeup_id' IS NOT NULL AND status IN ('
 -- name: ListReadyWakeups :many
 WITH candidates AS (
  SELECT id FROM issue_wakeup WHERE enabled AND kind<>'event' AND next_fire_at<=now()
+ UNION
+ SELECT id FROM issue_wakeup WHERE enabled AND expires_at<=now()
  UNION
  SELECT wakeup_id FROM issue_wakeup_receipt WHERE processed_at IS NULL
 )
@@ -160,3 +168,9 @@ UPDATE issue_wakeup SET last_error=sqlc.narg(last_error),updated_at=clock_timest
 -- Move blocked configurations to the back of the scan so one noisy issue
 -- cannot monopolize the bounded batch.
 UPDATE issue_wakeup SET updated_at=clock_timestamp() WHERE id= @id;
+
+-- name: MarkWakeupTimedOut :exec
+-- The deadline ended the rule. disabled_at stays NULL: a timeout run created in
+-- the same transaction must remain claimable, and the rule reads as timed out,
+-- not as turned off by a person.
+UPDATE issue_wakeup SET enabled=false,next_fire_at=NULL,timed_out_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id= @id;

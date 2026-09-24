@@ -556,6 +556,9 @@ WITH deleted_wakeup_receipts AS (
 ), deleted_wakeups AS (
  DELETE FROM issue_wakeup WHERE workspace_id=$1
 ),
+deleted_system_wakeups AS (
+ DELETE FROM issue_system_wakeup WHERE workspace_id=$1
+),
 deleted_issues AS (
     DELETE FROM issue WHERE issue.workspace_id = $1
 ),

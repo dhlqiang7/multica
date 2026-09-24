@@ -484,6 +484,9 @@ cleared_wakeup_receipts AS (
 cleared_wakeups AS (
  DELETE FROM issue_wakeup WHERE issue_id IN (SELECT target.id FROM target)
 ),
+cleared_system_wakeups AS (
+ DELETE FROM issue_system_wakeup WHERE issue_id IN (SELECT target.id FROM target)
+),
 cleared_task_supplements AS (
  DELETE FROM task_supplement WHERE issue_id IN (SELECT target.id FROM target)
 ),

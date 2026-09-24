@@ -113,3 +113,26 @@ func TestIssueWakeupCLIActorFilter(t *testing.T) {
 		}
 	}
 }
+
+func TestIssueWakeupCLISendsExpiry(t *testing.T) {
+	t.Chdir(t.TempDir())
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "wake", "enabled": true})
+	}))
+	defer srv.Close()
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+	cmd := newIssueWakeupCommand()
+	cmd.SetArgs([]string{"create", "a57c0511-1ebc-471d-a314-438ca16cc75d", "--event", "comment.created", "--instruction", "follow up", "--expires-in", "72h", "--on-timeout", "wake"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if body["expires_in_seconds"] != float64(259200) || body["on_timeout"] != "wake" {
+		t.Fatalf("unexpected body %+v", body)
+	}
+}

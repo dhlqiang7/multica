@@ -130,6 +130,11 @@ func (h *Handler) notifyParentOfChildDone(ctx context.Context, prev, issue db.Is
 	if parent.AssigneeType.Valid && parent.AssigneeType.String == "member" {
 		return
 	}
+	// The per-issue system rule can turn this wake off or add an instruction.
+	enabled, supplement := h.childDoneRule(ctx, parent)
+	if !enabled {
+		return
+	}
 
 	// Stage barrier (MUL-3508 / discussion #4320). The notification + assignee
 	// wake fire only when this completion *closes a stage* — i.e. every sibling
@@ -163,7 +168,7 @@ func (h *Handler) notifyParentOfChildDone(ctx context.Context, prev, issue db.Is
 	if staged {
 		closedStage = issue.Stage.Int32
 	}
-	h.postChildDoneComment(ctx, parent, issue, children, staged, closedStage, false, statuses, nil)
+	h.postChildDoneComment(ctx, parent, issue, children, staged, closedStage, false, statuses, nil, supplement)
 }
 
 // notifyParentsOfBatchChildDone emits child-done parent notifications for a
@@ -231,6 +236,10 @@ func (h *Handler) notifyParentsOfBatchChildDone(ctx context.Context, completed [
 		if parent.AssigneeType.Valid && parent.AssigneeType.String == "member" {
 			continue
 		}
+		enabled, supplement := h.childDoneRule(ctx, parent)
+		if !enabled {
+			continue
+		}
 
 		children, err := h.Queries.ListChildIssues(ctx, parent.ID)
 		if err != nil {
@@ -252,7 +261,7 @@ func (h *Handler) notifyParentsOfBatchChildDone(ctx context.Context, completed [
 			if !stageBarrierClosed(children, g.children[0], statuses.isTerminal) {
 				continue
 			}
-			h.postChildDoneComment(ctx, parent, g.children[0], children, false, 0, batch, statuses, g.children)
+			h.postChildDoneComment(ctx, parent, g.children[0], children, false, 0, batch, statuses, g.children, supplement)
 			continue
 		}
 
@@ -268,7 +277,7 @@ func (h *Handler) notifyParentsOfBatchChildDone(ctx context.Context, completed [
 		if !found {
 			continue
 		}
-		h.postChildDoneComment(ctx, parent, rep, children, true, rep.Stage.Int32, batch, statuses, g.children)
+		h.postChildDoneComment(ctx, parent, rep, children, true, rep.Stage.Int32, batch, statuses, g.children, supplement)
 	}
 }
 
@@ -326,7 +335,7 @@ func highestClosedBatchStage(children, completed []db.Issue, isTerminal func(db.
 // `staged`/`closedStage` describe the closed barrier (closedStage is unused for
 // an unstaged set). `batch` selects batch-aware wording. `batchCompleted` is the
 // set that transitioned to terminal in this batch; it is nil for single updates.
-func (h *Handler) postChildDoneComment(ctx context.Context, parent, completed db.Issue, children []db.Issue, staged bool, closedStage int32, batch bool, statuses resolvedChildStatuses, batchCompleted []db.Issue) {
+func (h *Handler) postChildDoneComment(ctx context.Context, parent, completed db.Issue, children []db.Issue, staged bool, closedStage int32, batch bool, statuses resolvedChildStatuses, batchCompleted []db.Issue, supplement string) {
 	prefix := h.getIssuePrefix(ctx, completed.WorkspaceID)
 	identifier := prefix + "-" + strconv.Itoa(int(completed.Number))
 	childID := uuidToString(completed.ID)
@@ -424,6 +433,10 @@ func (h *Handler) postChildDoneComment(ctx context.Context, parent, completed db
 				)
 			}
 		}
+	}
+
+	if supplement != "" {
+		content += "\n\nSupplementary instruction set on this issue:\n" + supplement
 	}
 
 	// author_type='system', author_id=zero UUID. The zero UUID is a valid 16

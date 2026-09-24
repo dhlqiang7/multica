@@ -11,6 +11,9 @@ WITH base AS MATERIALIZED (
    WHERE ft.id=w.filter_task_id AND ft.issue_id=w.issue_id AND fa.id=ANY(@agent_ids::uuid[])) THEN w.filter_task_id END AS filter_task_id,
   w.interval_seconds,w.cron_expression,w.timezone,
   w.next_fire_at,w.enabled,w.revision,w.disabled_at,w.last_task_id,w.last_error,w.created_at,
+  w.expires_at,w.expiry_seconds,w.on_timeout,w.timed_out_at,
+  (w.source_task_id IS NOT NULL) AS created_by_agent,creator.name AS created_by_name,
+  CASE WHEN creator_agent.id IS NOT NULL THEN creator_agent.id END AS source_agent_id,creator_agent.name AS source_agent_name,
   (i.status IN ('done','cancelled') OR EXISTS(SELECT 1 FROM issue_status s WHERE s.workspace_id=i.workspace_id AND s.key=i.status AND s.category IN ('done','closed'))) AS issue_closed,
   COALESCE((w.created_by= @member_id::uuid OR @is_admin::boolean),false) AS can_manage,
   COALESCE(r.active_runs,0)::int AS active_runs
@@ -22,6 +25,9 @@ WITH base AS MATERIALIZED (
 LEFT JOIN member actor_member ON w.filter_actor_type='member' AND actor_member.user_id=w.filter_actor_id AND actor_member.workspace_id=w.workspace_id
 LEFT JOIN "user" actor_user ON actor_user.id=actor_member.user_id
  LEFT JOIN agent source ON source.id=w.filter_agent_id AND source.workspace_id=w.workspace_id AND source.id=ANY(@agent_ids::uuid[])
+ LEFT JOIN "user" creator ON creator.id=w.created_by
+ LEFT JOIN agent_task_queue creator_task ON creator_task.id=w.source_task_id
+ LEFT JOIN agent creator_agent ON creator_agent.id=creator_task.agent_id AND creator_agent.workspace_id=w.workspace_id AND creator_agent.id=ANY(@agent_ids::uuid[])
  LEFT JOIN LATERAL (
   SELECT count(*) AS active_runs FROM agent_task_queue t
   WHERE t.context->>'wakeup_id'=w.id::text AND t.issue_id=w.issue_id AND t.agent_id=w.agent_id

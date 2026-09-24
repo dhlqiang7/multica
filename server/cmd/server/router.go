@@ -2017,6 +2017,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/wakeups/{wakeupID}/disable", h.DisableIssueWakeup)
 					r.Post("/wakeups/{wakeupID}/enable", h.EnableIssueWakeup)
 					r.Patch("/wakeups/{wakeupID}/instruction", h.EditIssueWakeupInstruction)
+					r.Get("/system-wakeups", h.ListIssueSystemWakeups)
+					r.Put("/system-wakeups/{rule}", h.UpdateIssueSystemWakeup)
 					r.Get("/active-task", h.GetActiveTaskForIssue)
 					r.Post("/tasks/{taskId}/cancel", h.CancelTask)
 					r.With(handler.RequireHumanActor).Post("/tasks/{taskId}/supplements", h.CreateTaskSupplement)
