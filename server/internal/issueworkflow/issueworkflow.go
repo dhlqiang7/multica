@@ -376,8 +376,9 @@ func Brief(in BriefInput) string {
 		return key
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s entered the %q step of this project's workflow %q, which hands it to you.\n",
-		in.IssueIdentifier, name(in.StatusKey), in.Workflow.Name)
+	fmt.Fprintf(&b, "This project's workflow — %s\n", in.Workflow.Name)
+	fmt.Fprintf(&b, "You are handling the %q step of %s. You were assigned because the issue entered this status.\n",
+		name(in.StatusKey), in.IssueIdentifier)
 	if step.Instructions != "" {
 		b.WriteString("\nStep instructions:\n")
 		for _, line := range strings.Split(step.Instructions, "\n") {
@@ -386,7 +387,7 @@ func Brief(in BriefInput) string {
 			b.WriteString("\n")
 		}
 	}
-	b.WriteString("\nThis project's statuses (use only these keys):\n")
+	b.WriteString("\nStatuses in this workflow (use only these keys):\n")
 	for _, s := range in.Workflow.Steps {
 		// Built-in statuses have no stored name; their key reads on its own.
 		fmt.Fprintf(&b, "- `%s`", s.StatusKey)
@@ -399,20 +400,20 @@ func Brief(in BriefInput) string {
 			}
 		}
 		if s.StatusKey == in.StatusKey {
-			b.WriteString(" (current step)")
+			b.WriteString("   ← current")
 		}
 		b.WriteString("\n")
 	}
 	b.WriteString("\nHand off by changing the status:\n")
 	if step.NextStatusKey != "" {
-		fmt.Fprintf(&b, "- Step done: `multica issue status %s %s`\n", in.IssueIdentifier, step.NextStatusKey)
+		fmt.Fprintf(&b, "Step done      → multica issue status %s %s\n", in.IssueIdentifier, step.NextStatusKey)
 	}
 	if step.BackStatusKey != "" {
-		fmt.Fprintf(&b, "- Needs changes: `multica issue status %s %s`\n", in.IssueIdentifier, step.BackStatusKey)
+		fmt.Fprintf(&b, "Needs changes  → multica issue status %s %s\n", in.IssueIdentifier, step.BackStatusKey)
 	}
 	if in.Workflow.Has("blocked") {
-		fmt.Fprintf(&b, "- Cannot proceed: `multica issue status %s blocked`, then comment why\n", in.IssueIdentifier)
+		fmt.Fprintf(&b, "Can't proceed  → multica issue status %s blocked, then comment why\n", in.IssueIdentifier)
 	}
-	b.WriteString("The system does not advance the status when your run ends. Where your runtime instructions name a status this list does not include, use the step above instead.\n")
+	b.WriteString("The system does not advance the status when your run ends. Where your runtime instructions name a status this list does not include, use the commands above instead.\n")
 	return b.String()
 }

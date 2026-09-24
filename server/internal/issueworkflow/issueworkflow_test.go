@@ -163,18 +163,19 @@ func TestBriefNamesStepCommandsAndHandlers(t *testing.T) {
 		},
 	})
 	for _, want := range []string{
-		`"Code review" step of this project's workflow "Delivery"`,
-		"- `implement` Implement — hands off to Forge",
-		"- `code_review` Code review — hands off to Lin (project lead) (current step)",
+		"This project's workflow — Delivery\n",
+		`You are handling the "Code review" step of MUL-7.`,
+		"- `implement` Implement — hands off to Forge\n",
+		"- `code_review` Code review — hands off to Lin (project lead)   ← current\n",
 		"- `done` Done\n",
-		"Step done: `multica issue status MUL-7 done`",
-		"Needs changes: `multica issue status MUL-7 implement`",
+		"Step done      → multica issue status MUL-7 done\n",
+		"Needs changes  → multica issue status MUL-7 implement\n",
 	} {
 		if !strings.Contains(brief, want) {
 			t.Fatalf("brief is missing %q:\n%s", want, brief)
 		}
 	}
-	if strings.Contains(brief, "Cannot proceed") {
+	if strings.Contains(brief, "Can't proceed") {
 		t.Fatalf("brief offers blocked, which this workflow does not list:\n%s", brief)
 	}
 }

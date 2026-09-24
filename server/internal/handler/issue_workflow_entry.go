@@ -75,6 +75,22 @@ func (h *Handler) applyIssueWorkflow(ctx context.Context, prev db.Issue, params 
 	return &workflowHandoff{def: *def, step: step, project: project}, nil
 }
 
+// workflowHandoffPayload describes a handoff on the issue:updated event, so
+// the activity log can record the status change and the handoff as one
+// timeline entry.
+func workflowHandoffPayload(issue db.Issue, hand *workflowHandoff, note string, runStarted bool) map[string]string {
+	out := map[string]string{
+		"workflow": hand.def.Name,
+		"to_type":  issue.AssigneeType.String,
+		"to_id":    uuidToString(issue.AssigneeID),
+		"run":      strconv.FormatBool(runStarted),
+	}
+	if runStarted && note != "" {
+		out["note"] = note
+	}
+	return out
+}
+
 // writeIssueWorkflowError answers a workflow rejection. It reports false when
 // err is not one, so the caller can fall through to its generic 500.
 func writeIssueWorkflowError(w http.ResponseWriter, err error) bool {

@@ -73,8 +73,16 @@ type StatusMappingRequirement struct {
 	SuggestedStatusKey string `json:"suggested_status_key"`
 }
 
+// StatusIssueCount is a status some issues are on that the target workflow
+// also lists, so they keep it.
+type StatusIssueCount struct {
+	StatusKey  string `json:"status_key"`
+	IssueCount int64  `json:"issue_count"`
+}
+
 type workflowMappingPlan struct {
 	Required       []StatusMappingRequirement `json:"required"`
+	Unchanged      []StatusIssueCount         `json:"unchanged"`
 	TotalIssues    int64                      `json:"total_issues"`
 	AffectedIssues int64                      `json:"affected_issues"`
 }
@@ -349,10 +357,11 @@ func (h *Handler) CreateIssueWorkflow(w http.ResponseWriter, r *http.Request) {
 // mappingPlan computes which statuses issues of projectIDs are on that
 // allowed() rejects, with a suggested target for each.
 func mappingPlan(counts []db.CountProjectIssuesByStatusRow, allowed func(string) bool, suggest func(string) string) workflowMappingPlan {
-	plan := workflowMappingPlan{Required: []StatusMappingRequirement{}}
+	plan := workflowMappingPlan{Required: []StatusMappingRequirement{}, Unchanged: []StatusIssueCount{}}
 	for _, c := range counts {
 		plan.TotalIssues += c.IssueCount
 		if allowed(c.Status) {
+			plan.Unchanged = append(plan.Unchanged, StatusIssueCount{StatusKey: c.Status, IssueCount: c.IssueCount})
 			continue
 		}
 		plan.AffectedIssues += c.IssueCount
@@ -492,7 +501,7 @@ func (h *Handler) UpdateIssueWorkflow(w http.ResponseWriter, r *http.Request) {
 	for i, p := range projects {
 		projectIDs[i] = p.ID
 	}
-	plan := workflowMappingPlan{Required: []StatusMappingRequirement{}}
+	plan := workflowMappingPlan{Required: []StatusMappingRequirement{}, Unchanged: []StatusIssueCount{}}
 	if len(projectIDs) > 0 {
 		counts, err := qtx.CountProjectIssuesByStatus(ctx, db.CountProjectIssuesByStatusParams{WorkspaceID: wsUUID, ProjectIds: projectIDs})
 		if err != nil {
@@ -757,4 +766,163 @@ func (h *Handler) SetProjectWorkflow(w http.ResponseWriter, r *http.Request) {
 		"updated_issues": len(changed),
 		"plan":           plan,
 	})
+}
+
+// PreviewIssueWorkflowBrief renders the brief a step's handler would receive,
+// for a workflow being edited. It takes the unsaved definition so the editor
+// can preview before saving. Project-relative handlers are named generically
+// because a workflow may serve several projects.
+func (h *Handler) PreviewIssueWorkflowBrief(w http.ResponseWriter, r *http.Request) {
+	workspaceID := h.resolveWorkspaceID(r)
+	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
+	if !ok {
+		return
+	}
+	if _, ok := h.requireWorkspaceMember(w, r, workspaceID, "workspace not found"); !ok {
+		return
+	}
+	var req struct {
+		IssueWorkflowWriteRequest
+		StatusKey string `json:"status_key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	var name, initial string
+	var steps []issueworkflow.Step
+	if req.Name != nil {
+		name = *req.Name
+	}
+	if req.InitialStatusKey != nil {
+		initial = *req.InitialStatusKey
+	}
+	if req.Steps != nil {
+		steps = payloadToSteps(*req.Steps)
+	}
+	name, _, initial, steps = issueworkflow.Normalize(name, "", initial, steps)
+	def := issueworkflow.Definition{Name: name, InitialStatusKey: initial, Steps: steps}
+	if !def.Has(req.StatusKey) {
+		writeError(w, http.StatusBadRequest, "status_key is not a step of this workflow")
+		return
+	}
+	resolver := issuestatus.NewResolver(wsUUID)
+	brief := issueworkflow.Brief(issueworkflow.BriefInput{
+		Workflow:        def,
+		StatusKey:       req.StatusKey,
+		IssueIdentifier: h.getIssuePrefix(r.Context(), wsUUID) + "-123",
+		StatusName: func(key string) string {
+			return resolver.Name(r.Context(), h.Queries, key)
+		},
+		HandlerName: func(step issueworkflow.Step) string {
+			switch step.Handler.Type {
+			case issueworkflow.HandlerAgent, issueworkflow.HandlerSquad, issueworkflow.HandlerMember:
+				id, err := parseUUIDString(step.Handler.ID)
+				if err != nil {
+					return step.Handler.Type
+				}
+				return h.actorDisplayName(r.Context(), wsUUID, step.Handler.Type, id)
+			case issueworkflow.HandlerProjectLead:
+				return "the project lead"
+			case issueworkflow.HandlerCreator:
+				return "the issue creator"
+			}
+			return ""
+		},
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"brief": brief})
+}
+
+// WorkflowHandoffRun is an active run of the agent a handoff takes the issue
+// from.
+type WorkflowHandoffRun struct {
+	TaskID    string  `json:"task_id"`
+	AgentID   string  `json:"agent_id"`
+	Status    string  `json:"status"`
+	StartedAt *string `json:"started_at"`
+}
+
+type WorkflowHandoffPreviewResponse struct {
+	Handoff              bool                 `json:"handoff"`
+	WorkflowName         string               `json:"workflow_name,omitempty"`
+	FromStatus           string               `json:"from_status"`
+	ToStatus             string               `json:"to_status"`
+	HandlerType          string               `json:"handler_type,omitempty"`
+	HandlerID            string               `json:"handler_id,omitempty"`
+	PreviousAssigneeType *string              `json:"previous_assignee_type"`
+	PreviousAssigneeID   *string              `json:"previous_assignee_id"`
+	PreviousRuns         []WorkflowHandoffRun `json:"previous_runs"`
+	Brief                string               `json:"brief,omitempty"`
+}
+
+// PreviewWorkflowHandoff says what moving an issue to a status would do under
+// its project's workflow, for the confirmation shown before a handoff: who
+// the issue would go to, which runs of its current agent are still active,
+// and the brief the new handler would receive. It writes nothing.
+func (h *Handler) PreviewWorkflowHandoff(w http.ResponseWriter, r *http.Request) {
+	issue, ok := h.loadIssueForUser(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	status := r.URL.Query().Get("status")
+	if status == "" {
+		writeError(w, http.StatusBadRequest, "status is required")
+		return
+	}
+	resp := WorkflowHandoffPreviewResponse{
+		FromStatus:           issue.Status,
+		ToStatus:             status,
+		PreviousAssigneeType: textToPtr(issue.AssigneeType),
+		PreviousAssigneeID:   uuidToPtr(issue.AssigneeID),
+		PreviousRuns:         []WorkflowHandoffRun{},
+	}
+	params := db.UpdateIssueParams{
+		ProjectID:    issue.ProjectID,
+		Status:       pgtype.Text{String: status, Valid: true},
+		AssigneeType: issue.AssigneeType,
+		AssigneeID:   issue.AssigneeID,
+	}
+	hand, err := h.applyIssueWorkflow(r.Context(), issue, &params, true, false)
+	if err != nil {
+		if writeIssueWorkflowError(w, err) {
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to resolve project workflow")
+		return
+	}
+	if def, _, err := issueworkflow.ForProject(r.Context(), h.Queries, issue.WorkspaceID, issue.ProjectID); err == nil && def != nil {
+		resp.WorkflowName = def.Name
+	}
+	if hand == nil {
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	resp.Handoff = true
+	resp.HandlerType = params.AssigneeType.String
+	resp.HandlerID = uuidToString(params.AssigneeID)
+	next := issue
+	next.Status = status
+	next.AssigneeType = params.AssigneeType
+	next.AssigneeID = params.AssigneeID
+	resp.Brief = h.workflowHandoffNote(r.Context(), next, hand)
+	if issue.AssigneeType.String == "agent" && issue.AssigneeID.Valid && issue.AssigneeID != params.AssigneeID {
+		if tasks, err := h.Queries.ListActiveTasksByIssue(r.Context(), issue.ID); err == nil {
+			for _, task := range tasks {
+				if task.AgentID != issue.AssigneeID {
+					continue
+				}
+				started := task.StartedAt
+				if !started.Valid {
+					started = task.CreatedAt
+				}
+				resp.PreviousRuns = append(resp.PreviousRuns, WorkflowHandoffRun{
+					TaskID:    uuidToString(task.ID),
+					AgentID:   uuidToString(task.AgentID),
+					Status:    task.Status,
+					StartedAt: timestampToPtr(started),
+				})
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }

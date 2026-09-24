@@ -4094,7 +4094,25 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	dueDateChanged := prevDueDate != resp.DueDate && (prevDueDate == nil) != (resp.DueDate == nil) ||
 		(prevDueDate != nil && resp.DueDate != nil && *prevDueDate != *resp.DueDate)
 
-	h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, map[string]any{
+	// A workflow handoff (MUL-7420) is decided before the event goes out so
+	// the timeline can record it as one entry: the status change, who the
+	// issue went to, whether their run started, and the brief it received.
+	handoffNote := req.HandoffNote
+	if handoff != nil && handoffNote == "" {
+		handoffNote = h.workflowHandoffNote(r.Context(), issue, handoff)
+	}
+	trigger, willRun := h.IssueService.WillEnqueueRun(r.Context(),
+		service.IssueTriggerInput{
+			Issue:           issue,
+			PrevStatus:      prevIssue.Status,
+			AssigneeChanged: assigneeChanged || handoff != nil,
+			StatusChanged:   statusChanged,
+		},
+		h.issueTriggerWriteProbe(r, actorType, actorID, issue),
+	)
+	willRun = willRun && !req.SuppressRun
+
+	updatedPayload := map[string]any{
 		"issue":               resp,
 		"assignee_changed":    assigneeChanged,
 		"status_changed":      statusChanged,
@@ -4118,7 +4136,11 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		// and clients refresh the two issues' relations from it.
 		"duplicate_of_issue_id":      liveDuplicateMark(issue.Status, issue.DuplicateOfIssueID),
 		"prev_duplicate_of_issue_id": liveDuplicateMark(prevIssue.Status, prevIssue.DuplicateOfIssueID),
-	})
+	}
+	if handoff != nil {
+		updatedPayload["workflow_handoff"] = workflowHandoffPayload(issue, handoff, handoffNote, willRun)
+	}
+	h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, updatedPayload)
 	if attachmentsChanged {
 		// The full owner snapshot must be admitted before an auxiliary event at
 		// the same revision. Otherwise clients advance only the revision here and
@@ -4150,24 +4172,10 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	// A workflow handoff counts as a fresh assignment even when the step's
 	// handler already owns the issue: entering the step is the handler's cue
 	// to work on it, with the step's brief as the handoff note. (MUL-7420)
-	handoffNote := req.HandoffNote
-	if handoff != nil {
-		if req.StopPreviousAssigneeRuns {
-			h.stopPreviousAssigneeRuns(r.Context(), prevIssue, issue, actorType, actorID)
-		}
-		if handoffNote == "" {
-			handoffNote = h.workflowHandoffNote(r.Context(), issue, handoff)
-		}
+	if handoff != nil && req.StopPreviousAssigneeRuns {
+		h.stopPreviousAssigneeRuns(r.Context(), prevIssue, issue, actorType, actorID)
 	}
-	if trigger, ok := h.IssueService.WillEnqueueRun(r.Context(),
-		service.IssueTriggerInput{
-			Issue:           issue,
-			PrevStatus:      prevIssue.Status,
-			AssigneeChanged: assigneeChanged || handoff != nil,
-			StatusChanged:   statusChanged,
-		},
-		h.issueTriggerWriteProbe(r, actorType, actorID, issue),
-	); ok && !req.SuppressRun {
+	if willRun {
 		h.dispatchIssueRun(r.Context(), issue, trigger, actorType, actorID, handoffNote)
 	}
 
@@ -4886,32 +4894,11 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		priorityChanged := req.Updates.Priority != nil && prevIssue.Priority != issue.Priority
 		projectChanged := req.Updates.ProjectID != nil && uuidToString(prevIssue.ProjectID) != uuidToString(issue.ProjectID)
 
-		h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, map[string]any{
-			"issue":                      resp,
-			"assignee_changed":           assigneeChanged,
-			"status_changed":             statusChanged,
-			"priority_changed":           priorityChanged,
-			"project_changed":            projectChanged,
-			"duplicate_of_issue_id":      liveDuplicateMark(issue.Status, issue.DuplicateOfIssueID),
-			"prev_duplicate_of_issue_id": liveDuplicateMark(prevIssue.Status, prevIssue.DuplicateOfIssueID),
-		})
-
-		// Reassignment does not cancel existing tasks (#4963 / MUL-4113) —
-		// mirrors UpdateIssue. See that handler for the rationale.
-		//
-		// Same single predicate as UpdateIssue — batch must not grow its own
-		// copy of the enqueue rule (the historical source of four-entry-point
-		// drift, MUL-3375). suppress_run applies batch-wide.
 		batchHandoffNote := req.Updates.HandoffNote
-		if handoff != nil {
-			if req.Updates.StopPreviousAssigneeRuns {
-				h.stopPreviousAssigneeRuns(r.Context(), prevIssue, issue, actorType, actorID)
-			}
-			if batchHandoffNote == "" {
-				batchHandoffNote = h.workflowHandoffNote(r.Context(), issue, handoff)
-			}
+		if handoff != nil && batchHandoffNote == "" {
+			batchHandoffNote = h.workflowHandoffNote(r.Context(), issue, handoff)
 		}
-		if trigger, ok := h.IssueService.WillEnqueueRun(r.Context(),
+		trigger, willRun := h.IssueService.WillEnqueueRun(r.Context(),
 			service.IssueTriggerInput{
 				Issue:           issue,
 				PrevStatus:      prevIssue.Status,
@@ -4919,7 +4906,33 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 				StatusChanged:   statusChanged,
 			},
 			h.issueTriggerWriteProbe(r, actorType, actorID, issue),
-		); ok && !req.Updates.SuppressRun {
+		)
+		willRun = willRun && !req.Updates.SuppressRun
+		batchPayload := map[string]any{
+			"issue":                      resp,
+			"assignee_changed":           assigneeChanged,
+			"status_changed":             statusChanged,
+			"priority_changed":           priorityChanged,
+			"project_changed":            projectChanged,
+			"prev_status":                prevIssue.Status,
+			"duplicate_of_issue_id":      liveDuplicateMark(issue.Status, issue.DuplicateOfIssueID),
+			"prev_duplicate_of_issue_id": liveDuplicateMark(prevIssue.Status, prevIssue.DuplicateOfIssueID),
+		}
+		if handoff != nil {
+			batchPayload["workflow_handoff"] = workflowHandoffPayload(issue, handoff, batchHandoffNote, willRun)
+		}
+		h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, batchPayload)
+
+		// Reassignment does not cancel existing tasks (#4963 / MUL-4113) —
+		// mirrors UpdateIssue. See that handler for the rationale.
+		//
+		// Same single predicate as UpdateIssue — batch must not grow its own
+		// copy of the enqueue rule (the historical source of four-entry-point
+		// drift, MUL-3375). suppress_run applies batch-wide.
+		if handoff != nil && req.Updates.StopPreviousAssigneeRuns {
+			h.stopPreviousAssigneeRuns(r.Context(), prevIssue, issue, actorType, actorID)
+		}
+		if willRun {
 			h.dispatchIssueRun(r.Context(), issue, trigger, actorType, actorID, batchHandoffNote)
 		}
 

@@ -146,6 +146,9 @@ func TestSetProjectWorkflowMapsOnlyUnlistedStatuses(t *testing.T) {
 	if len(dry.Plan.Required) != 1 || dry.Plan.Required[0].StatusKey != "in_progress" || dry.Plan.Required[0].IssueCount != 1 {
 		t.Fatalf("plan = %+v, want only in_progress with one issue", dry.Plan)
 	}
+	if len(dry.Plan.Unchanged) != 1 || dry.Plan.Unchanged[0].StatusKey != "todo" {
+		t.Fatalf("unchanged = %+v, want todo kept", dry.Plan.Unchanged)
+	}
 	// in_progress has no started-category step but in_review does.
 	if got := dry.Plan.Required[0].SuggestedStatusKey; got != "in_review" {
 		t.Fatalf("suggested target = %q, want the same-category step in_review", got)
@@ -216,7 +219,7 @@ func TestStatusChangeHandsOffToStepHandler(t *testing.T) {
 		t.Fatalf("tasks = %d (%v), want one handoff run", len(tasks), err)
 	}
 	note := tasks[0].HandoffNote.String
-	for _, want := range []string{"Implement it and open a PR.", "`in_review`", "Step done: `multica issue status"} {
+	for _, want := range []string{"Implement it and open a PR.", "`in_review`", "Step done      → multica issue status"} {
 		if !strings.Contains(note, want) {
 			t.Fatalf("handoff note is missing %q:\n%s", want, note)
 		}
@@ -338,4 +341,55 @@ func TestClaimCarriesProjectWorkflow(t *testing.T) {
 	if testHandler.claimProjectWorkflow(context.Background(), plainIssue) != nil {
 		t.Fatal("an issue outside a workflow project must not carry one")
 	}
+}
+
+func TestPreviewWorkflowHandoffNamesHandlerRunsAndBrief(t *testing.T) {
+	seedTestCatalog(t)
+	agentID := seededReadyAgentID(t)
+	wf := createTestWorkflow(t, "Preview "+workflowTestSuffix(), "todo", deliveryWorkflowSteps(agentID))
+	projectID := createWorkflowTestProject(t, "Workflow preview project")
+	setProjectWorkflow(t, projectID, map[string]any{"workflow_id": wf.ID}).Want(http.StatusOK)
+	issueID := dbfx.Issue(t, "preview me", testutil.Cols{"project_id": projectID, "status": "todo"})
+
+	call := func(status string) *testutil.Response {
+		req := withURLParam(newRequest("GET", "/api/issues/"+issueID+"/workflow-handoff?status="+status, nil), "id", issueID)
+		return testutil.Call(t, testHandler.PreviewWorkflowHandoff, req)
+	}
+	var got WorkflowHandoffPreviewResponse
+	call("in_progress").Want(http.StatusOK).JSON(&got)
+	if !got.Handoff || got.HandlerType != "agent" || got.HandlerID != agentID || got.WorkflowName != wf.Name {
+		t.Fatalf("preview = %+v, want a handoff to the step's agent", got)
+	}
+	if !strings.Contains(got.Brief, "Implement it and open a PR.") {
+		t.Fatalf("preview brief is missing the step instructions:\n%s", got.Brief)
+	}
+	if status, _, _ := issueStatusAndAssignee(t, issueID); status != "todo" {
+		t.Fatalf("a preview moved the issue to %q", status)
+	}
+
+	var manual WorkflowHandoffPreviewResponse
+	call("done").Want(http.StatusOK).JSON(&manual)
+	if manual.Handoff {
+		t.Fatalf("a manual step previewed a handoff: %+v", manual)
+	}
+	call("blocked").Want(http.StatusBadRequest)
+}
+
+func TestPreviewIssueWorkflowBriefUsesTheDraft(t *testing.T) {
+	seedTestCatalog(t)
+	agentID := seededReadyAgentID(t)
+	var got struct {
+		Brief string `json:"brief"`
+	}
+	testutil.Call(t, testHandler.PreviewIssueWorkflowBrief, workflowRequest("POST", "/api/issue-workflows/preview-brief", map[string]any{
+		"name": "Draft", "initial_status_key": "todo", "steps": deliveryWorkflowSteps(agentID), "status_key": "in_progress",
+	})).Want(http.StatusOK).JSON(&got)
+	for _, want := range []string{"This project's workflow — Draft", "Implement it and open a PR.", "← current", "Step done      →"} {
+		if !strings.Contains(got.Brief, want) {
+			t.Fatalf("draft brief is missing %q:\n%s", want, got.Brief)
+		}
+	}
+	testutil.Call(t, testHandler.PreviewIssueWorkflowBrief, workflowRequest("POST", "/api/issue-workflows/preview-brief", map[string]any{
+		"name": "Draft", "steps": deliveryWorkflowSteps(agentID), "status_key": "blocked",
+	})).Want(http.StatusBadRequest)
 }
