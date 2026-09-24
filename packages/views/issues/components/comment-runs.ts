@@ -23,6 +23,18 @@ export function isActiveCommentRun(task: AgentTask): boolean {
   return ["queued", "dispatched", "waiting_local_directory", "running"].includes(task.status);
 }
 
+/**
+ * The comment the platform posts for a run that ended in failure: the raw
+ * error, authored as the agent. It restates how the run ended, so the run
+ * block renders in its place instead of a second, differently worded copy
+ * (MUL-7692).
+ */
+export function isRunFailureNotice(entry: TimelineEntry, task: AgentTask): boolean {
+  return entry.actor_type === "agent" && entry.comment_type === "system"
+    && entry.source_task_id === task.id
+    && (task.status === "failed" || task.status === "cancelled");
+}
+
 /** Published replies own their log entry even while the agent finishes its run. */
 export function showCommentRunInHeader(run: CommentRun): boolean {
   return run.hasReply && (isActiveCommentRun(run.task) || run.task.status === "completed");
