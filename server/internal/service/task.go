@@ -4507,7 +4507,9 @@ func (s *TaskService) CompleteTaskWithTransition(ctx context.Context, taskID pgt
 			AuthorID: task.AgentID,
 			Since:    task.StartedAt,
 		})
-		if !suppressNoActionComment && !agentCommented {
+		// A scheduled wakeup check that found nothing new ends with a check-in
+		// instead of a comment (see IssueWakeupService.CheckIn).
+		if !suppressNoActionComment && !agentCommented && !HasWakeupCheckin(task) {
 			var payload protocol.TaskCompletedPayload
 			if err := json.Unmarshal(result, &payload); err == nil {
 				if payload.Output != "" {

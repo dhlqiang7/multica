@@ -7,6 +7,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -218,9 +219,35 @@ func (q *Queries) ConsumeWakeupReceipts(ctx context.Context, arg ConsumeWakeupRe
 	return err
 }
 
+const countRecentWakeupTasks = `-- name: CountRecentWakeupTasks :one
+SELECT count(*) FROM agent_task_queue WHERE context->>'wakeup_id'= $1::text AND issue_id= $2 AND created_at> $3
+`
+
+type CountRecentWakeupTasksParams struct {
+	WakeupID string             `json:"wakeup_id"`
+	IssueID  pgtype.UUID        `json:"issue_id"`
+	Since    pgtype.Timestamptz `json:"since"`
+}
+
+func (q *Queries) CountRecentWakeupTasks(ctx context.Context, arg CountRecentWakeupTasksParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countRecentWakeupTasks, arg.WakeupID, arg.IssueID, arg.Since)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countWakeupFires = `-- name: CountWakeupFires :exec
+UPDATE issue_wakeup SET fire_count=fire_count+1 WHERE id= $1
+`
+
+func (q *Queries) CountWakeupFires(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, countWakeupFires, id)
+	return err
+}
+
 const createIssueWakeup = `-- name: CreateIssueWakeup :one
-INSERT INTO issue_wakeup(id,workspace_id,issue_id,agent_id,created_by,source_task_id,parent_comment_id,instruction,kind,mode,event_types,filter_agent_id,filter_task_id,filter_actor_type,filter_actor_id,interval_seconds,cron_expression,timezone,next_fire_at,expires_at,expiry_seconds,on_timeout)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) RETURNING id, workspace_id, issue_id, agent_id, created_by, source_task_id, parent_comment_id, instruction, kind, mode, event_types, filter_agent_id, filter_task_id, interval_seconds, cron_expression, timezone, next_fire_at, enabled, disabled_at, revision, last_task_id, last_error, created_at, updated_at, filter_actor_type, filter_actor_id, expires_at, expiry_seconds, on_timeout, timed_out_at
+INSERT INTO issue_wakeup(id,workspace_id,issue_id,agent_id,created_by,source_task_id,parent_comment_id,instruction,kind,mode,event_types,filter_agent_id,filter_task_id,filter_actor_type,filter_actor_id,interval_seconds,cron_expression,timezone,next_fire_at,expires_at,expiry_seconds,on_timeout,condition,max_fires)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24) RETURNING id, workspace_id, issue_id, agent_id, created_by, source_task_id, parent_comment_id, instruction, kind, mode, event_types, filter_agent_id, filter_task_id, interval_seconds, cron_expression, timezone, next_fire_at, enabled, disabled_at, revision, last_task_id, last_error, created_at, updated_at, filter_actor_type, filter_actor_id, expires_at, expiry_seconds, on_timeout, timed_out_at, condition, condition_state, max_fires, fire_count, paused_reason
 `
 
 type CreateIssueWakeupParams struct {
@@ -246,6 +273,8 @@ type CreateIssueWakeupParams struct {
 	ExpiresAt       pgtype.Timestamptz `json:"expires_at"`
 	ExpirySeconds   pgtype.Int8        `json:"expiry_seconds"`
 	OnTimeout       pgtype.Text        `json:"on_timeout"`
+	Condition       json.RawMessage    `json:"condition"`
+	MaxFires        pgtype.Int4        `json:"max_fires"`
 }
 
 func (q *Queries) CreateIssueWakeup(ctx context.Context, arg CreateIssueWakeupParams) (IssueWakeup, error) {
@@ -272,6 +301,8 @@ func (q *Queries) CreateIssueWakeup(ctx context.Context, arg CreateIssueWakeupPa
 		arg.ExpiresAt,
 		arg.ExpirySeconds,
 		arg.OnTimeout,
+		arg.Condition,
+		arg.MaxFires,
 	)
 	var i IssueWakeup
 	err := row.Scan(
@@ -305,6 +336,11 @@ func (q *Queries) CreateIssueWakeup(ctx context.Context, arg CreateIssueWakeupPa
 		&i.ExpirySeconds,
 		&i.OnTimeout,
 		&i.TimedOutAt,
+		&i.Condition,
+		&i.ConditionState,
+		&i.MaxFires,
+		&i.FireCount,
+		&i.PausedReason,
 	)
 	return i, err
 }
@@ -502,6 +538,29 @@ func (q *Queries) DeleteExpiredWakeupReceipts(ctx context.Context, cutoff pgtype
 	return result.RowsAffected(), nil
 }
 
+const deleteIssueWakeup = `-- name: DeleteIssueWakeup :exec
+DELETE FROM issue_wakeup WHERE id= $1 AND issue_id= $2
+`
+
+type DeleteIssueWakeupParams struct {
+	ID      pgtype.UUID `json:"id"`
+	IssueID pgtype.UUID `json:"issue_id"`
+}
+
+func (q *Queries) DeleteIssueWakeup(ctx context.Context, arg DeleteIssueWakeupParams) error {
+	_, err := q.db.Exec(ctx, deleteIssueWakeup, arg.ID, arg.IssueID)
+	return err
+}
+
+const deleteIssueWakeupReceipts = `-- name: DeleteIssueWakeupReceipts :exec
+DELETE FROM issue_wakeup_receipt WHERE wakeup_id= $1
+`
+
+func (q *Queries) DeleteIssueWakeupReceipts(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteIssueWakeupReceipts, id)
+	return err
+}
+
 const disableIssueWakeups = `-- name: DisableIssueWakeups :exec
 UPDATE issue_wakeup SET enabled=false,disabled_at=clock_timestamp(),updated_at=clock_timestamp()
 WHERE issue_id= $1 AND disabled_at IS NULL
@@ -594,7 +653,7 @@ func (q *Queries) FindPendingWakeupTask(ctx context.Context, wakeupID string) (A
 }
 
 const getIssueWakeup = `-- name: GetIssueWakeup :one
-SELECT id, workspace_id, issue_id, agent_id, created_by, source_task_id, parent_comment_id, instruction, kind, mode, event_types, filter_agent_id, filter_task_id, interval_seconds, cron_expression, timezone, next_fire_at, enabled, disabled_at, revision, last_task_id, last_error, created_at, updated_at, filter_actor_type, filter_actor_id, expires_at, expiry_seconds, on_timeout, timed_out_at FROM issue_wakeup WHERE id= $1 AND workspace_id= $2
+SELECT id, workspace_id, issue_id, agent_id, created_by, source_task_id, parent_comment_id, instruction, kind, mode, event_types, filter_agent_id, filter_task_id, interval_seconds, cron_expression, timezone, next_fire_at, enabled, disabled_at, revision, last_task_id, last_error, created_at, updated_at, filter_actor_type, filter_actor_id, expires_at, expiry_seconds, on_timeout, timed_out_at, condition, condition_state, max_fires, fire_count, paused_reason FROM issue_wakeup WHERE id= $1 AND workspace_id= $2
 `
 
 type GetIssueWakeupParams struct {
@@ -636,6 +695,11 @@ func (q *Queries) GetIssueWakeup(ctx context.Context, arg GetIssueWakeupParams) 
 		&i.ExpirySeconds,
 		&i.OnTimeout,
 		&i.TimedOutAt,
+		&i.Condition,
+		&i.ConditionState,
+		&i.MaxFires,
+		&i.FireCount,
+		&i.PausedReason,
 	)
 	return i, err
 }
@@ -651,6 +715,7 @@ SELECT w.id,w.workspace_id,w.issue_id,w.agent_id,w.created_by,w.source_task_id,w
  w.interval_seconds,w.cron_expression,w.timezone,w.next_fire_at,w.enabled,w.disabled_at,w.revision,
  w.last_task_id,w.last_error,w.created_at,w.updated_at,a.name AS agent_name,source.name AS filter_agent_name,t.status AS last_task_status,
  w.expires_at,w.expiry_seconds,w.on_timeout,w.timed_out_at,
+ w.condition,w.max_fires,w.fire_count,w.paused_reason,
  (w.source_task_id IS NOT NULL)::bool AS created_by_agent,creator.name AS created_by_name,
  (CASE WHEN creator_agent.id IS NOT NULL THEN creator_agent.id END)::uuid AS source_agent_id,creator_agent.name AS source_agent_name
 FROM issue_wakeup w JOIN agent a ON a.id=w.agent_id AND a.workspace_id=w.workspace_id
@@ -706,6 +771,10 @@ type ListIssueWakeupsRow struct {
 	ExpirySeconds   pgtype.Int8        `json:"expiry_seconds"`
 	OnTimeout       pgtype.Text        `json:"on_timeout"`
 	TimedOutAt      pgtype.Timestamptz `json:"timed_out_at"`
+	Condition       json.RawMessage    `json:"condition"`
+	MaxFires        pgtype.Int4        `json:"max_fires"`
+	FireCount       int32              `json:"fire_count"`
+	PausedReason    pgtype.Text        `json:"paused_reason"`
 	CreatedByAgent  bool               `json:"created_by_agent"`
 	CreatedByName   pgtype.Text        `json:"created_by_name"`
 	SourceAgentID   pgtype.UUID        `json:"source_agent_id"`
@@ -756,10 +825,57 @@ func (q *Queries) ListIssueWakeups(ctx context.Context, arg ListIssueWakeupsPara
 			&i.ExpirySeconds,
 			&i.OnTimeout,
 			&i.TimedOutAt,
+			&i.Condition,
+			&i.MaxFires,
+			&i.FireCount,
+			&i.PausedReason,
 			&i.CreatedByAgent,
 			&i.CreatedByName,
 			&i.SourceAgentID,
 			&i.SourceAgentName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPausedWakeupIssues = `-- name: ListPausedWakeupIssues :many
+SELECT w.issue_id,w.id,w.agent_id,w.paused_reason
+FROM issue_wakeup w JOIN issue i ON i.id=w.issue_id AND i.workspace_id=w.workspace_id
+WHERE w.workspace_id= $1 AND NOT w.enabled AND w.paused_reason IN ('loop','rate','max_fires')
+ AND i.status NOT IN ('done','cancelled')
+ AND NOT EXISTS(SELECT 1 FROM issue_status s WHERE s.workspace_id=i.workspace_id AND s.key=i.status AND s.category IN ('done','closed'))
+ORDER BY w.updated_at DESC LIMIT 200
+`
+
+type ListPausedWakeupIssuesRow struct {
+	IssueID      pgtype.UUID `json:"issue_id"`
+	ID           pgtype.UUID `json:"id"`
+	AgentID      pgtype.UUID `json:"agent_id"`
+	PausedReason pgtype.Text `json:"paused_reason"`
+}
+
+// Rules the platform paused on open issues, for board cues and the
+// workspace banner. Access follows shared issue visibility.
+func (q *Queries) ListPausedWakeupIssues(ctx context.Context, workspaceID pgtype.UUID) ([]ListPausedWakeupIssuesRow, error) {
+	rows, err := q.db.Query(ctx, listPausedWakeupIssues, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPausedWakeupIssuesRow{}
+	for rows.Next() {
+		var i ListPausedWakeupIssuesRow
+		if err := rows.Scan(
+			&i.IssueID,
+			&i.ID,
+			&i.AgentID,
+			&i.PausedReason,
 		); err != nil {
 			return nil, err
 		}
@@ -817,9 +933,11 @@ WITH candidates AS (
  UNION
  SELECT id FROM issue_wakeup WHERE enabled AND expires_at<=now()
  UNION
+ SELECT id FROM issue_wakeup WHERE enabled AND condition IS NOT NULL AND next_fire_at<=now()
+ UNION
  SELECT wakeup_id FROM issue_wakeup_receipt WHERE processed_at IS NULL
 )
-SELECT w.id, w.workspace_id, w.issue_id, w.agent_id, w.created_by, w.source_task_id, w.parent_comment_id, w.instruction, w.kind, w.mode, w.event_types, w.filter_agent_id, w.filter_task_id, w.interval_seconds, w.cron_expression, w.timezone, w.next_fire_at, w.enabled, w.disabled_at, w.revision, w.last_task_id, w.last_error, w.created_at, w.updated_at, w.filter_actor_type, w.filter_actor_id, w.expires_at, w.expiry_seconds, w.on_timeout, w.timed_out_at FROM candidates c JOIN issue_wakeup w ON w.id=c.id
+SELECT w.id, w.workspace_id, w.issue_id, w.agent_id, w.created_by, w.source_task_id, w.parent_comment_id, w.instruction, w.kind, w.mode, w.event_types, w.filter_agent_id, w.filter_task_id, w.interval_seconds, w.cron_expression, w.timezone, w.next_fire_at, w.enabled, w.disabled_at, w.revision, w.last_task_id, w.last_error, w.created_at, w.updated_at, w.filter_actor_type, w.filter_actor_id, w.expires_at, w.expiry_seconds, w.on_timeout, w.timed_out_at, w.condition, w.condition_state, w.max_fires, w.fire_count, w.paused_reason FROM candidates c JOIN issue_wakeup w ON w.id=c.id
 ORDER BY w.updated_at,w.id LIMIT 100
 `
 
@@ -863,6 +981,100 @@ func (q *Queries) ListReadyWakeups(ctx context.Context) ([]IssueWakeup, error) {
 			&i.ExpirySeconds,
 			&i.OnTimeout,
 			&i.TimedOutAt,
+			&i.Condition,
+			&i.ConditionState,
+			&i.MaxFires,
+			&i.FireCount,
+			&i.PausedReason,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWakeupChains = `-- name: ListWakeupChains :many
+SELECT id,COALESCE(context->>'wakeup_id','')::text AS wakeup_id,COALESCE(context->'wakeup_chain','[]'::jsonb)::jsonb AS chain
+FROM agent_task_queue WHERE id=ANY($1::uuid[])
+`
+
+type ListWakeupChainsRow struct {
+	ID       pgtype.UUID `json:"id"`
+	WakeupID string      `json:"wakeup_id"`
+	Chain    []byte      `json:"chain"`
+}
+
+// Rules whose runs produced the source events, including rules further up
+// each run's own trigger chain.
+func (q *Queries) ListWakeupChains(ctx context.Context, ids []pgtype.UUID) ([]ListWakeupChainsRow, error) {
+	rows, err := q.db.Query(ctx, listWakeupChains, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListWakeupChainsRow{}
+	for rows.Next() {
+		var i ListWakeupChainsRow
+		if err := rows.Scan(&i.ID, &i.WakeupID, &i.Chain); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWakeupRuns = `-- name: ListWakeupRuns :many
+SELECT t.id,t.status,t.created_at,t.started_at,t.completed_at,
+ COALESCE(t.context->'wakeup_checkin'->>'note','')::text AS checkin_note,
+ COALESCE((SELECT array_agg(DISTINCT f->>'event_type') FROM jsonb_array_elements(CASE WHEN jsonb_typeof(t.context->'wakeup_evidence'->'facts')='array' THEN t.context->'wakeup_evidence'->'facts' ELSE '[]'::jsonb END) f),'{}')::text[] AS triggers,
+ EXISTS(SELECT 1 FROM comment c WHERE c.issue_id=t.issue_id AND c.source_task_id=t.id)::bool AS commented
+FROM agent_task_queue t WHERE t.context->>'wakeup_id'= $1::text AND t.issue_id= $2
+ORDER BY t.created_at DESC,t.id DESC LIMIT 10
+`
+
+type ListWakeupRunsParams struct {
+	WakeupID string      `json:"wakeup_id"`
+	IssueID  pgtype.UUID `json:"issue_id"`
+}
+
+type ListWakeupRunsRow struct {
+	ID          pgtype.UUID        `json:"id"`
+	Status      string             `json:"status"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	StartedAt   pgtype.Timestamptz `json:"started_at"`
+	CompletedAt pgtype.Timestamptz `json:"completed_at"`
+	CheckinNote string             `json:"checkin_note"`
+	Triggers    []string           `json:"triggers"`
+	Commented   bool               `json:"commented"`
+}
+
+// The rule's latest runs with what triggered each one, a check-in note when
+// the run ended silently, and whether it left a comment.
+func (q *Queries) ListWakeupRuns(ctx context.Context, arg ListWakeupRunsParams) ([]ListWakeupRunsRow, error) {
+	rows, err := q.db.Query(ctx, listWakeupRuns, arg.WakeupID, arg.IssueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListWakeupRunsRow{}
+	for rows.Next() {
+		var i ListWakeupRunsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Status,
+			&i.CreatedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.CheckinNote,
+			&i.Triggers,
+			&i.Commented,
 		); err != nil {
 			return nil, err
 		}
@@ -967,7 +1179,7 @@ func (q *Queries) ListWorkspaceWakeupSummaryRows(ctx context.Context, arg ListWo
 }
 
 const lockIssueWakeup = `-- name: LockIssueWakeup :one
-SELECT id, workspace_id, issue_id, agent_id, created_by, source_task_id, parent_comment_id, instruction, kind, mode, event_types, filter_agent_id, filter_task_id, interval_seconds, cron_expression, timezone, next_fire_at, enabled, disabled_at, revision, last_task_id, last_error, created_at, updated_at, filter_actor_type, filter_actor_id, expires_at, expiry_seconds, on_timeout, timed_out_at FROM issue_wakeup WHERE id= $1 FOR UPDATE
+SELECT id, workspace_id, issue_id, agent_id, created_by, source_task_id, parent_comment_id, instruction, kind, mode, event_types, filter_agent_id, filter_task_id, interval_seconds, cron_expression, timezone, next_fire_at, enabled, disabled_at, revision, last_task_id, last_error, created_at, updated_at, filter_actor_type, filter_actor_id, expires_at, expiry_seconds, on_timeout, timed_out_at, condition, condition_state, max_fires, fire_count, paused_reason FROM issue_wakeup WHERE id= $1 FOR UPDATE
 `
 
 func (q *Queries) LockIssueWakeup(ctx context.Context, id pgtype.UUID) (IssueWakeup, error) {
@@ -1004,6 +1216,11 @@ func (q *Queries) LockIssueWakeup(ctx context.Context, id pgtype.UUID) (IssueWak
 		&i.ExpirySeconds,
 		&i.OnTimeout,
 		&i.TimedOutAt,
+		&i.Condition,
+		&i.ConditionState,
+		&i.MaxFires,
+		&i.FireCount,
+		&i.PausedReason,
 	)
 	return i, err
 }
@@ -1127,7 +1344,7 @@ func (q *Queries) LockWakeupSourceTask(ctx context.Context, arg LockWakeupSource
 }
 
 const locklessWakeup = `-- name: LocklessWakeup :one
-SELECT id, workspace_id, issue_id, agent_id, created_by, source_task_id, parent_comment_id, instruction, kind, mode, event_types, filter_agent_id, filter_task_id, interval_seconds, cron_expression, timezone, next_fire_at, enabled, disabled_at, revision, last_task_id, last_error, created_at, updated_at, filter_actor_type, filter_actor_id, expires_at, expiry_seconds, on_timeout, timed_out_at FROM issue_wakeup WHERE id= $1
+SELECT id, workspace_id, issue_id, agent_id, created_by, source_task_id, parent_comment_id, instruction, kind, mode, event_types, filter_agent_id, filter_task_id, interval_seconds, cron_expression, timezone, next_fire_at, enabled, disabled_at, revision, last_task_id, last_error, created_at, updated_at, filter_actor_type, filter_actor_id, expires_at, expiry_seconds, on_timeout, timed_out_at, condition, condition_state, max_fires, fire_count, paused_reason FROM issue_wakeup WHERE id= $1
 `
 
 func (q *Queries) LocklessWakeup(ctx context.Context, id pgtype.UUID) (IssueWakeup, error) {
@@ -1164,6 +1381,11 @@ func (q *Queries) LocklessWakeup(ctx context.Context, id pgtype.UUID) (IssueWake
 		&i.ExpirySeconds,
 		&i.OnTimeout,
 		&i.TimedOutAt,
+		&i.Condition,
+		&i.ConditionState,
+		&i.MaxFires,
+		&i.FireCount,
+		&i.PausedReason,
 	)
 	return i, err
 }
@@ -1191,6 +1413,26 @@ type NoteWakeupFailureParams struct {
 
 func (q *Queries) NoteWakeupFailure(ctx context.Context, arg NoteWakeupFailureParams) error {
 	_, err := q.db.Exec(ctx, noteWakeupFailure, arg.LastError, arg.ID)
+	return err
+}
+
+const pauseIssueWakeup = `-- name: PauseIssueWakeup :exec
+UPDATE issue_wakeup SET enabled=false,next_fire_at=NULL,paused_reason= $1,
+ disabled_at=CASE WHEN $2::bool THEN COALESCE(disabled_at,clock_timestamp()) ELSE disabled_at END,
+ updated_at=clock_timestamp() WHERE id= $3
+`
+
+type PauseIssueWakeupParams struct {
+	PausedReason pgtype.Text `json:"paused_reason"`
+	BlockRuns    bool        `json:"block_runs"`
+	ID           pgtype.UUID `json:"id"`
+}
+
+// The platform stopped a rule. A detected loop or burst also sets disabled_at
+// so queued runs of this rule can no longer be claimed; hitting the cap does
+// not, because the run that reached it is legitimate.
+func (q *Queries) PauseIssueWakeup(ctx context.Context, arg PauseIssueWakeupParams) error {
+	_, err := q.db.Exec(ctx, pauseIssueWakeup, arg.PausedReason, arg.BlockRuns, arg.ID)
 	return err
 }
 
@@ -1309,6 +1551,21 @@ func (q *Queries) ReplaceWakeupEvidence(ctx context.Context, arg ReplaceWakeupEv
 		&i.IssueSnapshot,
 	)
 	return i, err
+}
+
+const setWakeupConditionState = `-- name: SetWakeupConditionState :exec
+UPDATE issue_wakeup SET condition_state= $1,next_fire_at=$2,updated_at=clock_timestamp() WHERE id= $3
+`
+
+type SetWakeupConditionStateParams struct {
+	ConditionState string             `json:"condition_state"`
+	NextFireAt     pgtype.Timestamptz `json:"next_fire_at"`
+	ID             pgtype.UUID        `json:"id"`
+}
+
+func (q *Queries) SetWakeupConditionState(ctx context.Context, arg SetWakeupConditionStateParams) error {
+	_, err := q.db.Exec(ctx, setWakeupConditionState, arg.ConditionState, arg.NextFireAt, arg.ID)
+	return err
 }
 
 const touchWakeupDispatch = `-- name: TouchWakeupDispatch :exec

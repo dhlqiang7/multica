@@ -12,11 +12,14 @@ WITH base AS MATERIALIZED (
   w.interval_seconds,w.cron_expression,w.timezone,
   w.next_fire_at,w.enabled,w.revision,w.disabled_at,w.last_task_id,w.last_error,w.created_at,
   w.expires_at,w.expiry_seconds,w.on_timeout,w.timed_out_at,
+  w.condition,w.max_fires,w.fire_count,w.paused_reason,
   (w.source_task_id IS NOT NULL) AS created_by_agent,creator.name AS created_by_name,
   CASE WHEN creator_agent.id IS NOT NULL THEN creator_agent.id END AS source_agent_id,creator_agent.name AS source_agent_name,
   (i.status IN ('done','cancelled') OR EXISTS(SELECT 1 FROM issue_status s WHERE s.workspace_id=i.workspace_id AND s.key=i.status AND s.category IN ('done','closed'))) AS issue_closed,
   COALESCE((w.created_by= @member_id::uuid OR @is_admin::boolean),false) AS can_manage,
-  COALESCE(r.active_runs,0)::int AS active_runs
+  COALESCE(r.active_runs,0)::int AS active_runs,
+  (CASE WHEN w.source_task_id IS NOT NULL THEN 'agent' ELSE 'member' END)::text AS source,
+  NULL::text AS rule,NULL::int AS system_stage,NULL::text AS target_type,NULL::int AS system_remaining
  FROM issue_wakeup w
  JOIN workspace ws ON ws.id=w.workspace_id
  JOIN issue i ON i.id=w.issue_id AND i.workspace_id=w.workspace_id
@@ -34,19 +37,61 @@ LEFT JOIN "user" actor_user ON actor_user.id=actor_member.user_id
    AND t.status IN ('queued','deferred','dispatched','running','waiting_local_directory')
  ) r ON true
  WHERE w.workspace_id= @workspace_id
+ UNION ALL
+ -- The child-done system rule of each open parent that still waits for a
+ -- sub-issue: every child when unstaged, else its lowest unfinished stage.
+ -- It follows the per-issue override, then the workspace default.
+ SELECT p.id,p.id,p.title,ws.issue_prefix||'-'||p.number,
+  COALESCE(ta.id,leader.id),COALESCE(ta.name,leader.name,''),'event','continuous','{}'::text[],NULL::text,
+  NULL::uuid,''::text,NULL::uuid,NULL::text,NULL::uuid,
+  NULL::bigint,NULL::text,'UTC',
+  NULL::timestamptz,COALESCE(o.enabled,ws.settings->'system_wakeup_child_done' IS DISTINCT FROM 'false'::jsonb),0::bigint,NULL::timestamptz,NULL::uuid,NULL::text,p.created_at,
+  NULL::timestamptz,NULL::bigint,NULL::text,NULL::timestamptz,
+  NULL::jsonb,NULL::int,0,NULL::text,
+  false,NULL::text,
+  NULL::uuid,NULL::text,
+  false,true,0,
+  'system','child_done',ch.stage,p.assignee_type,ch.remaining
+ FROM (SELECT DISTINCT ci.parent_issue_id AS id FROM issue ci WHERE ci.workspace_id= @workspace_id AND ci.parent_issue_id IS NOT NULL) parents
+ JOIN issue p ON p.id=parents.id
+ JOIN workspace ws ON ws.id=p.workspace_id
+ LEFT JOIN issue_system_wakeup o ON o.issue_id=p.id AND o.workspace_id=p.workspace_id AND o.rule='child_done'
+ LEFT JOIN agent ta ON p.assignee_type='agent' AND ta.id=p.assignee_id AND ta.workspace_id=p.workspace_id
+ LEFT JOIN squad sq ON p.assignee_type='squad' AND sq.id=p.assignee_id AND sq.workspace_id=p.workspace_id
+ LEFT JOIN agent leader ON leader.id=sq.leader_id AND leader.workspace_id=p.workspace_id
+ CROSS JOIN LATERAL (
+  SELECT bool_or(ci.stage IS NOT NULL) AS staged,
+   min(ci.stage) FILTER(WHERE ci.stage IS NOT NULL AND NOT (ci.status IN ('done','cancelled') OR EXISTS(SELECT 1 FROM issue_status cs WHERE cs.workspace_id=ci.workspace_id AND cs.key=ci.status AND cs.category IN ('done','closed')))) AS stage,
+   count(*) FILTER(WHERE NOT (ci.status IN ('done','cancelled') OR EXISTS(SELECT 1 FROM issue_status cs WHERE cs.workspace_id=ci.workspace_id AND cs.key=ci.status AND cs.category IN ('done','closed')))) AS open_count
+  FROM issue ci WHERE ci.parent_issue_id=p.id AND ci.workspace_id=p.workspace_id
+ ) agg
+ CROSS JOIN LATERAL (
+  SELECT (CASE WHEN agg.staged THEN agg.stage END)::int AS stage,
+   (CASE WHEN agg.staged THEN (SELECT count(*) FROM issue ci WHERE ci.parent_issue_id=p.id AND ci.workspace_id=p.workspace_id
+     AND ci.stage=agg.stage AND NOT (ci.status IN ('done','cancelled') OR EXISTS(SELECT 1 FROM issue_status cs WHERE cs.workspace_id=ci.workspace_id AND cs.key=ci.status AND cs.category IN ('done','closed')))) ELSE agg.open_count END)::int AS remaining
+ ) ch
+ WHERE p.workspace_id= @workspace_id AND agg.open_count>0 AND (NOT agg.staged OR agg.stage IS NOT NULL)
+  AND p.status NOT IN ('done','cancelled')
+  AND NOT EXISTS(SELECT 1 FROM issue_status s WHERE s.workspace_id=p.workspace_id AND s.key=p.status AND s.category IN ('done','closed'))
 ), classified AS (
  SELECT *,CASE WHEN (enabled AND NOT issue_closed) OR active_runs>0 THEN 'active'
-  WHEN NOT issue_closed AND disabled_at IS NOT NULL THEN 'disabled' ELSE 'ended' END AS scope
+  WHEN NOT issue_closed AND paused_reason IS NOT NULL THEN 'paused'
+  WHEN NOT issue_closed AND (disabled_at IS NOT NULL OR source='system') THEN 'disabled' ELSE 'ended' END AS scope
  FROM base
 ), filtered AS (
  SELECT * FROM classified WHERE (@scope::text='all' OR scope= @scope)
   AND (@kind::text='all' OR (@kind='event' AND kind='event') OR (@kind='at' AND kind='at') OR (@kind='recurring' AND kind IN ('every','cron')))
+  AND (@source::text='' OR source= @source)
   AND (@agent_id::text='' OR agent_id::text= @agent_id)
   AND (@search::text='' OR strpos(lower(issue_title||' '||issue_identifier||' '||agent_name),lower(@search))>0)
 ), page AS (
  SELECT * FROM filtered ORDER BY created_at DESC,id DESC LIMIT @page_limit::int OFFSET @page_offset::int
 ), details AS (
  SELECT p.*,r.status AS last_task_status,
+  (CASE WHEN p.source='system' THEN (SELECT count(*) FROM agent_task_queue t7 JOIN comment sc ON sc.id=t7.trigger_comment_id AND sc.author_type='system'
+    WHERE t7.issue_id=p.issue_id AND t7.created_at>now()-interval '7 days')
+   ELSE (SELECT count(*) FROM agent_task_queue t7 WHERE t7.context->>'wakeup_id'=p.id::text AND t7.issue_id=p.issue_id
+    AND t7.created_at>now()-interval '7 days') END)::int AS runs_7d,
   CASE WHEN r.id IS NOT NULL THEN jsonb_build_object(
    'id',r.id,'agent_id',r.agent_id,'runtime_id',r.runtime_id,'issue_id',r.issue_id,'wakeup_id',p.id,
    'status',r.status,'priority',r.priority,'created_at',r.created_at,'started_at',r.started_at,
@@ -71,6 +116,7 @@ SELECT jsonb_build_object(
  'items',COALESCE((SELECT jsonb_agg(to_jsonb(details)-'created_at'-'scope' ORDER BY created_at DESC,id DESC) FROM details),'[]'::jsonb),
  'total',(SELECT count(*) FROM filtered),
  'counts',jsonb_build_object('all',(SELECT count(*) FROM classified),'active',(SELECT count(*) FROM classified WHERE scope='active'),
+  'paused',(SELECT count(*) FROM classified WHERE scope='paused'),
   'disabled',(SELECT count(*) FROM classified WHERE scope='disabled'),'ended',(SELECT count(*) FROM classified WHERE scope='ended')),
- 'agents',COALESCE((SELECT jsonb_agg(x ORDER BY x.name,x.id) FROM (SELECT DISTINCT agent_id AS id,agent_name AS name FROM base) x),'[]'::jsonb)
+ 'agents',COALESCE((SELECT jsonb_agg(x ORDER BY x.name,x.id) FROM (SELECT DISTINCT agent_id AS id,agent_name AS name FROM base WHERE agent_id IS NOT NULL) x),'[]'::jsonb)
 ) AS result;

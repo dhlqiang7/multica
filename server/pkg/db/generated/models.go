@@ -5,6 +5,7 @@
 package db
 
 import (
+	"encoding/json"
 	"net/netip"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -826,6 +827,16 @@ type Issue struct {
 	DuplicateOfIssueID pgtype.UUID        `json:"duplicate_of_issue_id"`
 }
 
+type IssueChildDoneEvent struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	ParentID    pgtype.UUID        `json:"parent_id"`
+	ChildID     pgtype.UUID        `json:"child_id"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	ClaimedAt   pgtype.Timestamptz `json:"claimed_at"`
+	ProcessedAt pgtype.Timestamptz `json:"processed_at"`
+}
+
 type IssueDependency struct {
 	ID               pgtype.UUID `json:"id"`
 	IssueID          pgtype.UUID `json:"issue_id"`
@@ -1032,6 +1043,11 @@ type IssueWakeup struct {
 	ExpirySeconds   pgtype.Int8        `json:"expiry_seconds"`
 	OnTimeout       pgtype.Text        `json:"on_timeout"`
 	TimedOutAt      pgtype.Timestamptz `json:"timed_out_at"`
+	Condition       json.RawMessage    `json:"condition"`
+	ConditionState  string             `json:"condition_state"`
+	MaxFires        pgtype.Int4        `json:"max_fires"`
+	FireCount       int32              `json:"fire_count"`
+	PausedReason    pgtype.Text        `json:"paused_reason"`
 }
 
 type IssueWakeupReceipt struct {

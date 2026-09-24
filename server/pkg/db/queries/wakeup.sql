@@ -1,6 +1,6 @@
 -- name: CreateIssueWakeup :one
-INSERT INTO issue_wakeup(id,workspace_id,issue_id,agent_id,created_by,source_task_id,parent_comment_id,instruction,kind,mode,event_types,filter_agent_id,filter_task_id,filter_actor_type,filter_actor_id,interval_seconds,cron_expression,timezone,next_fire_at,expires_at,expiry_seconds,on_timeout)
-VALUES(@id,@workspace_id,@issue_id,@agent_id,@created_by,sqlc.narg(source_task_id),sqlc.narg(parent_comment_id),@instruction,@kind,@mode,@event_types,sqlc.narg(filter_agent_id),sqlc.narg(filter_task_id),sqlc.narg(filter_actor_type),sqlc.narg(filter_actor_id),sqlc.narg(interval_seconds),sqlc.narg(cron_expression),@timezone,sqlc.narg(next_fire_at),sqlc.narg(expires_at),sqlc.narg(expiry_seconds),sqlc.narg(on_timeout)) RETURNING *;
+INSERT INTO issue_wakeup(id,workspace_id,issue_id,agent_id,created_by,source_task_id,parent_comment_id,instruction,kind,mode,event_types,filter_agent_id,filter_task_id,filter_actor_type,filter_actor_id,interval_seconds,cron_expression,timezone,next_fire_at,expires_at,expiry_seconds,on_timeout,condition,max_fires)
+VALUES(@id,@workspace_id,@issue_id,@agent_id,@created_by,sqlc.narg(source_task_id),sqlc.narg(parent_comment_id),@instruction,@kind,@mode,@event_types,sqlc.narg(filter_agent_id),sqlc.narg(filter_task_id),sqlc.narg(filter_actor_type),sqlc.narg(filter_actor_id),sqlc.narg(interval_seconds),sqlc.narg(cron_expression),@timezone,sqlc.narg(next_fire_at),sqlc.narg(expires_at),sqlc.narg(expiry_seconds),sqlc.narg(on_timeout),sqlc.narg(condition),sqlc.narg(max_fires)) RETURNING *;
 -- name: ListIssueWakeups :many
 SELECT w.id,w.workspace_id,w.issue_id,w.agent_id,w.created_by,w.source_task_id,w.parent_comment_id,w.instruction,
  w.kind,w.mode,w.event_types,w.filter_actor_type,
@@ -12,6 +12,7 @@ SELECT w.id,w.workspace_id,w.issue_id,w.agent_id,w.created_by,w.source_task_id,w
  w.interval_seconds,w.cron_expression,w.timezone,w.next_fire_at,w.enabled,w.disabled_at,w.revision,
  w.last_task_id,w.last_error,w.created_at,w.updated_at,a.name AS agent_name,source.name AS filter_agent_name,t.status AS last_task_status,
  w.expires_at,w.expiry_seconds,w.on_timeout,w.timed_out_at,
+ w.condition,w.max_fires,w.fire_count,w.paused_reason,
  (w.source_task_id IS NOT NULL)::bool AS created_by_agent,creator.name AS created_by_name,
  (CASE WHEN creator_agent.id IS NOT NULL THEN creator_agent.id END)::uuid AS source_agent_id,creator_agent.name AS source_agent_name
 FROM issue_wakeup w JOIN agent a ON a.id=w.agent_id AND a.workspace_id=w.workspace_id
@@ -73,6 +74,8 @@ WITH candidates AS (
  SELECT id FROM issue_wakeup WHERE enabled AND kind<>'event' AND next_fire_at<=now()
  UNION
  SELECT id FROM issue_wakeup WHERE enabled AND expires_at<=now()
+ UNION
+ SELECT id FROM issue_wakeup WHERE enabled AND condition IS NOT NULL AND next_fire_at<=now()
  UNION
  SELECT wakeup_id FROM issue_wakeup_receipt WHERE processed_at IS NULL
 )
@@ -174,3 +177,52 @@ UPDATE issue_wakeup SET updated_at=clock_timestamp() WHERE id= @id;
 -- the same transaction must remain claimable, and the rule reads as timed out,
 -- not as turned off by a person.
 UPDATE issue_wakeup SET enabled=false,next_fire_at=NULL,timed_out_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id= @id;
+
+-- name: SetWakeupConditionState :exec
+UPDATE issue_wakeup SET condition_state= @condition_state,next_fire_at=sqlc.narg(next_fire_at),updated_at=clock_timestamp() WHERE id= @id;
+
+-- name: PauseIssueWakeup :exec
+-- The platform stopped a rule. A detected loop or burst also sets disabled_at
+-- so queued runs of this rule can no longer be claimed; hitting the cap does
+-- not, because the run that reached it is legitimate.
+UPDATE issue_wakeup SET enabled=false,next_fire_at=NULL,paused_reason= @paused_reason,
+ disabled_at=CASE WHEN @block_runs::bool THEN COALESCE(disabled_at,clock_timestamp()) ELSE disabled_at END,
+ updated_at=clock_timestamp() WHERE id= @id;
+
+-- name: CountWakeupFires :exec
+UPDATE issue_wakeup SET fire_count=fire_count+1 WHERE id= @id;
+
+-- name: CountRecentWakeupTasks :one
+SELECT count(*) FROM agent_task_queue WHERE context->>'wakeup_id'= @wakeup_id::text AND issue_id= @issue_id AND created_at> @since;
+
+-- name: ListWakeupChains :many
+-- Rules whose runs produced the source events, including rules further up
+-- each run's own trigger chain.
+SELECT id,COALESCE(context->>'wakeup_id','')::text AS wakeup_id,COALESCE(context->'wakeup_chain','[]'::jsonb)::jsonb AS chain
+FROM agent_task_queue WHERE id=ANY(@ids::uuid[]);
+
+-- name: ListWakeupRuns :many
+-- The rule's latest runs with what triggered each one, a check-in note when
+-- the run ended silently, and whether it left a comment.
+SELECT t.id,t.status,t.created_at,t.started_at,t.completed_at,
+ COALESCE(t.context->'wakeup_checkin'->>'note','')::text AS checkin_note,
+ COALESCE((SELECT array_agg(DISTINCT f->>'event_type') FROM jsonb_array_elements(CASE WHEN jsonb_typeof(t.context->'wakeup_evidence'->'facts')='array' THEN t.context->'wakeup_evidence'->'facts' ELSE '[]'::jsonb END) f),'{}')::text[] AS triggers,
+ EXISTS(SELECT 1 FROM comment c WHERE c.issue_id=t.issue_id AND c.source_task_id=t.id)::bool AS commented
+FROM agent_task_queue t WHERE t.context->>'wakeup_id'= @wakeup_id::text AND t.issue_id= @issue_id
+ORDER BY t.created_at DESC,t.id DESC LIMIT 10;
+
+-- name: DeleteIssueWakeupReceipts :exec
+DELETE FROM issue_wakeup_receipt WHERE wakeup_id= @id;
+
+-- name: DeleteIssueWakeup :exec
+DELETE FROM issue_wakeup WHERE id= @id AND issue_id= @issue_id;
+
+-- name: ListPausedWakeupIssues :many
+-- Rules the platform paused on open issues, for board cues and the
+-- workspace banner. Access follows shared issue visibility.
+SELECT w.issue_id,w.id,w.agent_id,w.paused_reason
+FROM issue_wakeup w JOIN issue i ON i.id=w.issue_id AND i.workspace_id=w.workspace_id
+WHERE w.workspace_id= @workspace_id AND NOT w.enabled AND w.paused_reason IN ('loop','rate','max_fires')
+ AND i.status NOT IN ('done','cancelled')
+ AND NOT EXISTS(SELECT 1 FROM issue_status s WHERE s.workspace_id=i.workspace_id AND s.key=i.status AND s.category IN ('done','closed'))
+ORDER BY w.updated_at DESC LIMIT 200;
