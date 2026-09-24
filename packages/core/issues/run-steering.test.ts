@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { AgentTask } from "../types";
-import { agentRunState, commentSupplementReceipts, recipientActions, recipientRouting, resolveRecipientAction, TASK_SUPPLEMENT_CAPABILITY } from "./run-steering";
+import { agentRunState, commentSupplementReceipts, recipientActions, recipientRouting, resolveRecipientAction, steerTarget, TASK_SUPPLEMENT_CAPABILITY } from "./run-steering";
 
 function task(over: Partial<AgentTask>): AgentTask {
   return {
@@ -72,6 +72,18 @@ describe("recipient actions", () => {
     expect(resolveRecipientAction({ kind: "idle" }, "skip", inThread)).toBe("skip");
     // Editing never stops a run.
     expect(recipientActions(steerable, { canSteer: false, canRestart: false, steerByDefault: false })).toEqual(["after_run", "skip"]);
+  });
+
+  it("steers one turn per message: the author's pick, else the first default", () => {
+    expect(steerTarget([
+      { agentId: "a", action: "steer" },
+      { agentId: "b", action: "steer" },
+    ])).toBe("a");
+    expect(steerTarget([
+      { agentId: "a", action: "steer" },
+      { agentId: "b", action: "steer", chosen: "steer" },
+    ])).toBe("b");
+    expect(steerTarget([{ agentId: "a", action: "after_run" }, { agentId: "b", action: "start" }])).toBeUndefined();
   });
 
   it("maps actions to request routing", () => {
