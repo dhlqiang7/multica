@@ -27,6 +27,24 @@ function useReceiptAgentName(issueId: string, receipt: CommentSupplementReceipt)
   return { name: agentId ? getActorName("agent", agentId) : "", task };
 }
 
+const HAN = /\p{Script=Han}/u;
+
+/**
+ * Agent names joined for the badge. Chinese copy spaces a Latin name from the
+ * Chinese joiner ("Lambda 和 Orion"), which Intl.ListFormat does not; the
+ * enumeration comma stays unspaced.
+ */
+export function formatAgentNames(locale: string, names: string[]): string {
+  const parts = new Intl.ListFormat(locale, { type: "conjunction" }).formatToParts(names);
+  if (!locale.startsWith("zh")) return parts.map((part) => part.value).join("");
+  return parts.map((part, i) => {
+    if (part.type !== "literal" || !HAN.test(part.value)) return part.value;
+    const before = parts[i - 1]?.value.slice(-1) ?? "";
+    const after = parts[i + 1]?.value.charAt(0) ?? "";
+    return `${before && !HAN.test(before) ? " " : ""}${part.value}${after && !HAN.test(after) ? " " : ""}`;
+  }).join("");
+}
+
 /** "Added to Lambda's run": marks a message that steered a running turn. */
 export function SteerBadge({ issueId, entry }: { issueId: string; entry: TimelineEntry }) {
   const { t } = useT("issues");
@@ -37,7 +55,7 @@ export function SteerBadge({ issueId, entry }: { issueId: string; entry: Timelin
   // Every receipt from a current server names its agent; the legacy single
   // receipt resolves the name from its run instead.
   const names = receipts.every((receipt) => receipt.agent_id)
-    ? new Intl.ListFormat(locale, { type: "conjunction" }).format(receipts.map((receipt) => getActorName("agent", receipt.agent_id!)))
+    ? formatAgentNames(locale, receipts.map((receipt) => getActorName("agent", receipt.agent_id!)))
     : null;
   return (
     <span className="inline-flex min-w-0 items-center gap-1 text-caption text-muted-foreground">

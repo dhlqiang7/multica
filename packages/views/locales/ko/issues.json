@@ -573,9 +573,9 @@
     "trigger_starts_now": "바로 시작합니다.",
     "trigger_starts_when_online": "현재 오프라인이며 온라인이 되면 시작합니다.",
     "trigger_click_to_skip": "클릭하면 이번에는 건너뜁니다.",
-    "trigger_click_to_manage": "클릭하여 이번에 실행할 대상을 선택합니다.",
+    "trigger_click_to_manage": "클릭하여 에이전트별로 이 메시지의 처리 방식을 선택합니다.",
     "trigger_click_to_restore": "이번에는 시작하지 않습니다. 클릭하면 복원됩니다.",
-    "trigger_preview_title": "전송 후 시작할 대상",
+    "trigger_preview_title": "받는 에이전트",
     "trigger_chip_aria": "{{name}} 트리거: {{state}}",
     "resolve": {
       "resolve_thread_action": "스레드 해결",

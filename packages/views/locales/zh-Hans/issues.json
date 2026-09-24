@@ -573,9 +573,9 @@
     "trigger_starts_now": "立即开始。",
     "trigger_starts_when_online": "当前离线，上线后开始。",
     "trigger_click_to_skip": "点击本次跳过。",
-    "trigger_click_to_manage": "点击选择本次运行的对象。",
+    "trigger_click_to_manage": "点击为每个智能体选择这条消息的处理方式。",
     "trigger_click_to_restore": "本次不会开始，点击恢复。",
-    "trigger_preview_title": "发送后开始",
+    "trigger_preview_title": "接收方",
     "trigger_chip_aria": "{{name}} 触发状态：{{state}}",
     "resolve": {
       "resolve_thread_action": "解决该讨论",

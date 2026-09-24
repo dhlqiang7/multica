@@ -585,9 +585,9 @@
     "trigger_starts_now": "Démarre immédiatement.",
     "trigger_starts_when_online": "Hors ligne — démarrera dès la reconnexion.",
     "trigger_click_to_skip": "Cliquez pour ignorer cette fois.",
-    "trigger_click_to_manage": "Cliquez pour choisir qui s'exécute cette fois.",
+    "trigger_click_to_manage": "Cliquez pour choisir ce que chaque agent fait de ce message.",
     "trigger_click_to_restore": "Ne démarrera pas cette fois. Cliquez pour rétablir.",
-    "trigger_preview_title": "Démarrera à l'envoi",
+    "trigger_preview_title": "Destinataires",
     "trigger_chip_aria": "Déclenchement de {{name}} : {{state}}",
     "resolve": {
       "resolve_thread_action": "Résoudre le fil",

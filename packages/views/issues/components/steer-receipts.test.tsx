@@ -5,7 +5,7 @@ import { api } from "@multica/core/api";
 import { issueKeys } from "@multica/core/issues/queries";
 import type { AgentTask, Comment, TimelineEntry } from "@multica/core/types";
 import { renderWithI18n } from "../../test/i18n";
-import { SteerBadge, SteerReceipts } from "./steer-receipts";
+import { formatAgentNames, SteerBadge, SteerReceipts } from "./steer-receipts";
 
 vi.mock("@multica/core/api", () => ({ api: {
   retryTaskSupplement: vi.fn(), createComment: vi.fn(), listTasksByIssue: vi.fn(),
@@ -114,5 +114,14 @@ describe("SteerReceipts", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Lambda didn't get it · the agent rejected the message");
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(api.retryTaskSupplement).toHaveBeenCalledWith("issue", turn, "steer"));
+  });
+});
+
+describe("formatAgentNames", () => {
+  it("spaces Latin names from the Chinese joiner but not from the enumeration comma", () => {
+    expect(formatAgentNames("zh-Hans", ["Lambda", "Orion"])).toBe("Lambda 和 Orion");
+    expect(formatAgentNames("zh-Hans", ["Lambda", "Orion", "Kappa"])).toBe("Lambda、Orion 和 Kappa");
+    expect(formatAgentNames("zh-Hans", ["小助手", "Orion"])).toBe("小助手和 Orion");
+    expect(formatAgentNames("en", ["Lambda", "Orion"])).toBe("Lambda and Orion");
   });
 });

@@ -585,9 +585,9 @@
     "trigger_starts_now": "Starts right away.",
     "trigger_starts_when_online": "Offline now — starts once online.",
     "trigger_click_to_skip": "Click to skip this time.",
-    "trigger_click_to_manage": "Click to choose who runs this time.",
+    "trigger_click_to_manage": "Click to choose what each agent does with this message.",
     "trigger_click_to_restore": "Won't start this time. Click to restore.",
-    "trigger_preview_title": "Will start when sent",
+    "trigger_preview_title": "Recipients",
     "trigger_chip_aria": "{{name}} trigger: {{state}}",
     "resolve": {
       "resolve_thread_action": "Resolve thread",
