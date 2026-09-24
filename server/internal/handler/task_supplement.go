@@ -10,7 +10,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -131,48 +130,6 @@ func applyCommentSupplements(resp *CommentResponse, receipts []CommentSupplement
 	resp.SupplementDeliveredAt = receipts[0].DeliveredAt
 }
 
-// commentSteer is what a member asked to steer: the exact running turns they
-// saw, and the logical send that makes a retry idempotent.
-type commentSteer struct {
-	TaskIDs         []pgtype.UUID
-	ClientRequestID pgtype.UUID
-}
-
-// commentForRequest finds the comment an author already saved for this
-// logical send, so a retry after a lost response never posts it twice —
-// whether that send steered a running turn or fell back to a normal trigger.
-func (h *Handler) commentForRequest(ctx context.Context, issue db.Issue, authorID, requestID pgtype.UUID) (db.Comment, bool) {
-	if !requestID.Valid {
-		return db.Comment{}, false
-	}
-	comment, err := h.Queries.GetCommentByClientRequest(ctx, db.GetCommentByClientRequestParams{
-		IssueID: issue.ID, AuthorID: authorID, ClientRequestID: requestID,
-	})
-	if err != nil {
-		return db.Comment{}, false
-	}
-	return comment, true
-}
-
-// writeReplayedComment answers a retried send with the comment it already
-// saved, as it stands now, including every receipt it holds.
-func (h *Handler) writeReplayedComment(ctx context.Context, w http.ResponseWriter, issue db.Issue, comment db.Comment) {
-	if comment.DeletedAt.Valid {
-		writeError(w, http.StatusConflict, "this message was already sent and then deleted")
-		return
-	}
-	resp := commentToResponse(comment, nil, nil)
-	applyCommentSupplements(&resp, h.listCommentSupplements(ctx, issue.WorkspaceID, []pgtype.UUID{comment.ID})[uuidToString(comment.ID)])
-	writeJSON(w, http.StatusOK, resp)
-}
-
-// isCommentRequestConflict reports that a concurrent twin of this send saved
-// its comment first.
-func isCommentRequestConflict(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "comment_client_request_uidx"
-}
-
 // steerCommentAgentTriggers binds a member comment to the turn its author
 // chose for each recipient. A bound agent leaves the enqueue list: that turn
 // receives the comment instead of a follow-up run. A chosen turn that has
@@ -180,22 +137,18 @@ func isCommentRequestConflict(err error) bool {
 // for another turn of the same agent; that recipient keeps its normal
 // queued / coalesced / deferred handling, so losing a race never drops or
 // misdirects the comment.
-func (h *Handler) steerCommentAgentTriggers(ctx context.Context, issue db.Issue, comment db.Comment, actorType string, triggers []commentAgentTrigger, steer commentSteer) ([]commentAgentTrigger, map[string]commentEnqueueResult) {
-	if len(steer.TaskIDs) == 0 || len(triggers) == 0 || actorType != "member" {
+func (h *Handler) steerCommentAgentTriggers(ctx context.Context, issue db.Issue, comment db.Comment, actorType string, triggers []commentAgentTrigger, steerTaskIDs []pgtype.UUID) ([]commentAgentTrigger, map[string]commentEnqueueResult) {
+	if len(steerTaskIDs) == 0 || len(triggers) == 0 || actorType != "member" {
 		return triggers, nil
 	}
 	// Each chosen turn names its agent; only a turn of this issue counts.
-	chosen := make(map[string]pgtype.UUID, len(steer.TaskIDs))
-	for _, taskID := range steer.TaskIDs {
+	chosen := make(map[string]pgtype.UUID, len(steerTaskIDs))
+	for _, taskID := range steerTaskIDs {
 		task, err := h.Queries.GetAgentTask(ctx, taskID)
 		if err != nil || task.IssueID != issue.ID {
 			continue
 		}
 		chosen[uuidToString(task.AgentID)] = task.ID
-	}
-	requestID := steer.ClientRequestID
-	if !requestID.Valid {
-		requestID = comment.ID
 	}
 	kept := make([]commentAgentTrigger, 0, len(triggers))
 	steered := make(map[string]commentEnqueueResult)
@@ -206,16 +159,11 @@ func (h *Handler) steerCommentAgentTriggers(ctx context.Context, issue db.Issue,
 			kept = append(kept, trigger)
 			continue
 		}
+		// The comment is its own request id: it binds to a turn at most once.
 		bound, err := h.Queries.BindCommentTaskSupplement(ctx, db.BindCommentTaskSupplementParams{
 			TaskID: taskID, IssueID: issue.ID, AgentID: trigger.Agent.ID, WorkspaceID: issue.WorkspaceID,
-			CommentID: comment.ID, AuthorID: comment.AuthorID, ClientRequestID: requestID,
+			CommentID: comment.ID, AuthorID: comment.AuthorID, ClientRequestID: comment.ID,
 		})
-		if isUniqueViolation(err) {
-			// A concurrent twin of this send already put the same input into
-			// this turn: neither deliver it twice nor start a follow-up for it.
-			steered[agentID] = commentEnqueueResult{status: DispatchSteered, reason: ReasonSteered}
-			continue
-		}
 		if err != nil {
 			if !errors.Is(err, pgx.ErrNoRows) {
 				slog.Warn("steer comment into running turn failed",

@@ -9,7 +9,6 @@ import { SubmitButton } from "@multica/ui/components/common/submit-button";
 import { Button } from "@multica/ui/components/ui/button";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { contentReferencesAttachment, type AgentTask } from "@multica/core/types";
-import type { CommentSteerRequest } from "@multica/core/issues/run-steering";
 import { formatShortcut, useShortcut } from "@multica/core/shortcuts";
 import { useCommentDraftStore, type CommentDraftKey } from "@multica/core/issues/stores";
 import { cn } from "@multica/ui/lib/utils";
@@ -18,9 +17,8 @@ import { useT } from "../../i18n";
 import { CommentTriggerChips } from "./comment-trigger-chips";
 import { useCommentTriggerPreview } from "../hooks/use-comment-trigger-preview";
 import { useRecipientActions } from "../hooks/use-recipient-actions";
-import { RecipientNotices } from "./recipient-notices";
+import { SteerAttachmentNotice } from "./steer-attachment-notice";
 import { useStopRunsBeforeSend } from "./use-stop-runs-before-send";
-import { useSteerRequest } from "./use-steer-request";
 import { useCommentUploads } from "./use-comment-uploads";
 import { useQuickActionMenu } from "../hooks/use-quick-action-menu";
 
@@ -36,7 +34,7 @@ interface ReplyInputProps {
   avatarId: string;
   /** Resolves true on success, false on failure — the reply box keeps its text
    *  (locked + spinning) until then, clearing only on success. */
-  onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[], steer?: CommentSteerRequest) => Promise<string | boolean>;
+  onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[], steerTaskIds?: string[]) => Promise<string | boolean>;
   /** Called after the server accepts the reply and the composer is cleared. */
   onAccepted?: (commentId: string) => void;
   size?: "sm" | "default";
@@ -107,17 +105,15 @@ function ReplyInput({
     () => pendingAttachments.some((a) => contentReferencesAttachment(content, a)) || gate.uploading,
     [pendingAttachments, content, gate.uploading],
   );
-  const { recipients, notices, routing, setAction, reset: resetRecipients } = useRecipientActions({
+  const { recipients, attachmentsBlockSteer, routing, setAction, reset: resetRecipients } = useRecipientActions({
     issueId,
     agents: triggerPreview.agents,
     allowSteer: true,
     hasAttachments,
-    hasDraft: canSend,
     steerByDefault,
     resetKey: `${issueId}:${parentId}`,
   });
   const stopRunsBeforeSend = useStopRunsBeforeSend(issueId);
-  const steerRequest = useSteerRequest();
 
   // Readonly-first: static shell until intent; an unsent draft mounts the
   // real editor immediately (see CommentInput). This is also what keeps the
@@ -203,7 +199,7 @@ function ReplyInput({
         content,
         activeIds.length > 0 ? activeIds : undefined,
         suppressAgentIds.length > 0 ? suppressAgentIds : undefined,
-        steerRequest.request(content, steerTaskIds),
+        steerTaskIds.length > 0 ? steerTaskIds : undefined,
       ).then((commentId) => {
         acceptedCommentIdRef.current = typeof commentId === "string" ? commentId : null;
         return !!commentId;
@@ -227,7 +223,6 @@ function ReplyInput({
       setContent("");
       setIsEmpty(true);
       resetRecipients();
-      steerRequest.settle();
       editorScrubbedRef.current = true;
       if (acceptedCommentIdRef.current) onAccepted?.(acceptedCommentIdRef.current);
     },
@@ -251,7 +246,7 @@ function ReplyInput({
           (!isEmpty || annotations.length > 0) && "pb-9",
         )}
       >
-        <RecipientNotices notices={notices} />
+        {attachmentsBlockSteer && <SteerAttachmentNotice />}
         {draftKey && annotations.length > 0 && <>
           {targetMissing && <p role="alert" className="mb-2 text-caption text-destructive">{t(($) => $.reply.annotations.target_deleted)}</p>}
           <ReplyAnnotations draftKey={draftKey} annotations={annotations}

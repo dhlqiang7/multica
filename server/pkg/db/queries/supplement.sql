@@ -97,8 +97,7 @@ WHERE s.task_id = @task_id
 -- path, to the exact running turn its author chose. Locking the task
 -- serializes against terminal transitions: when that turn ended first nothing
 -- is bound — never a later turn of the same agent — and the caller keeps the
--- comment's normal trigger instead. The (task, client_request_id) key makes a
--- retried send bind at most once.
+-- comment's normal trigger instead.
 WITH locked_task AS MATERIALIZED (
     SELECT t.id, t.issue_id, t.runtime_id
     FROM agent_task_queue t

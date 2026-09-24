@@ -30,7 +30,6 @@
     "steer_badge": "Ajouté à l'exécution de {{names}}",
     "steer_waiting": "En attente de lecture par {{name}}",
     "steer_read": "Lu par {{name}}",
-    "steer_read_after_step": "Lu par {{name}} · après l'étape {{step}}",
     "steer_not_received": "{{name}} ne l'a pas reçu · {{reason}}",
     "steer_resend": "Envoyer comme nouvelle exécution",
     "steer_resend_failed": "Impossible de l'envoyer comme nouvelle exécution.",
@@ -621,7 +620,6 @@
     "recipient_count_one": "{{count}} agent recevra ce message",
     "recipient_count_other": "{{count}} agents recevront ce message",
     "steer_attachment_notice": "Seul du texte peut rejoindre une exécution en cours : un message avec des fichiers sera traité après.",
-    "steer_ended_notice": "{{name}} vient de terminer son exécution : ce message en lance une nouvelle.",
     "restart_send": "Arrêter et envoyer",
     "restart_failed": "Impossible d'arrêter l'exécution en cours. Votre message n'a pas été envoyé."
   },

@@ -30,7 +30,6 @@
     "steer_badge": "Added to {{names}}'s run",
     "steer_waiting": "Waiting for {{name}} to read it",
     "steer_read": "Read by {{name}}",
-    "steer_read_after_step": "Read by {{name}} · after step {{step}}",
     "steer_not_received": "{{name}} didn't get it · {{reason}}",
     "steer_resend": "Send as a new run",
     "steer_resend_failed": "Couldn't send it as a new run.",
@@ -621,7 +620,6 @@
     "recipient_count_one": "{{count}} agent will receive this",
     "recipient_count_other": "{{count}} agents will receive this",
     "steer_attachment_notice": "Only text can join a running run, so a message with files is handled after it.",
-    "steer_ended_notice": "{{name}} just finished its run, so this message starts a new one.",
     "restart_send": "Stop and send",
     "restart_failed": "Couldn't stop the current run. Your message wasn't sent."
   },

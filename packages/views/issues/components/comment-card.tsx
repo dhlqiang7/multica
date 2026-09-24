@@ -42,7 +42,7 @@ import { SteerBadge, SteerReceipts } from "./steer-receipts";
 import type { AgentTask, TimelineEntry, Attachment } from "@multica/core/types";
 import { contentReferencesAttachment } from "@multica/core/types";
 import { isDeletedComment } from "@multica/core/issues/comment-deletion";
-import { commentSupplementReceipts, isSupplementInFlight, type CommentSteerRequest } from "@multica/core/issues/run-steering";
+import { commentSupplementReceipts, isSupplementInFlight } from "@multica/core/issues/run-steering";
 import { useConfigStore } from "@multica/core/config";
 import { selectStandaloneAttachments } from "@multica/core/attachments/image-sequence";
 import { useCommentCollapseStore, useCommentDraftStore } from "@multica/core/issues/stores";
@@ -124,7 +124,7 @@ interface CommentCardProps {
    * `CommentRow` has to rerun the rule per row.
    */
   canModerate?: boolean;
-  onReply: (parentId: string, content: string, attachmentIds?: string[], suppressAgentIds?: string[], steer?: CommentSteerRequest) => Promise<string | boolean>;
+  onReply: (parentId: string, content: string, attachmentIds?: string[], suppressAgentIds?: string[], steerTaskIds?: string[]) => Promise<string | boolean>;
   onReplyAccepted?: (commentId: string) => void;
   onEdit: (commentId: string, content: string, attachmentIds: string[], suppressAgentIds?: string[], contentBase?: string) => Promise<void>;
   onDelete: (commentId: string) => void;
@@ -368,7 +368,6 @@ function useEditAttachmentState(
     issueId,
     agents: triggerPreview.agents,
     allowSteer: false,
-    hasDraft: editing,
     steerByDefault: NEVER_STEER,
     resetKey: `${issueId}:${entry.id}:${entry.parent_id ?? ""}`,
   });
@@ -1478,7 +1477,7 @@ function CommentCardImpl({
                   draftKey={`reply:${issueId}:${entry.id}`}
                   onEditAnnotation={(id) => annotation.editAnnotation(id, true)}
                   steerByDefault={steerThreadRunByDefault}
-                  onSubmit={(content, attachmentIds, suppressAgentIds, steer) => replyTargetMissing ? Promise.resolve(false) : onReply(replyTargetId, content, attachmentIds, suppressAgentIds, steer)}
+                  onSubmit={(content, attachmentIds, suppressAgentIds, steerTaskIds) => replyTargetMissing ? Promise.resolve(false) : onReply(replyTargetId, content, attachmentIds, suppressAgentIds, steerTaskIds)}
                   onAccepted={onReplyAccepted}
                 />
               </div>

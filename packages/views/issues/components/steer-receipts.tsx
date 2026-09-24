@@ -1,10 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Check, CornerDownRight, Loader2, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
-import { taskMessagesOptions } from "@multica/core/chat/queries";
 import { useCreateComment, useRetryTaskSupplement } from "@multica/core/issues/mutations";
 import { api } from "@multica/core/api";
 import { issueKeys, issueTasksOptions } from "@multica/core/issues/queries";
@@ -12,23 +11,9 @@ import { commentSupplementReceipts, isSupplementInFlight } from "@multica/core/i
 import type { AgentTask, CommentSupplementReceipt, TimelineEntry } from "@multica/core/types";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { Button } from "@multica/ui/components/ui/button";
-import { buildSteps, type TraceStep } from "../../common/task-transcript/build-steps";
-import { buildTimeline } from "../../common/task-transcript/build-timeline";
 import { useLocale, useT } from "../../i18n";
 
 const TERMINAL = new Set<AgentTask["status"]>(["completed", "failed", "cancelled"]);
-
-/** How many of a turn's steps had started when a message reached it. */
-export function stepsBeforeDelivery(steps: readonly TraceStep[], deliveredAt: string | undefined): number | null {
-  const at = deliveredAt ? Date.parse(deliveredAt) : Number.NaN;
-  if (!Number.isFinite(at)) return null;
-  let count = 0;
-  for (const step of steps) {
-    const started = step.startedAt ? Date.parse(step.startedAt) : Number.NaN;
-    if (Number.isFinite(started) && started <= at) count++;
-  }
-  return count;
-}
 
 function useReceiptAgentName(issueId: string, receipt: CommentSupplementReceipt) {
   const { getActorName } = useActorName();
@@ -95,16 +80,6 @@ function SteerReceipt({ issueId, entry, receipt }: {
   const retry = useRetryTaskSupplement(issueId);
   const resend = useCreateComment(issueId);
   const [resent, setResent] = useState(false);
-  // Count steps only from a transcript the run already loaded; a receipt
-  // never fetches a whole log just to number it.
-  // (No `select`: this cache's structural sharing merges message lists.)
-  const { data: messages } = useQuery({ ...taskMessagesOptions(receipt.task_id), enabled: false });
-  const step = useMemo(
-    () => (messages && receipt.status === "delivered"
-      ? stepsBeforeDelivery(buildSteps(buildTimeline(messages)), receipt.delivered_at)
-      : null),
-    [messages, receipt.status, receipt.delivered_at],
-  );
   const terminal = !!task && TERMINAL.has(task.status);
   const inFlight = isSupplementInFlight(receipt);
   const queryClient = useQueryClient();
@@ -145,11 +120,7 @@ function SteerReceipt({ issueId, entry, receipt }: {
     return (
       <p className="flex items-center gap-1.5 text-caption text-muted-foreground">
         <Check aria-hidden className="size-3.5 shrink-0 text-success" />
-        <span>
-          {step
-            ? t(($) => $.inline_run.steer_read_after_step, { name, step })
-            : t(($) => $.inline_run.steer_read, { name })}
-        </span>
+        <span>{t(($) => $.inline_run.steer_read, { name })}</span>
       </p>
     );
   }

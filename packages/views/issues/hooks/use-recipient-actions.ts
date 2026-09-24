@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { issueTasksOptions } from "@multica/core/issues/queries";
 import { useCommentComposerStore } from "@multica/core/issues/stores";
@@ -26,13 +26,6 @@ export interface RecipientEntry {
   actions: RecipientAction[];
 }
 
-export interface RecipientNotices {
-  /** Recipients whose run ended while the message was still being written. */
-  endedAgentNames: string[];
-  /** A recipient would take this in its running turn, but files cannot go there. */
-  attachmentsBlockSteer: boolean;
-}
-
 /**
  * The composer's per-recipient choice. The preview decides WHO receives the
  * message (existing trigger rules); each recipient's live run on this issue
@@ -44,7 +37,6 @@ export function useRecipientActions({
   agents,
   allowSteer,
   hasAttachments = false,
-  hasDraft,
   steerByDefault: steerHere,
   resetKey,
 }: {
@@ -53,7 +45,6 @@ export function useRecipientActions({
   /** False for edits: an edit neither steers nor stops a run. */
   allowSteer: boolean;
   hasAttachments?: boolean;
-  hasDraft: boolean;
   /** Whether a running turn takes the message by default from this composer. */
   steerByDefault: (task: AgentTask) => boolean;
   /** Choices reset when the composer's context changes. */
@@ -80,11 +71,9 @@ export function useRecipientActions({
     [steerWithoutChoice, steerHere],
   );
   const [chosen, setChosen] = useState<Record<string, RecipientAction>>(NO_CHOICES);
-  const [endedAgentIds, setEndedAgentIds] = useState<ReadonlySet<string>>(() => new Set());
 
   useEffect(() => {
     setChosen(NO_CHOICES);
-    setEndedAgentIds(new Set());
   }, [resetKey]);
 
   // Forget choices for agents that are no longer recipients (an @mention removed).
@@ -111,32 +100,10 @@ export function useRecipientActions({
     };
   }), [agents, tasks, chosen, allowSteer, hasAttachments, steerByDefault]);
 
-  // A recipient that would have taken the message in its running turn, and
-  // whose run ended before it was sent, now starts a new run. Say so once,
-  // next to the preserved draft, instead of silently changing what Send does.
-  const steeringRef = useRef<ReadonlySet<string>>(new Set());
-  useEffect(() => {
-    const steering = new Set(recipients.filter((r) => r.action === "steer").map((r) => r.agent.id));
-    const ended = recipients
-      .filter((r) => steeringRef.current.has(r.agent.id) && !steering.has(r.agent.id) && r.state.kind !== "running")
-      .map((r) => r.agent.id);
-    steeringRef.current = steering;
-    if (ended.length > 0 && hasDraft) {
-      setEndedAgentIds((prev) => new Set([...prev, ...ended]));
-    }
-  }, [recipients, hasDraft]);
-  useEffect(() => {
-    if (!hasDraft) setEndedAgentIds((prev) => (prev.size === 0 ? prev : new Set()));
-  }, [hasDraft]);
-
-  const notices = useMemo<RecipientNotices>(() => ({
-    endedAgentNames: recipients
-      .filter((r) => endedAgentIds.has(r.agent.id) && r.state.kind !== "running")
-      .map((r) => r.agent.name),
-    attachmentsBlockSteer: allowSteer && hasAttachments && recipients.some((r) =>
-      r.state.kind === "running" && r.state.steerable
-      && (chosen[r.agent.id] === "steer" || (!chosen[r.agent.id] && steerByDefault(r.state.task)))),
-  }), [recipients, endedAgentIds, allowSteer, hasAttachments, chosen, steerByDefault]);
+  // A recipient would take this in its running turn, but files cannot go there.
+  const attachmentsBlockSteer = allowSteer && hasAttachments && recipients.some((r) =>
+    r.state.kind === "running" && r.state.steerable
+    && (chosen[r.agent.id] === "steer" || (!chosen[r.agent.id] && steerByDefault(r.state.task))));
 
   const setAction = useCallback((agentId: string, action: RecipientAction) => {
     setChosen((prev) => (prev[agentId] === action ? prev : { ...prev, [agentId]: action }));
@@ -144,12 +111,11 @@ export function useRecipientActions({
 
   const reset = useCallback(() => {
     setChosen(NO_CHOICES);
-    setEndedAgentIds(new Set());
   }, []);
 
   const routing = useMemo<RecipientRouting>(() => recipientRouting(recipients.map((r) => ({
     agentId: r.agent.id, action: r.action, state: r.state,
   }))), [recipients]);
 
-  return { recipients, notices, routing, setAction, reset };
+  return { recipients, attachmentsBlockSteer, routing, setAction, reset };
 }

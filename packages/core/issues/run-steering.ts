@@ -105,15 +105,6 @@ export function resolveRecipientAction(
   return actions.find((action) => action !== "steer")!;
 }
 
-/**
- * A steering send: the turns it goes into, and the logical request that lets
- * a retry after a lost response return the original comment.
- */
-export interface CommentSteerRequest {
-  taskIds: string[];
-  clientRequestId: string;
-}
-
 export interface RecipientRouting {
   suppressAgentIds: string[];
   /** The exact running turns chosen: a turn that ends first is never swapped for another. */

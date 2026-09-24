@@ -39,7 +39,6 @@ import { useWorkspaceId } from "../hooks";
 import { useRecentContextStore } from "../chat/recent-context-store";
 import { useRecentIssuesStore } from "./stores";
 import type { InboxItem, Issue, IssueReaction } from "../types";
-import type { CommentSteerRequest } from "./run-steering";
 import type {
   CreateCommentSubIssueManualRequest,
   CreateIssueRequest,
@@ -833,7 +832,7 @@ export function useCreateComment(issueId: string) {
       parentId,
       attachmentIds,
       suppressAgentIds,
-      steer,
+      steerTaskIds,
     }: {
       content: string;
       type?: string;
@@ -841,8 +840,8 @@ export function useCreateComment(issueId: string) {
       attachmentIds?: string[];
       suppressAgentIds?: string[];
       /** Running turns this comment goes into instead of a follow-up run. */
-      steer?: CommentSteerRequest;
-    }) => api.createComment(issueId, content, type, parentId, attachmentIds, suppressAgentIds, steer),
+      steerTaskIds?: string[];
+    }) => api.createComment(issueId, content, type, parentId, attachmentIds, suppressAgentIds, steerTaskIds),
     onSuccess: (comment) => {
       if (comment.issue_revision) {
         onIssueAuxiliaryRevision(qc, wsId, issueId, comment.issue_revision);

@@ -29,7 +29,6 @@
     "steer_badge": "{{names}} の実行に追加",
     "steer_waiting": "{{name}} が読むのを待っています",
     "steer_read": "{{name}} が読みました",
-    "steer_read_after_step": "{{name}} が読みました · ステップ {{step}} の後",
     "steer_not_received": "{{name}} は受け取れませんでした · {{reason}}",
     "steer_resend": "新しい実行として送信",
     "steer_resend_failed": "新しい実行として送信できませんでした。",
@@ -605,7 +604,6 @@
     "recipient_state_queued": "待機中",
     "recipient_count_other": "{{count}} 個のエージェントが受け取ります",
     "steer_attachment_notice": "実行中に追加できるのはテキストのみのため、ファイル付きのメッセージはこの実行の後に処理されます。",
-    "steer_ended_notice": "{{name}} の実行が終わったため、このメッセージで新しい実行を始めます。",
     "restart_send": "停止して送信",
     "restart_failed": "現在の実行を停止できませんでした。メッセージは送信されていません。"
   },

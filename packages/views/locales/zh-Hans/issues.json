@@ -29,7 +29,6 @@
     "steer_badge": "插话给 {{names}}",
     "steer_waiting": "等待 {{name}} 读取",
     "steer_read": "{{name}} 已读取",
-    "steer_read_after_step": "{{name}} 已读取 · 第 {{step}} 步后",
     "steer_not_received": "{{name}} 未收到 · {{reason}}",
     "steer_resend": "作为新一轮发送",
     "steer_resend_failed": "没能作为新一轮发送。",
@@ -605,7 +604,6 @@
     "recipient_state_queued": "排队中",
     "recipient_count_other": "{{count}} 个智能体会收到",
     "steer_attachment_notice": "插话只支持文字，带附件的消息会在本轮结束后处理。",
-    "steer_ended_notice": "{{name}} 刚完成了本次运行，这条消息会开始新一轮。",
     "restart_send": "停止并发送",
     "restart_failed": "没能停止当前运行，消息还没有发送。"
   },

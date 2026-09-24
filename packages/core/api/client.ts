@@ -2,7 +2,6 @@ import type { IssueWakeup, IssueWakeupSummaryRow } from "../types/issue-wakeup";
 import type { WorkspaceWakeupPage, WorkspaceWakeupFilters } from "../types/issue-wakeup";
 import { WorkspaceWakeupPageSchema, IssueWakeupSchema, IssueWakeupSummaryRowSchema } from "./schemas";
 import type { InboxFilters } from "../inbox/filter-store";
-import type { CommentSteerRequest } from "../issues/run-steering";
 import type { ArchivedInboxPage, ArchivedInboxFacets } from "../types/inbox";
 import { configStore } from "../config";
 import type {
@@ -1542,7 +1541,7 @@ export class ApiClient {
     parentId?: string,
     attachmentIds?: string[],
     suppressAgentIds?: string[],
-    steer?: CommentSteerRequest,
+    steerTaskIds?: string[],
   ): Promise<Comment> {
     return this.fetch(`/api/issues/${issueId}/comments`, {
       method: "POST",
@@ -1552,7 +1551,7 @@ export class ApiClient {
         ...(parentId ? { parent_id: parentId } : {}),
         ...(attachmentIds?.length ? { attachment_ids: attachmentIds } : {}),
         ...(suppressAgentIds?.length ? { suppress_agent_ids: suppressAgentIds } : {}),
-        ...(steer?.taskIds.length ? { steer_task_ids: steer.taskIds, client_request_id: steer.clientRequestId } : {}),
+        ...(steerTaskIds?.length ? { steer_task_ids: steerTaskIds } : {}),
       }),
     });
   }

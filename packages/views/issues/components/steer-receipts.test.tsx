@@ -2,14 +2,13 @@ import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "@multica/core/api";
-import { chatKeys } from "@multica/core/chat/queries";
 import { issueKeys } from "@multica/core/issues/queries";
 import type { AgentTask, Comment, TimelineEntry } from "@multica/core/types";
 import { renderWithI18n } from "../../test/i18n";
 import { SteerBadge, SteerReceipts } from "./steer-receipts";
 
 vi.mock("@multica/core/api", () => ({ api: {
-  retryTaskSupplement: vi.fn(), createComment: vi.fn(), listTasksByIssue: vi.fn(), listTaskMessages: vi.fn(),
+  retryTaskSupplement: vi.fn(), createComment: vi.fn(), listTasksByIssue: vi.fn(),
   previewCommentTriggers: vi.fn(),
 } }));
 
@@ -72,20 +71,6 @@ describe("SteerReceipts", () => {
     expect(screen.getByText("Added to Lambda and Orion's run")).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Waiting for Lambda to read it");
     expect(screen.getByText("Read by Orion")).toBeInTheDocument();
-  });
-
-  it("numbers the step it was read after only from an already loaded transcript", async () => {
-    const client = render(<SteerReceipts issueId="issue" entry={entry({ supplements: [
-      { task_id: turn, agent_id: "lambda", status: "delivered", delivered_at: "2026-09-07T00:00:12Z" },
-    ] })} />);
-    expect(screen.getByText("Read by Lambda")).toBeInTheDocument();
-    expect(api.listTaskMessages).not.toHaveBeenCalled();
-    act(() => client.setQueryData(chatKeys.taskMessages(turn), [
-      { task_id: turn, issue_id: "issue", seq: 1, type: "thinking", content: "Plan", created_at: "2026-09-07T00:00:02Z" },
-      { task_id: turn, issue_id: "issue", seq: 2, type: "tool_use", tool: "exec_command", input: { command: "ls" }, created_at: "2026-09-07T00:00:05Z" },
-      { task_id: turn, issue_id: "issue", seq: 3, type: "text", content: "Done", created_at: "2026-09-07T00:00:30Z" },
-    ]));
-    expect(await screen.findByText("Read by Lambda · after step 2")).toBeInTheDocument();
   });
 
   it("settles a pending receipt when its run ends first and offers a new run instead", async () => {
