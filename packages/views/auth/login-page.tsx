@@ -183,7 +183,23 @@ export function LoginPage({
       setLoading(true);
       setError("");
       try {
-        await useAuthStore.getState().sendCode(email);
+        const direct = await useAuthStore.getState().sendCode(email);
+        if (direct) {
+          // 无码直登：凭据已落地。CLI 授权场景用 cookie 会话换 bearer
+          // 回调本地 listener；普通场景与 handleVerify 收尾一致——
+          // seed workspace 列表后交给 onSuccess 决定去向。
+          if (cliCallback) {
+            const { token } = await api.issueCliToken();
+            onTokenObtained?.();
+            redirectToCliCallback(cliCallback.url, token, cliCallback.state);
+            return;
+          }
+          const wsList = await api.listWorkspaces();
+          qc.setQueryData(workspaceKeys.list(), wsList);
+          onTokenObtained?.();
+          onSuccess();
+          return;
+        }
         setStep("code");
         setCode("");
         setCooldown(60);
@@ -197,7 +213,7 @@ export function LoginPage({
         setLoading(false);
       }
     },
-    [email, t],
+    [email, t, cliCallback, onTokenObtained, onSuccess, qc],
   );
 
   const handleVerify = useCallback(

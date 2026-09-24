@@ -39,7 +39,9 @@ export interface AuthState {
   expired: boolean;
 
   retryAuthentication: () => void;
-  sendCode: (email: string) => Promise<void>;
+  /** 返回 true 表示无码直登模式（MULTICA_AUTH_PASSWORDLESS）下后端已
+   * 直接签发凭据、登录完成；false 表示常规流程，需进入输码页。 */
+  sendCode: (email: string) => Promise<boolean>;
   verifyCode: (email: string, code: string) => Promise<User>;
   loginWithGoogle: (code: string, redirectUri: string) => Promise<User>;
   loginWithToken: (token: string) => Promise<User>;
@@ -69,7 +71,22 @@ export function createAuthStore(options: AuthStoreOptions) {
     },
 
     sendCode: async (email: string) => {
-      await api.sendCode(email);
+      // 无码直登：后端在 send-code 响应中直接返回 token+user，
+      // 落点（cookie/token 持久化、状态迁移）与 verifyCode 完全一致。
+      const res = await api.sendCode(email);
+      if (!res) return false;
+      if (!cookieAuth) {
+        // Token mode: persist for Electron / legacy.
+        storage.setItem("multica_token", res.token);
+        api.setToken(res.token);
+      }
+      onLogin?.();
+      identifyAnalytics(res.user.id, {
+        email: res.user.email,
+        name: res.user.name,
+      });
+      set({ user: res.user, isLoading: false, status: "authenticated", expired: false });
+      return true;
     },
 
     verifyCode: async (email: string, code: string) => {

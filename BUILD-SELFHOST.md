@@ -180,3 +180,30 @@ cd /03.code/23.multica && git pull --ff-only
 # 然后重复 §3 → §4 → §5（--build 重建镜像）→ §7（mv 替换 CLI）
 # postgres 不动；迁移由 entrypoint 自动执行，起后查 readyz 确认
 ```
+
+## 11. 无码直登（MULTICA_AUTH_PASSWORDLESS）
+
+本地 SSH 隧道场景的免验证码登录：**输邮箱点继续即进入系统**，跳过输码页。
+desktop/CLI 登录走系统浏览器 → web 登录页 → deep link/本地回调自动回传 token，零额外改动。
+
+| 改动点 | 文件 | 内容 |
+|---|---|---|
+| 后端 | `server/internal/handler/auth.go` | `SendCode` 增加直登分支：findOrCreateUser → issueJWT → SetAuthCookies → 返回 `LoginResponse`（与 verify-code 成功响应同构） |
+| API 层 | `packages/core/api/client.ts` | `sendCode` 返回 `LoginResponse \| undefined`（有 token 即直登） |
+| 状态层 | `packages/core/auth/store.ts` | `sendCode` 返回 boolean，true 时按 verifyCode 同款落点写会话 |
+| 视图层 | `packages/views/auth/login-page.tsx` | `handleSendCode` direct 分支：CLI 场景换 bearer 回调，普通场景直接 onSuccess |
+
+配置（`.env`）：
+```bash
+APP_ENV=development                # compose 默认注入 production，会硬禁开关，必须显式覆盖
+MULTICA_AUTH_PASSWORDLESS=true
+```
+注意：`docker-compose.selfhost.yml` 的 environment 未声明此变量，靠
+`docker-compose.selfhost.prebuilt.yml` 里的透传条目进容器。
+
+安全边界：仅当端口绑 127.0.0.1、经 SSH 隧道访问时使用（隧道即鉴权层）；
+`APP_ENV=production` 时后端强制忽略开关。验证方式：
+```bash
+curl -s -X POST localhost:8080/auth/send-code -H 'Content-Type: application/json' \
+  -d '{"email":"root@localhost"}'          # 应直接返回 {"token":"...","user":{...}}
+```

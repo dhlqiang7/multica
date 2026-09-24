@@ -49,6 +49,9 @@ const (
 
 const devVerificationCodeEnv = "MULTICA_DEV_VERIFICATION_CODE"
 
+// 无码直登环境变量开关（见 isPasswordlessAuth）
+const passwordlessAuthEnv = "MULTICA_AUTH_PASSWORDLESS"
+
 // supportedLanguages mirrors `SUPPORTED_LOCALES` in packages/core/i18n/types.ts.
 // Keep both lists in sync when adding a locale — the user-controlled `language`
 // field round-trips through GetMe back into i18n.changeLanguage(), so without
@@ -141,6 +144,16 @@ func isDevVerificationCode(code string) bool {
 	}
 
 	return subtle.ConstantTimeCompare([]byte(code), []byte(devCode)) == 1
+}
+
+// 无码直登开关：仅显式置 true 且非 production 时生效。
+// 面向本地自部署（服务端口只绑 127.0.0.1、经 SSH 隧道访问）的场景——
+// 隧道本身即鉴权层，应用层输邮箱即登录，跳过验证码。
+func isPasswordlessAuth() bool {
+	if isProductionEnv() {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(os.Getenv(passwordlessAuthEnv)), "true")
 }
 
 func isProductionEnv() bool {
@@ -359,6 +372,54 @@ func (h *Handler) SendCode(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
+	}
+
+	// 无码直登（MULTICA_AUTH_PASSWORDLESS=true 且非 production）：
+	// signup 资格检查已在上方完成，此处直接按邮箱登录/建号并签发 JWT，
+	// 跳过验证码、邮件与 60s 限流。响应与 VerifyCode 成功响应同构，
+	// 前端识别到 token 字段即直接完成登录，不再进入输码页。
+	if isPasswordlessAuth() {
+		user, isNew, err := h.findOrCreateUser(r.Context(), email)
+		if err != nil {
+			if errors.Is(err, auth.ErrTemporarilyDisabledUser) {
+				writeError(w, http.StatusForbidden, auth.TemporarilyDisabledUserError)
+				return
+			}
+			var signupErr SignupError
+			if errors.As(err, &signupErr) {
+				writeError(w, http.StatusForbidden, signupErr.Error())
+				return
+			}
+			slog.Warn("passwordless login user lookup failed", append(logger.RequestAttrs(r), "error", err, "email", email)...)
+			writeError(w, http.StatusInternalServerError, "failed to create user")
+			return
+		}
+		if isNew {
+			obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.Signup(uuidToString(user.ID), user.Email, signupSourceFromRequest(r)))
+		}
+
+		tokenString, err := h.issueJWT(user)
+		if err != nil {
+			if errors.Is(err, auth.ErrTemporarilyDisabledUser) {
+				writeError(w, http.StatusForbidden, auth.TemporarilyDisabledUserError)
+				return
+			}
+			slog.Warn("passwordless login failed", append(logger.RequestAttrs(r), "error", err, "email", email)...)
+			writeError(w, http.StatusInternalServerError, "failed to generate token")
+			return
+		}
+
+		// 与 VerifyCode 一致：HttpOnly auth cookie + CSRF cookie。
+		if err := auth.SetAuthCookies(w, tokenString); err != nil {
+			slog.Warn("failed to set auth cookies", "error", err)
+		}
+
+		slog.Info("user logged in (passwordless)", append(logger.RequestAttrs(r), "user_id", uuidToString(user.ID), "email", user.Email)...)
+		writeJSON(w, http.StatusOK, LoginResponse{
+			Token: tokenString,
+			User:  h.userToResponse(user),
+		})
+		return
 	}
 
 	// Rate limit: max 1 code per 60 seconds per email
