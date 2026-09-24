@@ -1,0 +1,230 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	"strconv"
+
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/issuestatus"
+	"github.com/multica-ai/multica/server/internal/issueworkflow"
+	"github.com/multica-ai/multica/server/internal/service"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
+)
+
+// Project workflows on the issue write paths (MUL-7420).
+//
+// Two rules apply to an issue whose project uses a workflow:
+//   - its status must be one the workflow lists; a move into such a project
+//     keeps an equivalent status instead of failing;
+//   - entering a step with a handler, through an ordinary status change of an
+//     issue that stays in its project, assigns the issue to that handler and
+//     starts its run with the step's instructions. A write that sets the
+//     assignee itself keeps its explicit choice.
+//
+// Handoffs reuse assignment wholesale: the resolved handler goes through the
+// same permission gate as a hand-picked assignee, and the run starts through
+// the same WillEnqueueRun predicate, with the step's brief as its handoff note.
+
+// workflowHandoff is a handoff an issue write triggers.
+type workflowHandoff struct {
+	def     issueworkflow.Definition
+	step    issueworkflow.Step
+	project db.Project
+}
+
+// applyIssueWorkflow enforces prev's (possibly new) project workflow on one
+// prospective update and may rewrite params: the status of an issue moving
+// into the project, and the assignee when the write enters a handoff step.
+// It returns the handoff that write triggers, or nil.
+func (h *Handler) applyIssueWorkflow(ctx context.Context, prev db.Issue, params *db.UpdateIssueParams, statusExplicit, assigneeTouched bool) (*workflowHandoff, error) {
+	def, project, err := issueworkflow.ForProject(ctx, h.Queries, prev.WorkspaceID, params.ProjectID)
+	if err != nil || def == nil {
+		return nil, err
+	}
+	projectMoving := params.ProjectID != prev.ProjectID
+	if projectMoving && !statusExplicit && !def.Has(prev.Status) {
+		target := issueworkflow.MoveTarget(*def, prev.Status, func(key string) string {
+			return issuestatus.Category(ctx, h.Queries, prev.WorkspaceID, key)
+		})
+		params.Status = pgtype.Text{String: target, Valid: true}
+	}
+	if params.Status.Valid {
+		if err := issueworkflow.CheckStatus(def, params.Status.String); err != nil {
+			return nil, err
+		}
+	}
+	// A project move is administrative, and re-selecting the current status
+	// is a no-op: neither hands the issue off.
+	if projectMoving || !statusExplicit || assigneeTouched || prev.TriageState.Valid ||
+		!params.Status.Valid || params.Status.String == prev.Status {
+		return nil, nil
+	}
+	step, ok := def.Step(params.Status.String)
+	if !ok || !step.HandsOff() {
+		return nil, nil
+	}
+	assigneeType, assigneeID, ok := issueworkflow.ResolveHandler(step, project, prev.CreatorType, prev.CreatorID)
+	if !ok {
+		return nil, nil
+	}
+	params.AssigneeType = pgtype.Text{String: assigneeType, Valid: true}
+	params.AssigneeID = assigneeID
+	return &workflowHandoff{def: *def, step: step, project: project}, nil
+}
+
+// writeIssueWorkflowError answers a workflow rejection. It reports false when
+// err is not one, so the caller can fall through to its generic 500.
+func writeIssueWorkflowError(w http.ResponseWriter, err error) bool {
+	var notIn *issueworkflow.NotInWorkflowError
+	if errors.As(err, &notIn) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error":            notIn.Error(),
+			"code":             "status_not_in_workflow",
+			"workflow_name":    notIn.WorkflowName,
+			"allowed_statuses": notIn.Allowed,
+		})
+		return true
+	}
+	return false
+}
+
+// workflowHandoffNote renders the brief the handler's run receives. Only an
+// agent or squad handler runs, so members never need one.
+func (h *Handler) workflowHandoffNote(ctx context.Context, issue db.Issue, hand *workflowHandoff) string {
+	if hand == nil || !issue.AssigneeType.Valid {
+		return ""
+	}
+	if t := issue.AssigneeType.String; t != "agent" && t != "squad" {
+		return ""
+	}
+	resolver := issuestatus.NewResolver(issue.WorkspaceID)
+	identifier := h.getIssuePrefix(ctx, issue.WorkspaceID) + "-" + strconv.Itoa(int(issue.Number))
+	return issueworkflow.Brief(issueworkflow.BriefInput{
+		Workflow:        hand.def,
+		StatusKey:       hand.step.StatusKey,
+		IssueIdentifier: identifier,
+		StatusName: func(key string) string {
+			return resolver.Name(ctx, h.Queries, key)
+		},
+		HandlerName: func(step issueworkflow.Step) string {
+			if !step.HandsOff() {
+				return ""
+			}
+			return h.stepHandlerName(ctx, issue, hand.project, step)
+		},
+	})
+}
+
+// actorDisplayName names an agent, squad or member for a brief. It falls back
+// to the actor type so a lookup failure never blocks a handoff.
+func (h *Handler) actorDisplayName(ctx context.Context, wsUUID pgtype.UUID, actorType string, id pgtype.UUID) string {
+	switch actorType {
+	case "agent":
+		if agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: id, WorkspaceID: wsUUID}); err == nil {
+			return agent.Name
+		}
+	case "squad":
+		if squad, err := h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{ID: id, WorkspaceID: wsUUID}); err == nil {
+			return squad.Name
+		}
+	case "member":
+		if user, err := h.Queries.GetUser(ctx, id); err == nil {
+			return user.Name
+		}
+	}
+	return actorType
+}
+
+// stopPreviousAssigneeRuns cancels the active runs of the agent a handoff took
+// the issue from, when the caller asked for it. The agent performing its own
+// handoff is left alone: its run is the one making this write.
+func (h *Handler) stopPreviousAssigneeRuns(ctx context.Context, prev, issue db.Issue, actorType, actorID string) {
+	if prev.AssigneeType.String != "agent" || !prev.AssigneeID.Valid {
+		return
+	}
+	if issue.AssigneeType.String == "agent" && issue.AssigneeID == prev.AssigneeID {
+		return
+	}
+	if actorType == "agent" && actorID == uuidToString(prev.AssigneeID) {
+		return
+	}
+	tasks, err := h.Queries.ListActiveTasksByIssue(ctx, issue.ID)
+	if err != nil {
+		slog.Warn("workflow handoff: list active tasks failed", "issue_id", uuidToString(issue.ID), "error", err)
+		return
+	}
+	actor := service.TaskCancellationActor{Type: actorType}
+	if id, err := parseUUIDString(actorID); err == nil {
+		actor.ID = id
+	}
+	for _, task := range tasks {
+		if task.AgentID != prev.AssigneeID {
+			continue
+		}
+		if _, err := h.TaskService.CancelTaskByUser(ctx, task.ID, actor); err != nil {
+			slog.Warn("workflow handoff: cancel previous run failed",
+				"issue_id", uuidToString(issue.ID), "task_id", uuidToString(task.ID), "error", err)
+		}
+	}
+}
+
+// claimProjectWorkflow describes the issue's project workflow for a task
+// claim, or nil when the project uses the Default workflow.
+func (h *Handler) claimProjectWorkflow(ctx context.Context, issue db.Issue) *TaskProjectWorkflowData {
+	def, project, err := issueworkflow.ForProject(ctx, h.Queries, issue.WorkspaceID, issue.ProjectID)
+	if err != nil {
+		slog.Warn("task claim: failed to load project workflow for brief injection",
+			"issue_id", uuidToString(issue.ID), "error", err)
+		return nil
+	}
+	if def == nil {
+		return nil
+	}
+	resolver := issuestatus.NewResolver(issue.WorkspaceID)
+	out := &TaskProjectWorkflowData{
+		Name:             def.Name,
+		CurrentStatusKey: issue.Status,
+		Steps:            make([]TaskProjectWorkflowStep, 0, len(def.Steps)),
+	}
+	for _, step := range def.Steps {
+		entry := TaskProjectWorkflowStep{
+			Key:           step.StatusKey,
+			Name:          resolver.Name(ctx, h.Queries, step.StatusKey),
+			NextStatusKey: step.NextStatusKey,
+			BackStatusKey: step.BackStatusKey,
+		}
+		if step.HandsOff() {
+			entry.Handler = h.stepHandlerName(ctx, issue, project, step)
+		}
+		if step.StatusKey == issue.Status {
+			entry.Instructions = step.Instructions
+		}
+		out.Steps = append(out.Steps, entry)
+	}
+	return out
+}
+
+// stepHandlerName describes who a step hands the issue to, for briefs.
+func (h *Handler) stepHandlerName(ctx context.Context, issue db.Issue, project db.Project, step issueworkflow.Step) string {
+	t, id, ok := issueworkflow.ResolveHandler(step, project, issue.CreatorType, issue.CreatorID)
+	if !ok {
+		switch step.Handler.Type {
+		case issueworkflow.HandlerProjectLead:
+			return "the project lead (none set)"
+		case issueworkflow.HandlerCreator:
+			return "the issue creator"
+		}
+		return ""
+	}
+	name := h.actorDisplayName(ctx, issue.WorkspaceID, t, id)
+	switch step.Handler.Type {
+	case issueworkflow.HandlerProjectLead:
+		return name + " (project lead)"
+	case issueworkflow.HandlerCreator:
+		return name + " (issue creator)"
+	}
+	return name
+}

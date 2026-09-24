@@ -24,6 +24,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/dispatch"
 	"github.com/multica-ai/multica/server/internal/issueguard"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
+	"github.com/multica-ai/multica/server/internal/issueworkflow"
 	"github.com/multica-ai/multica/server/internal/logger"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
@@ -3273,6 +3274,51 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		}
 		projectID = id
 	}
+
+	// Project workflow (MUL-7420). A new issue in a project that uses a
+	// workflow starts on the workflow's starting status unless the caller
+	// picked one, the status must be one the workflow lists, and a starting
+	// step with a handler hands the new issue to it unless the caller chose an
+	// assignee. A sub-issue without its own project inherits the parent's, as
+	// IssueService.Create does.
+	workflowProjectID := projectID
+	if !workflowProjectID.Valid && parentIssueID.Valid {
+		if parent, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
+			ID: parentIssueID, WorkspaceID: wsUUID,
+		}); err == nil {
+			workflowProjectID = parent.ProjectID
+		}
+	}
+	createWorkflow, createWorkflowProject, err := issueworkflow.ForProject(r.Context(), h.Queries, wsUUID, workflowProjectID)
+	if err != nil {
+		slog.Error("create issue: resolve project workflow", append(logger.RequestAttrs(r), "error", err)...)
+		writeError(w, http.StatusInternalServerError, "failed to resolve project workflow")
+		return
+	}
+	var createHandoff *workflowHandoff
+	if createWorkflow != nil {
+		if req.Status == "" {
+			status = createWorkflow.InitialStatusKey
+		}
+		if err := issueworkflow.CheckStatus(createWorkflow, status); err != nil {
+			writeIssueWorkflowError(w, err)
+			return
+		}
+		if req.AssigneeType == nil && req.AssigneeID == nil {
+			if step, ok := createWorkflow.Step(status); ok && step.HandsOff() {
+				handoffCreatorType, handoffCreatorID := h.resolveActor(r, creatorID, workspaceID)
+				if t, id, ok := issueworkflow.ResolveHandler(step, createWorkflowProject, handoffCreatorType, parseUUID(handoffCreatorID)); ok {
+					assigneeType = pgtype.Text{String: t, Valid: true}
+					assigneeID = id
+					if status, msg := h.validateAssigneePair(r.Context(), r, workspaceID, assigneeType, assigneeID); status != 0 {
+						writeError(w, status, msg)
+						return
+					}
+					createHandoff = &workflowHandoff{def: *createWorkflow, step: step, project: createWorkflowProject}
+				}
+			}
+		}
+	}
 	// Project existence and the final parent boundary check are enforced inside
 	// IssueService.Create atomically with the create. The handler preloads a
 	// supplied parent only because the assignee gate must bind any autopilot
@@ -3423,6 +3469,9 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		ActorID:          actualCreatorID,
 		AnalyticsAgentID: analyticsAgentID,
 		Platform:         func() string { p, _, _ := middleware.ClientMetadataFromContext(r.Context()); return p }(),
+		HandoffNote: func(issue db.Issue) string {
+			return h.workflowHandoffNote(r.Context(), issue, createHandoff)
+		},
 		BroadcastPayload: func(issue db.Issue, atts []db.Attachment, labels []db.IssueLabel) map[string]any {
 			payload := issueToResponse(issue, prefix)
 			// The event other tabs receive must carry the category too — filling
@@ -3534,6 +3583,10 @@ type UpdateIssueRequest struct {
 	// predate the handoff UI removal. It is consumed only when this write starts
 	// a run and is never stored on the issue itself.
 	HandoffNote string `json:"handoff_note,omitempty"`
+	// StopPreviousAssigneeRuns, when a status change hands the issue off to a
+	// project workflow step's handler, cancels the active runs of the agent it
+	// was taken from. Ignored when the write does not hand off. (MUL-7420)
+	StopPreviousAssigneeRuns bool `json:"stop_previous_assignee_runs,omitempty"`
 	// DuplicateOfIssueID marks this issue as a duplicate of another issue in
 	// the same workspace (MUL-7349). A duplicate is an ordinary cancelled issue
 	// that remembers its original, so this also sets status to cancelled.
@@ -3950,7 +4003,24 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	// the identical lineage was accepted on the create path.
 	_, touchedType := rawFields["assignee_type"]
 	_, touchedID := rawFields["assignee_id"]
-	if touchedType || touchedID {
+
+	// Project workflow (MUL-7420): keep the status inside the project's
+	// workflow, and hand the issue off when it enters a step with a handler.
+	// A handoff assignee passes the same gate as a hand-picked one.
+	handoff, err := h.applyIssueWorkflow(r.Context(), prevIssue, &params, req.Status != nil, touchedType || touchedID)
+	if err != nil {
+		if writeIssueWorkflowError(w, err) {
+			return
+		}
+		slog.Error("update issue: resolve project workflow", append(logger.RequestAttrs(r), "error", err)...)
+		writeError(w, http.StatusInternalServerError, "failed to resolve project workflow")
+		return
+	}
+	if params.Status.Valid && params.Status.String != statusKeyForGuard {
+		// A project move remapped the status; guard the key actually written.
+		statusKeyForGuard = params.Status.String
+	}
+	if touchedType || touchedID || handoff != nil {
 		if status, msg := h.validateAssigneePair(r.Context(), r, workspaceID, params.AssigneeType, params.AssigneeID); status != 0 {
 			writeError(w, status, msg)
 			return
@@ -4006,9 +4076,9 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	slog.Info("issue updated", append(logger.RequestAttrs(r), "issue_id", id, "workspace_id", workspaceID)...)
 
 	h.fillStatusCategory(r.Context(), issue.WorkspaceID, &resp)
-	assigneeChanged := (req.AssigneeType != nil || req.AssigneeID != nil) &&
+	assigneeChanged := (req.AssigneeType != nil || req.AssigneeID != nil || handoff != nil) &&
 		(prevIssue.AssigneeType.String != issue.AssigneeType.String || uuidToString(prevIssue.AssigneeID) != uuidToString(issue.AssigneeID))
-	statusChanged := req.Status != nil && prevIssue.Status != issue.Status
+	statusChanged := (req.Status != nil || params.Status.Valid) && prevIssue.Status != issue.Status
 	priorityChanged := req.Priority != nil && prevIssue.Priority != issue.Priority
 	// project_changed gates the client's per-project issue-list refetch the way
 	// status/assignee flags gate theirs. Without it the client must diff
@@ -4076,16 +4146,29 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	// it stops in-flight agent runs, so that implicit coupling is gone
 	// (MUL-4465). Deleting an issue still cancels its tasks (see DeleteIssue),
 	// because the tasks' owning issue ceases to exist.
+	//
+	// A workflow handoff counts as a fresh assignment even when the step's
+	// handler already owns the issue: entering the step is the handler's cue
+	// to work on it, with the step's brief as the handoff note. (MUL-7420)
+	handoffNote := req.HandoffNote
+	if handoff != nil {
+		if req.StopPreviousAssigneeRuns {
+			h.stopPreviousAssigneeRuns(r.Context(), prevIssue, issue, actorType, actorID)
+		}
+		if handoffNote == "" {
+			handoffNote = h.workflowHandoffNote(r.Context(), issue, handoff)
+		}
+	}
 	if trigger, ok := h.IssueService.WillEnqueueRun(r.Context(),
 		service.IssueTriggerInput{
 			Issue:           issue,
 			PrevStatus:      prevIssue.Status,
-			AssigneeChanged: assigneeChanged,
+			AssigneeChanged: assigneeChanged || handoff != nil,
 			StatusChanged:   statusChanged,
 		},
 		h.issueTriggerWriteProbe(r, actorType, actorID, issue),
 	); ok && !req.SuppressRun {
-		h.dispatchIssueRun(r.Context(), issue, trigger, actorType, actorID, req.HandoffNote)
+		h.dispatchIssueRun(r.Context(), issue, trigger, actorType, actorID, handoffNote)
 	}
 
 	// Platform-driven parent notification: when this issue transitions into
@@ -4749,7 +4832,18 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		// resolveActor still classifies the caller as an agent (MUL-6691).
 		_, batchTouchedType := rawUpdates["assignee_type"]
 		_, batchTouchedID := rawUpdates["assignee_id"]
-		if batchTouchedType || batchTouchedID {
+		// Project workflow (MUL-7420), per issue: an issue whose workflow does
+		// not list the batch status is skipped like the other per-item guards;
+		// entering a handoff step reassigns this issue to the step's handler.
+		handoff, err := h.applyIssueWorkflow(r.Context(), prevIssue, &params, req.Updates.Status != nil, batchTouchedType || batchTouchedID)
+		if err != nil {
+			continue
+		}
+		issueStatusGuard := batchStatusKey
+		if params.Status.Valid {
+			issueStatusGuard = params.Status.String
+		}
+		if batchTouchedType || batchTouchedID || handoff != nil {
 			if status, _ := h.validateAssigneePair(r.Context(), r, workspaceID, params.AssigneeType, params.AssigneeID); status != 0 {
 				continue
 			}
@@ -4762,13 +4856,13 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			// legacy single-update clients that omit description_base.
 			var lockedPrev db.Issue
 			issue, lockedPrev, _, err = h.updateIssueAtomically(
-				r.Context(), prevIssue.WorkspaceID, params, rawUpdates, nil, nil, nil, batchStatusKey,
+				r.Context(), prevIssue.WorkspaceID, params, rawUpdates, nil, nil, nil, issueStatusGuard,
 			)
 			if err == nil {
 				prevIssue = lockedPrev
 			}
 		} else {
-			issue, err = h.updateIssueWithStatusGuard(r.Context(), wsUUID, batchStatusKey, params)
+			issue, err = h.updateIssueWithStatusGuard(r.Context(), wsUUID, issueStatusGuard, params)
 		}
 		if err != nil {
 			// The archive race is a property of the batch's shared target
@@ -4786,9 +4880,9 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		actorType, actorID := h.resolveActor(r, userID, workspaceID)
 
 		fillBatch(&resp)
-		assigneeChanged := (req.Updates.AssigneeType != nil || req.Updates.AssigneeID != nil) &&
+		assigneeChanged := (req.Updates.AssigneeType != nil || req.Updates.AssigneeID != nil || handoff != nil) &&
 			(prevIssue.AssigneeType.String != issue.AssigneeType.String || uuidToString(prevIssue.AssigneeID) != uuidToString(issue.AssigneeID))
-		statusChanged := req.Updates.Status != nil && prevIssue.Status != issue.Status
+		statusChanged := (req.Updates.Status != nil || params.Status.Valid) && prevIssue.Status != issue.Status
 		priorityChanged := req.Updates.Priority != nil && prevIssue.Priority != issue.Priority
 		projectChanged := req.Updates.ProjectID != nil && uuidToString(prevIssue.ProjectID) != uuidToString(issue.ProjectID)
 
@@ -4808,16 +4902,25 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		// Same single predicate as UpdateIssue — batch must not grow its own
 		// copy of the enqueue rule (the historical source of four-entry-point
 		// drift, MUL-3375). suppress_run applies batch-wide.
+		batchHandoffNote := req.Updates.HandoffNote
+		if handoff != nil {
+			if req.Updates.StopPreviousAssigneeRuns {
+				h.stopPreviousAssigneeRuns(r.Context(), prevIssue, issue, actorType, actorID)
+			}
+			if batchHandoffNote == "" {
+				batchHandoffNote = h.workflowHandoffNote(r.Context(), issue, handoff)
+			}
+		}
 		if trigger, ok := h.IssueService.WillEnqueueRun(r.Context(),
 			service.IssueTriggerInput{
 				Issue:           issue,
 				PrevStatus:      prevIssue.Status,
-				AssigneeChanged: assigneeChanged,
+				AssigneeChanged: assigneeChanged || handoff != nil,
 				StatusChanged:   statusChanged,
 			},
 			h.issueTriggerWriteProbe(r, actorType, actorID, issue),
 		); ok && !req.Updates.SuppressRun {
-			h.dispatchIssueRun(r.Context(), issue, trigger, actorType, actorID, req.Updates.HandoffNote)
+			h.dispatchIssueRun(r.Context(), issue, trigger, actorType, actorID, batchHandoffNote)
 		}
 
 		// No status change — not even → cancelled — cancels active tasks here,
