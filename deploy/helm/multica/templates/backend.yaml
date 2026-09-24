@@ -1,5 +1,6 @@
 {{- $backendImageTag := default .Chart.AppVersion .Values.images.backend.tag -}}
-{{- $extraCACerts := .Values.backend.extraCACerts.configMap -}}
+{{- /* `helm upgrade --reuse-values` from a chart without extraCACerts carries no such key. */ -}}
+{{- $extraCACerts := (default dict .Values.backend.extraCACerts).configMap -}}
 {{- if .Values.backend.uploads.persistence.enabled -}}
 apiVersion: v1
 kind: PersistentVolumeClaim
