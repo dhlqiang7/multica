@@ -71,17 +71,25 @@ func currentAuthMode() authMode {
 	if isProductionEnv() {
 		return authModeCode
 	}
-	switch authMode(strings.ToLower(strings.TrimSpace(os.Getenv(authModeEnv)))) {
-	case authModePasswordless:
-		return authModePasswordless
-	case authModePassword:
-		return authModePassword
-	default:
-		if strings.EqualFold(strings.TrimSpace(os.Getenv(passwordlessAuthEnv)), "true") {
+	// 显式设置了 AUTH_MODE：只认合法值，拼错一律回落 code——
+	// 不能落入 legacy 分支被残留的 PASSWORDLESS=true 接管，
+	// 那会把配置错误静默升级成更宽松的无码直登。
+	if raw, ok := os.LookupEnv(authModeEnv); ok && strings.TrimSpace(raw) != "" {
+		switch authMode(strings.ToLower(strings.TrimSpace(raw))) {
+		case authModePasswordless:
 			return authModePasswordless
+		case authModePassword:
+			return authModePassword
+		default:
+			slog.Warn("auth: invalid MULTICA_AUTH_MODE value, falling back to code", "value", raw)
+			return authModeCode
 		}
-		return authModeCode
 	}
+	// 未设 AUTH_MODE：兼容旧开关（=true 等价 passwordless）。
+	if strings.EqualFold(strings.TrimSpace(os.Getenv(passwordlessAuthEnv)), "true") {
+		return authModePasswordless
+	}
+	return authModeCode
 }
 
 // supportedLanguages mirrors `SUPPORTED_LOCALES` in packages/core/i18n/types.ts.
@@ -496,10 +504,16 @@ func (h *Handler) issueAndRespond(w http.ResponseWriter, r *http.Request, user d
 	})
 }
 
+// dummyPasswordHash 用于抹平认证时序：用户不存在 / 未设密码时也跑一次
+// 等价的 bcrypt 比较，让"账号存在且已设密"无法通过响应耗时被测量区分。
+// 进程启动时生成一次（~100ms），盐固定不影响安全性——比较必然失败。
+var dummyPasswordHash, _ = bcrypt.GenerateFromPassword([]byte("multica-timing-equalizer"), bcrypt.DefaultCost)
+
 // verifyUserPassword 校验固定密码（MULTICA_AUTH_MODE=password）。
 // 失败统一 401 "invalid email or password"——不区分用户不存在 / 未设
-// 密码 / 密码错误，避免账号枚举。bcrypt 计算本身 ~100ms/次构成天然
-// 减速；本模式面向本地/私网部署，未叠加额外失败限流。
+// 密码 / 密码错误，且各失败路径耗时一致，避免账号枚举（含时序侧信道）。
+// bcrypt 计算本身 ~100ms/次构成天然减速；本模式面向本地/私网部署，
+// 未叠加额外失败限流。
 func (h *Handler) verifyUserPassword(w http.ResponseWriter, r *http.Request, email, password string) (db.User, bool) {
 	const invalid = "invalid email or password"
 	if password == "" {
@@ -507,11 +521,9 @@ func (h *Handler) verifyUserPassword(w http.ResponseWriter, r *http.Request, ema
 		return db.User{}, false
 	}
 	user, err := h.Queries.GetUserByEmail(r.Context(), email)
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, invalid)
-		return db.User{}, false
-	}
-	if !user.PasswordHash.Valid {
+	if err != nil || !user.PasswordHash.Valid {
+		// 与真实失败路径跑同一次 bcrypt 比较，耗时不泄露账号状态。
+		_ = bcrypt.CompareHashAndPassword(dummyPasswordHash, []byte(password))
 		writeError(w, http.StatusUnauthorized, invalid)
 		return db.User{}, false
 	}
