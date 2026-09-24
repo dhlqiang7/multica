@@ -344,9 +344,9 @@ func (q *Queries) GetPendingGitHubInstallation(ctx context.Context, installation
 const linkIssueToPullRequest = `-- name: LinkIssueToPullRequest :execrows
 
 INSERT INTO issue_pull_request (
-    issue_id, pull_request_id, linked_by_type, linked_by_id
+    issue_id, pull_request_id, linked_by_type, linked_by_id, close_intent
 ) VALUES (
-    $1, $2, 'system', NULL
+    $1, $2, 'system', NULL, $3
 )
 ON CONFLICT (issue_id, pull_request_id) DO NOTHING
 `
@@ -354,16 +354,18 @@ ON CONFLICT (issue_id, pull_request_id) DO NOTHING
 type LinkIssueToPullRequestParams struct {
 	IssueID       pgtype.UUID `json:"issue_id"`
 	PullRequestID pgtype.UUID `json:"pull_request_id"`
+	CloseIntent   bool        `json:"close_intent"`
 }
 
 // =====================
 // Issue ↔ Pull Request link
 // =====================
-// Automatic link from a PR title or branch. Returns 1 only when the link is
-// new, so the webhook evaluates auto-complete on the link event and not on
-// every redelivery. An existing link (automatic or manual) is left untouched.
+// Automatic link from a PR title, branch, or closing keyword. Returns 1 only
+// when the link is new, so the webhook evaluates auto-complete on the link
+// event and not on every redelivery. An existing link (automatic or manual) is
+// left untouched; its close_intent follows SetIssuePullRequestCloseIntent.
 func (q *Queries) LinkIssueToPullRequest(ctx context.Context, arg LinkIssueToPullRequestParams) (int64, error) {
-	result, err := q.db.Exec(ctx, linkIssueToPullRequest, arg.IssueID, arg.PullRequestID)
+	result, err := q.db.Exec(ctx, linkIssueToPullRequest, arg.IssueID, arg.PullRequestID, arg.CloseIntent)
 	if err != nil {
 		return 0, err
 	}
@@ -682,6 +684,25 @@ func (q *Queries) ListPullRequestsByIssue(ctx context.Context, issueID pgtype.UU
 		return nil, err
 	}
 	return items, nil
+}
+
+const setIssuePullRequestCloseIntent = `-- name: SetIssuePullRequestCloseIntent :exec
+UPDATE issue_pull_request SET close_intent = $3
+WHERE issue_id = $1 AND pull_request_id = $2 AND close_intent <> $3
+`
+
+type SetIssuePullRequestCloseIntentParams struct {
+	IssueID       pgtype.UUID `json:"issue_id"`
+	PullRequestID pgtype.UUID `json:"pull_request_id"`
+	CloseIntent   bool        `json:"close_intent"`
+}
+
+// close_intent records whether the PR closes the issue with a keyword
+// ("Closes MUL-1" in its title or body). It follows the PR text until the PR's
+// merge/close event, then the webhook stops calling this.
+func (q *Queries) SetIssuePullRequestCloseIntent(ctx context.Context, arg SetIssuePullRequestCloseIntentParams) error {
+	_, err := q.db.Exec(ctx, setIssuePullRequestCloseIntent, arg.IssueID, arg.PullRequestID, arg.CloseIntent)
+	return err
 }
 
 const unlinkIssueFromPullRequest = `-- name: UnlinkIssueFromPullRequest :execrows

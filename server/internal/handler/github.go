@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1058,6 +1059,17 @@ func (h *Handler) broadcastPRSnapshotApplied(ctx context.Context, prID pgtype.UU
 // version numbers like "v1.2-3".
 var identifierRe = regexp.MustCompile(`(?i)\b([a-z][a-z0-9]{0,9})-(\d+)\b`)
 
+// closingIdentifierRe extracts identifiers that appear immediately after a
+// GitHub-style closing keyword ("close[sd]?", "fix(e[sd])?", "resolve[sd]?"),
+// optionally separated by a colon and whitespace. Matching is intentionally
+// strict on adjacency — "Fix MUL-1" closes MUL-1, but "Fix login MUL-1" does
+// not. A closing keyword is what lets a merged PR complete its issue; a bare
+// title prefix like "MUL-1: ..." or a branch reference links the PR but never
+// completes the issue on its own.
+var closingIdentifierRe = regexp.MustCompile(
+	`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)[:\s]+([a-z][a-z0-9]{0,9})-(\d+)\b`,
+)
+
 // HandleGitHubWebhook (POST /api/webhooks/github) is GitHub's destination for
 // every event from a connected installation. We verify HMAC signature, route
 // on X-GitHub-Event, and either upsert PR rows + auto-link to issues or
@@ -1312,11 +1324,12 @@ func (h *Handler) handlePullRequestEvent(ctx context.Context, body []byte) {
 // link, and is the single authority for that decision: the per-workspace mirror
 // pass consults it instead of re-deriving the answer from its own reads.
 //
-// A link is a claim that the PR delivers the issue, and a fully merged link set
-// completes the issue. So when one installation is bound to several workspaces,
-// an identifier that resolves in more than one of them must not link anywhere —
-// otherwise merging the PR would complete an issue in a workspace that has
-// nothing to do with it (#6804). A member can still link the PR by hand.
+// A link is a claim that the PR delivers the issue, and a merged link set with
+// a closing keyword completes the issue. So when one installation is bound to
+// several workspaces, an identifier that resolves in more than one of them must
+// not link anywhere — otherwise merging the PR could complete an issue in a
+// workspace that has nothing to do with it (#6804). A member can still link the
+// PR by hand.
 type prLinkPolicy struct {
 	// unrestricted marks the single-binding case: cross-workspace ambiguity is
 	// impossible with one bound workspace, so the scan does no reads at all.
@@ -1340,8 +1353,8 @@ func (c prLinkPolicy) permits(identifier, workspaceID string) bool {
 	return ok && owner == workspaceID
 }
 
-// resolvePRLinkPolicy determines, before any workspace writes, which title and
-// branch identifiers on this PR may link and in which workspace. An identifier
+// resolvePRLinkPolicy determines, before any workspace writes, which claimed
+// identifiers on this PR may link and in which workspace. An identifier
 // is allowed only when exactly one bound workspace was proven to resolve it;
 // misjudging "unique" as "ambiguous" costs a link a person can add by hand,
 // while the reverse would complete someone else's issue.
@@ -1349,7 +1362,7 @@ func (h *Handler) resolvePRLinkPolicy(ctx context.Context, insts []db.GithubInst
 	if len(insts) < 2 {
 		return prLinkPolicy{unrestricted: true}
 	}
-	idents := extractIdentifiers(p.PullRequest.Title, p.PullRequest.Head.Ref)
+	idents, _ := prClaimedIdentifiers(p.PullRequest.Title, p.PullRequest.Body, p.PullRequest.Head.Ref)
 	policy := prLinkPolicy{owner: map[string]string{}, ambiguous: map[string]bool{}}
 	if len(idents) == 0 {
 		return policy
@@ -1506,15 +1519,11 @@ func (h *Handler) triggerPRRefreshFromCIEvent(ctx context.Context, body []byte) 
 // mirrorPullRequestForWorkspace mirrors a pull_request webhook into a single
 // workspace: it upserts the PR row, replays any check_suite events that
 // arrived before the PR was mirrored, auto-links referenced issues (gated by
-// the workspace's github toggles), advances issues on terminal events, and
-// broadcasts the change. Invoked once per workspace bound to the delivering
-// installation.
+// the workspace's github toggles), completes issues on a merge, and broadcasts
+// the change. Invoked once per workspace bound to the delivering installation.
 //
-// closePolicy is the delivery-wide verdict on which closing identifiers this
-// workspace may act on; identifiers it does not permit still link, but never
-// carry close_intent, so they can never advance an issue to done. This function
-// only ever narrows that verdict — it cannot grant close intent the policy
-// withheld.
+// linkPolicy is the delivery-wide verdict on which identifiers this workspace
+// may link; this function only ever narrows it.
 func (h *Handler) mirrorPullRequestForWorkspace(ctx context.Context, wsID pgtype.UUID, installationID int64, p *ghPullRequestPayload, linkPolicy prLinkPolicy) {
 	state := derivePRState(p.PullRequest.State, p.PullRequest.Draft, p.PullRequest.Merged)
 	mergeable, clearMergeable := derivePRMergeableState(p.Action, p.PullRequest.MergeableState, baseRefChanged(p.Changes))
@@ -1575,12 +1584,20 @@ func (h *Handler) mirrorPullRequestForWorkspace(ctx context.Context, wsID pgtype
 	if err == nil && githubFeaturesEnabled(ws) && !linkPolicy.indeterminate {
 		touched := map[pgtype.UUID]struct{}{}
 		if autoLink, _ := autoLinkPRsEnabledForWorkspace(ws); autoLink {
+			idents, closing := prClaimedIdentifiers(p.PullRequest.Title, p.PullRequest.Body, p.PullRequest.Head.Ref)
 			linkedIssueIDs, touched = h.reconcileAutoLinks(ctx, ws, pr.ID, state, prAutoLinkInput{
-				idents:    extractIdentifiers(p.PullRequest.Title, p.PullRequest.Head.Ref),
-				permits:   func(id string) bool { return linkPolicy.permits(id, workspaceID) },
-				ambiguous: func(id string) bool { return linkPolicy.ambiguous[id] },
-				link: func(issueID pgtype.UUID) (int64, error) {
-					return h.Queries.LinkIssueToPullRequest(ctx, db.LinkIssueToPullRequestParams{IssueID: issueID, PullRequestID: pr.ID})
+				idents:  idents,
+				closing: closing,
+				// The merge/close event itself still records the PR text; only
+				// later edits of a merged or closed PR are ignored.
+				freezeCloseIntent: p.Action != "closed" && (state == "merged" || state == "closed"),
+				permits:           func(id string) bool { return linkPolicy.permits(id, workspaceID) },
+				ambiguous:         func(id string) bool { return linkPolicy.ambiguous[id] },
+				link: func(issueID pgtype.UUID, closeIntent bool) (int64, error) {
+					return h.Queries.LinkIssueToPullRequest(ctx, db.LinkIssueToPullRequestParams{IssueID: issueID, PullRequestID: pr.ID, CloseIntent: closeIntent})
+				},
+				setCloseIntent: func(issueID pgtype.UUID, closeIntent bool) error {
+					return h.Queries.SetIssuePullRequestCloseIntent(ctx, db.SetIssuePullRequestCloseIntentParams{IssueID: issueID, PullRequestID: pr.ID, CloseIntent: closeIntent})
 				},
 				unlink: func(issueID pgtype.UUID) (int64, error) {
 					return h.Queries.UnlinkIssueFromPullRequest(ctx, db.UnlinkIssueFromPullRequestParams{IssueID: issueID, PullRequestID: pr.ID})
@@ -1619,27 +1636,35 @@ func (h *Handler) mirrorPullRequestForWorkspace(ctx context.Context, wsID pgtype
 
 // prAutoLinkInput is what reconcileAutoLinks needs from one provider.
 type prAutoLinkInput struct {
-	idents    []string                         // identifiers in the PR title and branch
-	permits   func(identifier string) bool     // cross-workspace verdict (always true for VCS)
-	ambiguous func(identifier string) bool     // resolved in several workspaces
-	link      func(pgtype.UUID) (int64, error) // automatic link; 1 when new
-	unlink    func(pgtype.UUID) (int64, error) // drop a link; 1 when removed
-	listAuto  func() ([]pgtype.UUID, error)    // issues currently auto-linked to the PR
+	idents  []string        // identifiers the PR claims (see prClaimedIdentifiers)
+	closing map[string]bool // claimed identifiers that follow a closing keyword
+	// freezeCloseIntent keeps the close_intent recorded at the PR's merge/close
+	// event: a later edit must not rewrite that decision, and a link first
+	// made after it carries no close intent.
+	freezeCloseIntent bool
+	permits           func(identifier string) bool           // cross-workspace verdict (always true for VCS)
+	ambiguous         func(identifier string) bool           // resolved in several workspaces
+	link              func(pgtype.UUID, bool) (int64, error) // automatic link with close intent; 1 when new
+	setCloseIntent    func(pgtype.UUID, bool) error          // update close intent on an existing link
+	unlink            func(pgtype.UUID) (int64, error)       // drop a link; 1 when removed
+	listAuto          func() ([]pgtype.UUID, error)          // issues currently auto-linked to the PR
 }
 
-// reconcileAutoLinks makes the PR's automatic links match its title and branch.
-// It returns the issue ids the PR is linked to after the pass, and the issues
+// reconcileAutoLinks makes the PR's automatic links match its claims. It
+// returns the issue ids the PR is linked to after the pass, and the issues
 // whose link set changed (a PR event for auto-complete).
 //
 //   - A claimed identifier that resolves here links, unless a person removed
-//     that PR from that issue before.
+//     that PR from that issue before. Its close intent follows the PR text
+//     until the PR merges or closes — on manual links too, since it describes
+//     the PR, not who linked it.
 //   - An automatic link the PR no longer claims is dropped while the PR is still
 //     open. After merge/close it is kept: a later title edit must not take the
 //     delivered work off the issue.
 //   - An automatic link for an identifier that turned out to be ambiguous
 //     across bound workspaces is always dropped (see prLinkPolicy).
 //
-// Manual links are never touched here.
+// Manual links are never removed here.
 func (h *Handler) reconcileAutoLinks(ctx context.Context, ws db.Workspace, prID pgtype.UUID, state string, in prAutoLinkInput) ([]string, map[pgtype.UUID]struct{}) {
 	touched := map[pgtype.UUID]struct{}{}
 	linked := make([]string, 0)
@@ -1666,10 +1691,18 @@ func (h *Handler) reconcileAutoLinks(ctx context.Context, ws db.Workspace, prID 
 			continue
 		}
 		claimed[issue.ID] = struct{}{}
-		rows, err := in.link(issue.ID)
+		closeIntent := in.closing[id] && !in.freezeCloseIntent
+		rows, err := in.link(issue.ID, closeIntent)
 		if err != nil {
 			slog.Warn("pr link: link failed", "err", err)
 			continue
+		}
+		if rows == 0 && !in.freezeCloseIntent {
+			// Close intent decides nothing until the PR merges — a PR event of
+			// its own — so updating it does not re-run the decision.
+			if err := in.setCloseIntent(issue.ID, closeIntent); err != nil {
+				slog.Warn("pr link: close intent update failed", "err", err)
+			}
 		}
 		linked = append(linked, uuidToString(issue.ID))
 		if rows > 0 {
@@ -1786,10 +1819,21 @@ func parseGHTimeRequired(s string) pgtype.Timestamptz {
 // extractIdentifiers pulls every "PREFIX-NUMBER" match across the supplied
 // fields, deduplicating in input order.
 func extractIdentifiers(parts ...string) []string {
+	return extractMatchedIdentifiers(identifierRe, parts...)
+}
+
+// extractClosingIdentifiers pulls every identifier that appears immediately
+// after a closing keyword. Callers pass the title and body only: a branch name
+// is not natural language, so "fix/mul-1-login" is a reference, not a close.
+func extractClosingIdentifiers(parts ...string) []string {
+	return extractMatchedIdentifiers(closingIdentifierRe, parts...)
+}
+
+func extractMatchedIdentifiers(re *regexp.Regexp, parts ...string) []string {
 	seen := map[string]struct{}{}
 	out := []string{}
 	for _, src := range parts {
-		for _, m := range identifierRe.FindAllStringSubmatch(src, -1) {
+		for _, m := range re.FindAllStringSubmatch(src, -1) {
 			ident := strings.ToUpper(m[1]) + "-" + m[2]
 			if _, dup := seen[ident]; dup {
 				continue
@@ -1799,6 +1843,22 @@ func extractIdentifiers(parts ...string) []string {
 		}
 	}
 	return out
+}
+
+// prClaimedIdentifiers returns the identifiers a PR claims, and which of them
+// it closes. The title and branch name link an issue; a closing keyword in the
+// title or body ("Closes MUL-1") links it too and marks the PR as the one that
+// completes it. A bare mention in the body claims nothing.
+func prClaimedIdentifiers(title, body, branch string) ([]string, map[string]bool) {
+	idents := extractIdentifiers(title, branch)
+	closing := map[string]bool{}
+	for _, id := range extractClosingIdentifiers(title, body) {
+		closing[id] = true
+		if !slices.Contains(idents, id) {
+			idents = append(idents, id)
+		}
+	}
+	return idents, closing
 }
 
 // autoLinkPRsEnabledForWorkspace reports whether the workspace allows the

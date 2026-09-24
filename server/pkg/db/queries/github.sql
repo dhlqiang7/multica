@@ -231,15 +231,23 @@ WHERE pull_request_id = $1;
 -- =====================
 
 -- name: LinkIssueToPullRequest :execrows
--- Automatic link from a PR title or branch. Returns 1 only when the link is
--- new, so the webhook evaluates auto-complete on the link event and not on
--- every redelivery. An existing link (automatic or manual) is left untouched.
+-- Automatic link from a PR title, branch, or closing keyword. Returns 1 only
+-- when the link is new, so the webhook evaluates auto-complete on the link
+-- event and not on every redelivery. An existing link (automatic or manual) is
+-- left untouched; its close_intent follows SetIssuePullRequestCloseIntent.
 INSERT INTO issue_pull_request (
-    issue_id, pull_request_id, linked_by_type, linked_by_id
+    issue_id, pull_request_id, linked_by_type, linked_by_id, close_intent
 ) VALUES (
-    $1, $2, 'system', NULL
+    $1, $2, 'system', NULL, $3
 )
 ON CONFLICT (issue_id, pull_request_id) DO NOTHING;
+
+-- name: SetIssuePullRequestCloseIntent :exec
+-- close_intent records whether the PR closes the issue with a keyword
+-- ("Closes MUL-1" in its title or body). It follows the PR text until the PR's
+-- merge/close event, then the webhook stops calling this.
+UPDATE issue_pull_request SET close_intent = $3
+WHERE issue_id = $1 AND pull_request_id = $2 AND close_intent <> $3;
 
 -- name: LinkIssueToPullRequestManually :execrows
 -- A member linked this PR by hand. Marking an existing automatic link as
