@@ -1321,6 +1321,11 @@
       "delete_body": "{{agent}} is no longer woken by it, and its runs that have not started are withdrawn. A run already started keeps going.",
       "deleting": "Deleting…",
       "delete_error": "Could not delete the wakeup"
+    },
+    "paused_reason": {
+      "max_fires": "reached its limit of {{count}} runs",
+      "loop": "it kept waking rules that woke it again",
+      "rate": "more than 12 runs in an hour"
     }
   },
   "duplicates": {

@@ -392,7 +392,7 @@ export function WorkspaceWakeups() {
               count: pausedCount,
               issue: latestPaused.issue_identifier,
               condition: text.trigger(latestPaused),
-              reason: text.paused(latestPaused) ?? "",
+              reason: text.pausedReason(latestPaused) ?? "",
             })}
           </span>
           <Button size="sm" variant="outline" onClick={() => change({ scope: "paused" })}>

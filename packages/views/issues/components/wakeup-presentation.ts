@@ -384,6 +384,15 @@ export function useWakeupText() {
         : w.paused_reason === "rate"
           ? t(($) => $.wakeups.paused.rate)
           : null;
+  // The bare reason, for sentences that already say the rule was paused.
+  const pausedReason = (w: Pick<IssueWakeup, "paused_reason" | "max_fires" | "fire_count">) =>
+    w.paused_reason === "max_fires"
+      ? t(($) => $.wakeups.paused_reason.max_fires, { count: w.max_fires ?? w.fire_count ?? 0 })
+      : w.paused_reason === "loop"
+        ? t(($) => $.wakeups.paused_reason.loop)
+        : w.paused_reason === "rate"
+          ? t(($) => $.wakeups.paused_reason.rate)
+          : null;
   const fires = (w: Pick<IssueWakeup, "max_fires" | "fire_count" | "mode">) => {
     const count = w.fire_count ?? 0;
     if (w.mode !== "continuous" || (!count && !w.max_fires)) return null;
@@ -391,5 +400,5 @@ export function useWakeupText() {
       ? t(($) => $.wakeups.detail.fires_max, { count, max: w.max_fires })
       : t(($) => $.wakeups.detail.fires, { count });
   };
-  return { eventName, eventCondition, actorName, trigger, schedule, frequency, runState, state, error, remaining, ending, summary, source, expiry, condition, conditionWait, waiting, headline, paused, fires };
+  return { eventName, eventCondition, actorName, trigger, schedule, frequency, runState, state, error, remaining, ending, summary, source, expiry, condition, conditionWait, waiting, headline, paused, pausedReason, fires };
 }

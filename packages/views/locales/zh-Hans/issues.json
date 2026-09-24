@@ -1283,6 +1283,11 @@
       "delete_body": "删除后不再唤醒 {{agent}}，尚未开始的运行会被撤回。已经开始的运行会继续。",
       "deleting": "正在删除…",
       "delete_error": "无法删除唤醒"
+    },
+    "paused_reason": {
+      "max_fires": "达到 {{count}} 次上限",
+      "loop": "与其他唤醒规则互相触发",
+      "rate": "1 小时内触发超过 12 次"
     }
   },
   "duplicates": {

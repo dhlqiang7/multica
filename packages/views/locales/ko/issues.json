@@ -1283,6 +1283,11 @@
       "delete_body": "더 이상 {{agent}}을(를) 깨우지 않으며 시작되지 않은 실행은 취소됩니다. 이미 시작된 실행은 계속됩니다.",
       "deleting": "삭제 중…",
       "delete_error": "삭제할 수 없습니다"
+    },
+    "paused_reason": {
+      "max_fires": "한도 {{count}}회에 도달",
+      "loop": "다른 규칙과 서로 깨우고 있었습니다",
+      "rate": "1시간에 12회 넘게 실행됨"
     }
   },
   "duplicates": {
