@@ -295,7 +295,7 @@ beforeEach(() => {
   insertPlaceholderSpy.mockReset();
   insertMarkdownBehavior.succeed = true;
   localStorage.clear();
-  useCommentComposerStore.setState({ sticky: true });
+  useCommentComposerStore.setState({ sticky: true, runningAgentReply: "steer" });
   // The composer's pinning (and the height cap that follows it) is viewport
   // dependent, so a narrow-viewport test must not leak into the next one.
   Object.defineProperty(window, "innerWidth", { configurable: true, value: 1280 });
@@ -464,6 +464,38 @@ describe("comment composers", () => {
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("start over on web", undefined, undefined, undefined));
     expect(apiCancelTask).toHaveBeenCalledWith("issue-1", "turn-1");
     expect(apiCancelTask.mock.invocationCallOrder[0]!).toBeLessThan(onSubmit.mock.invocationCallOrder[1]!);
+  });
+
+  it("starts after the run by default when the personal preference says so", async () => {
+    useCommentComposerStore.setState({ runningAgentReply: "after_run" });
+    const turn = {
+      id: "turn-1", agent_id: "agent-1", issue_id: "issue-1", status: "running", priority: 0,
+      created_at: "2026-09-23T00:00:00Z", dispatched_at: null, started_at: "2026-09-23T00:00:01Z",
+      completed_at: null, result: null, error: null,
+      supplement_capability: "task-supplement-v1", can_supplement: true,
+    };
+    apiListTasksByIssue.mockResolvedValue([turn]);
+    apiPreviewCommentTriggers.mockResolvedValue({ agents: [{ id: "agent-1", name: "Lambda", source: "thread_parent", reason: "" }] });
+    const onSubmit = vi.fn().mockResolvedValue("reply-new");
+    const { container } = renderWithProviders(
+      <ReplyInput issueId="issue-1" parentId="comment-1" avatarType="member" avatarId="user-1"
+        onSubmit={onSubmit} steerByDefault={(task) => task.id === "turn-1"} />,
+    );
+
+    activateComposer("reply-composer-shell");
+    fireEvent.change(screen.getByTestId("editor"), { target: { value: "only fix web" } });
+    await screen.findByRole("button", { name: "Lambda trigger: Start after this run" }, { timeout: 5000 });
+    fireEvent.click(getSubmitButton(container));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("only fix web", undefined, undefined, undefined));
+
+    // One message can still go into the running turn.
+    fireEvent.change(screen.getByTestId("editor"), { target: { value: "and keep desktop as is" } });
+    fireEvent.click(await screen.findByRole("button", { name: "Lambda trigger: Start after this run" }, { timeout: 5000 }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: /Add to current run/ }));
+    await screen.findByRole("button", { name: "Lambda trigger: Add to current run" });
+    fireEvent.click(getSubmitButton(container));
+    await waitFor(() => expect(onSubmit).toHaveBeenLastCalledWith("and keep desktop as is", undefined, undefined,
+      { taskIds: ["turn-1"], clientRequestId: expect.any(String) }));
   });
 
   it("never stops the previous recipient after the mentions change under a stale preview", async () => {

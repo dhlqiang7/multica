@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { issueTasksOptions } from "@multica/core/issues/queries";
+import { useCommentComposerStore } from "@multica/core/issues/stores";
 import {
   agentRunState,
   recipientActions,
@@ -44,7 +45,7 @@ export function useRecipientActions({
   allowSteer,
   hasAttachments = false,
   hasDraft,
-  steerByDefault,
+  steerByDefault: steerHere,
   resetKey,
 }: {
   issueId: string;
@@ -71,6 +72,13 @@ export function useRecipientActions({
     enabled: !!issueId && agents.length > 0,
     select: selectActive,
   });
+  // The personal default can turn steering off for every composer; it only
+  // decides what happens without a per-message choice.
+  const steerWithoutChoice = useCommentComposerStore((s) => s.runningAgentReply !== "after_run");
+  const steerByDefault = useCallback(
+    (task: AgentTask) => steerWithoutChoice && steerHere(task),
+    [steerWithoutChoice, steerHere],
+  );
   const [chosen, setChosen] = useState<Record<string, RecipientAction>>(NO_CHOICES);
   const [endedAgentIds, setEndedAgentIds] = useState<ReadonlySet<string>>(() => new Set());
 
