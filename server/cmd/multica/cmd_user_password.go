@@ -78,7 +78,7 @@ func runUserSetPassword(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("set password: %w", err)
 	}
 	if n == 0 {
-		return fmt.Errorf("user not found: %s", email)
+		return fmt.Errorf("user %q not found", email)
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "email:    %s\npassword: %s\nsaved:    bcrypt hash written (明文仅此一次，请立即保存)\n", email, password)
