@@ -499,7 +499,7 @@ describe("comment composers", () => {
       { taskIds: ["turn-1"], clientRequestId: expect.any(String) }));
   });
 
-  it("steers one recipient per message and lets the author move it", async () => {
+  it("steers every running recipient the message addresses", async () => {
     const turn = (id: string, agentId: string) => ({
       id, agent_id: agentId, issue_id: "issue-1", status: "running", priority: 0,
       created_at: "2026-09-23T00:00:00Z", dispatched_at: null, started_at: "2026-09-23T00:00:01Z",
@@ -520,14 +520,10 @@ describe("comment composers", () => {
     fireEvent.change(screen.getByTestId("editor"), { target: { value: "only fix web" } });
     fireEvent.click(await screen.findByText("2 agents will receive this", {}, { timeout: 5000 }));
     expect(await screen.findByRole("button", { name: "Lambda trigger: Add to current run" })).toBeInTheDocument();
-    // Only one turn takes the message; the other recipient starts after its run.
-    fireEvent.click(screen.getByRole("button", { name: "Orion trigger: Start after this run" }));
-    fireEvent.click(await screen.findByRole("menuitemradio", { name: /Add to current run/ }));
-    expect(await screen.findByRole("button", { name: "Orion trigger: Add to current run" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Lambda trigger: Start after this run" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Orion trigger: Add to current run" })).toBeInTheDocument();
     fireEvent.click(getSubmitButton(container));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("only fix web", undefined, undefined,
-      { taskIds: ["turn-2"], clientRequestId: expect.any(String) }));
+      { taskIds: ["turn-1", "turn-2"], clientRequestId: expect.any(String) }));
   });
 
   it("never stops the previous recipient after the mentions change under a stale preview", async () => {

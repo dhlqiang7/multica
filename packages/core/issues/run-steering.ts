@@ -106,18 +106,6 @@ export function resolveRecipientAction(
 }
 
 /**
- * Until every server claims receipts per (comment, run), one message steers at
- * most one running turn. The recipient the author picked it for keeps it;
- * otherwise the first one that steers by default. Returns that agent's id.
- */
-export function steerTarget(
-  entries: readonly { agentId: string; action: RecipientAction; chosen?: RecipientAction }[],
-): string | undefined {
-  const steering = entries.filter((entry) => entry.action === "steer");
-  return (steering.find((entry) => entry.chosen === "steer") ?? steering[0])?.agentId;
-}
-
-/**
  * A steering send: the turns it goes into, and the logical request that lets
  * a retry after a lost response return the original comment.
  */

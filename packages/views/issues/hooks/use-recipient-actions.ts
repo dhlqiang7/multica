@@ -9,7 +9,6 @@ import {
   recipientActions,
   recipientRouting,
   resolveRecipientAction,
-  steerTarget,
   type AgentRunState,
   type RecipientAction,
   type RecipientRouting,
@@ -97,31 +96,20 @@ export function useRecipientActions({
     });
   }, [agents]);
 
-  const recipients = useMemo<RecipientEntry[]>(() => {
-    const entries = agents.map((agent) => {
-      const state = agentRunState(tasks, agent.id);
-      const opts = {
-        canSteer: allowSteer && !hasAttachments,
-        canRestart: allowSteer,
-        steerByDefault: state.kind === "running" && steerByDefault(state.task),
-      };
-      return {
-        agent,
-        state,
-        opts,
-        action: resolveRecipientAction(state, chosen[agent.id], opts),
-        actions: recipientActions(state, opts),
-      };
-    });
-    // One message steers one turn for now: every other recipient that would
-    // steer takes its next action instead, and can still take the steer over.
-    const target = steerTarget(entries.map((entry) => ({
-      agentId: entry.agent.id, action: entry.action, chosen: chosen[entry.agent.id],
-    })));
-    return entries.map(({ opts, ...entry }) => (entry.action !== "steer" || entry.agent.id === target
-      ? entry
-      : { ...entry, action: resolveRecipientAction(entry.state, undefined, { ...opts, steerByDefault: false }) }));
-  }, [agents, tasks, chosen, allowSteer, hasAttachments, steerByDefault]);
+  const recipients = useMemo<RecipientEntry[]>(() => agents.map((agent) => {
+    const state = agentRunState(tasks, agent.id);
+    const opts = {
+      canSteer: allowSteer && !hasAttachments,
+      canRestart: allowSteer,
+      steerByDefault: state.kind === "running" && steerByDefault(state.task),
+    };
+    return {
+      agent,
+      state,
+      action: resolveRecipientAction(state, chosen[agent.id], opts),
+      actions: recipientActions(state, opts),
+    };
+  }), [agents, tasks, chosen, allowSteer, hasAttachments, steerByDefault]);
 
   // A recipient that would have taken the message in its running turn, and
   // whose run ended before it was sent, now starts a new run. Say so once,
@@ -151,15 +139,7 @@ export function useRecipientActions({
   }), [recipients, endedAgentIds, allowSteer, hasAttachments, chosen, steerByDefault]);
 
   const setAction = useCallback((agentId: string, action: RecipientAction) => {
-    setChosen((prev) => {
-      if (prev[agentId] === action) return prev;
-      const next = { ...prev, [agentId]: action };
-      // Steering this recipient takes the one steer from any other.
-      if (action === "steer") {
-        for (const id of Object.keys(next)) if (id !== agentId && next[id] === "steer") delete next[id];
-      }
-      return next;
-    });
+    setChosen((prev) => (prev[agentId] === action ? prev : { ...prev, [agentId]: action }));
   }, []);
 
   const reset = useCallback(() => {
