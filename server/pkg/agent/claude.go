@@ -783,20 +783,43 @@ func claudeModelUsage(modelUsage map[string]claudeResultModelUsage) map[string]T
 }
 
 func subtractClaudeUsage(current, baseline map[string]TokenUsage) map[string]TokenUsage {
+	// A baseline is usable only when Claude restored all of it. Older versions,
+	// downgrades, and future counter resets report per-run totals instead; in
+	// those cases subtracting even one historical field would silently undercount.
+	if !claudeUsageIncludesBaseline(current, baseline) {
+		usage := make(map[string]TokenUsage, len(current))
+		for model, modelUsage := range current {
+			usage[model] = modelUsage
+		}
+		return usage
+	}
 	usage := make(map[string]TokenUsage, len(current))
 	for model, currentUsage := range current {
 		base := baseline[model]
 		delta := TokenUsage{
-			InputTokens:      max(currentUsage.InputTokens-base.InputTokens, 0),
-			OutputTokens:     max(currentUsage.OutputTokens-base.OutputTokens, 0),
-			CacheReadTokens:  max(currentUsage.CacheReadTokens-base.CacheReadTokens, 0),
-			CacheWriteTokens: max(currentUsage.CacheWriteTokens-base.CacheWriteTokens, 0),
+			InputTokens:      currentUsage.InputTokens - base.InputTokens,
+			OutputTokens:     currentUsage.OutputTokens - base.OutputTokens,
+			CacheReadTokens:  currentUsage.CacheReadTokens - base.CacheReadTokens,
+			CacheWriteTokens: currentUsage.CacheWriteTokens - base.CacheWriteTokens,
 		}
 		if claudeUsageHasTokens(delta.InputTokens, delta.OutputTokens, delta.CacheReadTokens, delta.CacheWriteTokens) {
 			usage[model] = delta
 		}
 	}
 	return usage
+}
+
+func claudeUsageIncludesBaseline(current, baseline map[string]TokenUsage) bool {
+	for model, base := range baseline {
+		modelUsage, ok := current[model]
+		if !ok || modelUsage.InputTokens < base.InputTokens ||
+			modelUsage.OutputTokens < base.OutputTokens ||
+			modelUsage.CacheReadTokens < base.CacheReadTokens ||
+			modelUsage.CacheWriteTokens < base.CacheWriteTokens {
+			return false
+		}
+	}
+	return true
 }
 
 const claudeSessionReadChunkSize = 64 * 1024
@@ -974,14 +997,19 @@ func readLastClaudeCostStateUsage(f *os.File, start, end int64) (map[string]Toke
 			if len(line) == 0 {
 				continue
 			}
-			var state struct {
-				Type       string                            `json:"type"`
-				ModelUsage map[string]claudeResultModelUsage `json:"modelUsage"`
+			var envelope struct {
+				Type string `json:"type"`
 			}
-			if err := json.Unmarshal(line, &state); err != nil {
-				return nil, false, fmt.Errorf("parse Claude session JSONL: %w", err)
+			if err := json.Unmarshal(line, &envelope); err != nil {
+				continue
 			}
-			if state.Type == "cost-state" {
+			if envelope.Type == "cost-state" {
+				var state struct {
+					ModelUsage map[string]claudeResultModelUsage `json:"modelUsage"`
+				}
+				if err := json.Unmarshal(line, &state); err != nil {
+					continue
+				}
 				usage := claudeModelUsage(state.ModelUsage)
 				if len(usage) == 0 {
 					// An empty or newly-incompatible shape is not authoritative.

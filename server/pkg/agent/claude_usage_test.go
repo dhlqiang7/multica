@@ -337,10 +337,22 @@ func TestClaudeResultUsageSinceCumulativeTurns(t *testing.T) {
 		t.Fatalf("top-level per-run usage = %+v, want %+v", got, want)
 	}
 
-	reset := claudeSDKMessage{ModelUsage: map[string]claudeResultModelUsage{model: totals[0]}}
+	reset := claudeSDKMessage{ModelUsage: map[string]claudeResultModelUsage{
+		model: {InputTokens: 30, OutputTokens: 14, CacheReadInputTokens: 300, CacheCreationInputTokens: 40},
+	}}
 	usage, authoritative = claudeResultUsageSince(reset, model, baseline)
-	if !authoritative || len(usage) != 0 {
-		t.Fatalf("reset usage = %#v, authoritative=%v; want an authoritative empty delta", usage, authoritative)
+	if want := claudeModelUsage(reset.ModelUsage); !authoritative || !reflect.DeepEqual(usage, want) {
+		t.Fatalf("reset usage = %#v, authoritative=%v; want raw usage %#v", usage, authoritative, want)
+	}
+
+	baselineWithAnotherModel := map[string]TokenUsage{
+		model:              baseline[model],
+		"claude-haiku-4-5": {InputTokens: 1},
+	}
+	currentWithoutModel := claudeSDKMessage{ModelUsage: map[string]claudeResultModelUsage{model: totals[2]}}
+	usage, authoritative = claudeResultUsageSince(currentWithoutModel, model, baselineWithAnotherModel)
+	if want := claudeModelUsage(currentWithoutModel.ModelUsage); !authoritative || !reflect.DeepEqual(usage, want) {
+		t.Fatalf("missing-model usage = %#v, authoritative=%v; want raw usage %#v", usage, authoritative, want)
 	}
 }
 
@@ -357,6 +369,7 @@ func TestReadLastClaudeCostStateUsageAcrossChunks(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.jsonl")
 	data := append(append([]byte(nil), baseline...), largeTrailingLine...)
 	data = append(data, '\n')
+	data = append(data, []byte(`{"type":"cost-state"`)...)
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
