@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode, type Ref } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { issueKeys } from "@multica/core/issues/queries";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import type { UploadResult } from "@multica/core/hooks/use-file-upload";
@@ -558,6 +559,39 @@ describe("comment composers", () => {
     fireEvent.click(getSubmitButton(container));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(3));
     expect(onSubmit.mock.calls[2]![3].clientRequestId).not.toBe(first.clientRequestId);
+  });
+
+  it("repeats the original steering request when its run ends before a retry", async () => {
+    const turn = {
+      id: "turn-1", agent_id: "agent-1", issue_id: "issue-1", status: "running", priority: 0,
+      created_at: "2026-09-23T00:00:00Z", dispatched_at: null, started_at: "2026-09-23T00:00:01Z",
+      completed_at: null, result: null, error: null,
+      supplement_capability: "task-supplement-v1", can_supplement: true,
+    };
+    apiListTasksByIssue.mockResolvedValue([turn]);
+    apiPreviewCommentTriggers.mockResolvedValue({ agents: [{ id: "agent-1", name: "Lambda", source: "thread_parent", reason: "" }] });
+    const onSubmit = vi.fn().mockResolvedValueOnce(false).mockResolvedValue("reply-new");
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { container } = renderWithI18n(
+      <QueryClientProvider client={client}>
+        <ReplyInput issueId="issue-1" parentId="comment-1" avatarType="member" avatarId="user-1"
+          onSubmit={onSubmit} steerByDefault={(task) => task.id === "turn-1"} />
+      </QueryClientProvider>,
+    );
+    activateComposer("reply-composer-shell");
+    fireEvent.change(screen.getByTestId("editor"), { target: { value: "only fix web" } });
+    await screen.findByText("Add to current run", {}, { timeout: 5000 });
+    fireEvent.click(getSubmitButton(container));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(getSubmitButton(container)).not.toBeDisabled());
+    const first = onSubmit.mock.calls[0]![3];
+    expect(first).toEqual({ taskIds: ["turn-1"], clientRequestId: expect.any(String) });
+    // Its response was lost, then realtime reports completion before the user retries.
+    act(() => client.setQueryData(issueKeys.tasks("issue-1"), [{ ...turn, status: "completed" }]));
+    await waitFor(() => expect(screen.queryByText("Add to current run")).not.toBeInTheDocument());
+    fireEvent.click(getSubmitButton(container));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
+    expect(onSubmit.mock.calls[1]![3]).toEqual(first);
   });
 
   it("keeps reply submission wired after removing expand", async () => {
