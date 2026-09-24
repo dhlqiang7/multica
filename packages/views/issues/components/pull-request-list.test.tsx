@@ -420,12 +420,12 @@ describe("PullRequestList auto-complete", () => {
     );
   });
 
-  it("says no PR carries the closing keyword when none closes the issue", async () => {
+  it("says merging won't complete the issue when no PR closes it", async () => {
     mockPRs = [makePR({ id: "a", number: 12, link_source: "title" })];
     mockAutoComplete = decision("no_close_intent");
     renderList();
     expect(await screen.findByTestId("pr-auto-complete-line")).toHaveTextContent(
-      "No PR says “Closes MUL-1”",
+      "Won’t complete: no “Closes MUL-1”",
     );
   });
 
