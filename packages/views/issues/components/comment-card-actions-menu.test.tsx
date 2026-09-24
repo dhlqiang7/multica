@@ -5,10 +5,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { TimelineEntry } from "@multica/core/types";
 import { renderWithI18n } from "../../test/i18n";
 
-// Comment "more actions" menu layout: resolve is the most used action, so it
-// leads the menu in its own group, followed by copy/derive actions and then
-// the author's edit/delete group. Pins order and grouping for both the thread
-// root and a reply.
+// Comment "more actions" menu layout, in three groups: act on the comment
+// (Edit, then Resolve), take it elsewhere (Copy, Copy link, Create sub-issue),
+// and Delete alone at the bottom. Edit only shows on comments the viewer may
+// edit, so on anyone else's comment Resolve leads the menu.
 
 vi.mock("@multica/core/api", () => ({
   api: { uploadFile: vi.fn() },
@@ -53,12 +53,15 @@ vi.mock("../../editor", async () => ({
 
 import { CommentCard } from "./comment-card";
 
-function comment(id: string, parentId: string | null): TimelineEntry {
+function comment(
+  id: string,
+  parentId: string | null,
+  author: Pick<TimelineEntry, "actor_type" | "actor_id"> = { actor_type: "member", actor_id: "user-1" },
+): TimelineEntry {
   return {
     type: "comment",
     id,
-    actor_type: "member",
-    actor_id: "user-1",
+    ...author,
     content: `body ${id}`,
     parent_id: parentId,
     comment_type: "comment",
@@ -70,7 +73,11 @@ function comment(id: string, parentId: string | null): TimelineEntry {
   };
 }
 
-function renderThread(root: TimelineEntry, replies: TimelineEntry[]) {
+function renderThread(
+  root: TimelineEntry,
+  replies: TimelineEntry[],
+  { resolvable = true }: { resolvable?: boolean } = {},
+) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return renderWithI18n(
     <QueryClientProvider client={qc}>
@@ -85,7 +92,7 @@ function renderThread(root: TimelineEntry, replies: TimelineEntry[]) {
         onToggleReaction={vi.fn()}
         onCopyLink={vi.fn()}
         onCreateSubIssue={vi.fn()}
-        onResolveToggle={vi.fn()}
+        onResolveToggle={resolvable ? vi.fn() : undefined}
       />
     </QueryClientProvider>,
   );
@@ -103,9 +110,42 @@ async function openMenuLayout(index: number): Promise<string[]> {
   );
 }
 
+const agentAuthor = { actor_type: "agent", actor_id: "agent-1" } as const;
+
 describe("CommentCard — actions menu layout", () => {
-  it("leads the root menu with Resolve thread, then copy/derive, then edit/delete", async () => {
+  it("groups the author's root menu as edit/resolve, copy/derive, delete", async () => {
     renderThread(comment("root", null), []);
+
+    expect(await openMenuLayout(0)).toEqual([
+      "Edit",
+      "Resolve thread",
+      SEPARATOR,
+      "Copy",
+      "Copy link",
+      "Create sub-issue from here",
+      SEPARATOR,
+      "Delete",
+    ]);
+  });
+
+  it("offers Resolve thread with comment on the author's reply", async () => {
+    renderThread(comment("root", null), [comment("reply", "root")]);
+
+    // Menus render in order: root first, then the reply.
+    expect(await openMenuLayout(1)).toEqual([
+      "Edit",
+      "Resolve thread with comment",
+      SEPARATOR,
+      "Copy",
+      "Copy link",
+      "Create sub-issue from here",
+      SEPARATOR,
+      "Delete",
+    ]);
+  });
+
+  it("leads with Resolve on someone else's comment", async () => {
+    renderThread(comment("root", null, agentAuthor), []);
 
     expect(await openMenuLayout(0)).toEqual([
       "Resolve thread",
@@ -113,25 +153,12 @@ describe("CommentCard — actions menu layout", () => {
       "Copy",
       "Copy link",
       "Create sub-issue from here",
-      SEPARATOR,
-      "Edit",
-      "Delete",
     ]);
   });
 
-  it("leads a reply's menu with Resolve thread with comment", async () => {
-    renderThread(comment("root", null), [comment("reply", "root")]);
+  it("drops the leading separator when there is nothing to edit or resolve", async () => {
+    renderThread(comment("root", null, agentAuthor), [], { resolvable: false });
 
-    // Menus render in order: root first, then the reply.
-    expect(await openMenuLayout(1)).toEqual([
-      "Resolve thread with comment",
-      SEPARATOR,
-      "Copy",
-      "Copy link",
-      "Create sub-issue from here",
-      SEPARATOR,
-      "Edit",
-      "Delete",
-    ]);
+    expect(await openMenuLayout(0)).toEqual(["Copy", "Copy link", "Create sub-issue from here"]);
   });
 });
