@@ -11,11 +11,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // systemWakeupChildDone is the platform rule that wakes a parent's assignee
-// when a stage of its sub-issues finishes (see notifyParentOfChildDone). It
+// when a stage of its sub-issues finishes (see notifyParentsOfBatchChildDone). It
 // used to be implicit; exposing it as a rule lets people see what the parent
 // is waiting for, turn it off per issue, and add an instruction.
 const systemWakeupChildDone = "child_done"
@@ -44,15 +45,35 @@ type systemWakeupResponse struct {
 	// Blocked explains why the rule would not wake anyone right now:
 	// "backlog", "member_assignee" or "no_assignee". Empty when it would.
 	Blocked string `json:"blocked"`
+	// WorkspaceDefault is the rule's workspace-wide setting, which applies
+	// until the issue sets its own.
+	WorkspaceDefault bool `json:"workspace_default"`
 }
 
-// childDoneRule reads the per-issue override. A missing row, or a failed read,
-// keeps the default: enabled with no supplementary instruction, which is the
-// behavior before the rule could be configured.
+// workspaceSettingChildDone is the workspace settings key for the rule's
+// default. Only an explicit false turns it off.
+const workspaceSettingChildDone = "system_wakeup_child_done"
+
+// childDoneDefault reads the workspace default. A failed read keeps the rule
+// on, which is the behavior before the rule could be configured.
+func (h *Handler) childDoneDefault(ctx context.Context, workspaceID pgtype.UUID) bool {
+	ws, err := h.Queries.GetWorkspace(ctx, workspaceID)
+	if err != nil {
+		return true
+	}
+	var settings map[string]json.RawMessage
+	if json.Unmarshal(ws.Settings, &settings) != nil {
+		return true
+	}
+	return string(settings[workspaceSettingChildDone]) != "false"
+}
+
+// childDoneRule reads the per-issue override, else the workspace default. A
+// failed read keeps the rule on with no supplementary instruction.
 func (h *Handler) childDoneRule(ctx context.Context, parent db.Issue) (bool, string) {
 	rule, err := h.Queries.GetIssueSystemWakeup(ctx, db.GetIssueSystemWakeupParams{IssueID: parent.ID, WorkspaceID: parent.WorkspaceID, Rule: systemWakeupChildDone})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return true, ""
+		return h.childDoneDefault(ctx, parent.WorkspaceID), ""
 	}
 	if err != nil {
 		slog.Warn("child done: failed to read system wakeup rule", "error", err, "parent_id", uuidToString(parent.ID))
@@ -120,6 +141,7 @@ func (h *Handler) childDoneSystemWakeup(ctx context.Context, parent db.Issue) (*
 		}
 	}
 	out.Enabled, out.Instruction = h.childDoneRule(ctx, parent)
+	out.WorkspaceDefault = h.childDoneDefault(ctx, parent.WorkspaceID)
 	switch {
 	case !parent.AssigneeType.Valid || !parent.AssigneeID.Valid:
 		out.Blocked = "no_assignee"
@@ -182,9 +204,11 @@ func (h *Handler) UpdateIssueSystemWakeup(w http.ResponseWriter, r *http.Request
 		writeError(w, 404, "system wakeup not found")
 		return
 	}
+	// Omitted fields keep their current value, so a list can toggle the rule
+	// without reading its instruction.
 	var in struct {
-		Enabled     bool   `json:"enabled"`
-		Instruction string `json:"instruction"`
+		Enabled     *bool   `json:"enabled"`
+		Instruction *string `json:"instruction"`
 	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16384))
 	dec.DisallowUnknownFields()
@@ -192,8 +216,14 @@ func (h *Handler) UpdateIssueSystemWakeup(w http.ResponseWriter, r *http.Request
 		writeError(w, 400, "invalid system wakeup body")
 		return
 	}
-	in.Instruction = strings.TrimSpace(in.Instruction)
-	if len(in.Instruction) > maxSystemWakeupInstruction {
+	enabled, instruction := h.childDoneRule(r.Context(), issue)
+	if in.Enabled != nil {
+		enabled = *in.Enabled
+	}
+	if in.Instruction != nil {
+		instruction = strings.TrimSpace(*in.Instruction)
+	}
+	if len(instruction) > maxSystemWakeupInstruction {
 		writeError(w, 400, "instruction must be at most 4000 bytes")
 		return
 	}
@@ -209,7 +239,7 @@ func (h *Handler) UpdateIssueSystemWakeup(w http.ResponseWriter, r *http.Request
 	}
 	if _, err := h.Queries.UpsertIssueSystemWakeup(r.Context(), db.UpsertIssueSystemWakeupParams{
 		IssueID: issue.ID, WorkspaceID: issue.WorkspaceID, Rule: systemWakeupChildDone,
-		Enabled: in.Enabled, Instruction: in.Instruction, UpdatedBy: parseUUID(originator),
+		Enabled: enabled, Instruction: instruction, UpdatedBy: parseUUID(originator),
 	}); err != nil {
 		slog.Warn("update system wakeup failed", "error", err, "issue_id", uuidToString(issue.ID))
 		writeError(w, 500, "could not save system wakeup")

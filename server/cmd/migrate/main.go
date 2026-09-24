@@ -148,6 +148,8 @@ var concurrentIndexCleanups = map[string]string{
 	"547_issue_pull_request_exclusion_workspace_index":          "idx_issue_pull_request_exclusion_workspace",
 	"549_wakeup_expiry_index":                                   "issue_wakeup_expiry_idx",
 	"551_issue_system_wakeup_index":                             "issue_system_wakeup_rule_idx",
+	"554_issue_child_done_event_id":                             "issue_child_done_event_id_idx",
+	"555_issue_child_done_event_pending":                        "issue_child_done_event_pending_idx",
 	"510_wakeup_id":                                             "issue_wakeup_id_idx",
 	"511_wakeup_issue":                                          "issue_wakeup_issue_idx",
 	"512_wakeup_due":                                            "issue_wakeup_due_idx",

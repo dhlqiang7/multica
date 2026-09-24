@@ -2,12 +2,15 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/service"
@@ -16,20 +19,19 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// notifyParentOfChildDone posts a top-level system comment on the parent
-// issue when a child issue transitions from non-done into done. This replaces
-// the agent-prompt rule that previously made child agents post the
+// The child-done system rule posts a top-level system comment on the parent
+// when its sub-issues close a stage, and wakes the parent's assignee. This
+// replaces the agent-prompt rule that previously made child agents post the
 // notification themselves (PR #2918 user feedback — the agent rule caused
 // self-mention loops, planner ping-pong, and accidental `MUL-` prefix
 // hardcoding because the agent did not always know the workspace prefix).
 //
 // Guards on whether the comment fires at all:
 //   - the child must transition from a non-terminal status INTO a terminal one
-//     (done or cancelled). Repeat saves of an already-terminal child do not
-//     re-fire; only the entering transition does. Cancelled counts because a
-//     cancelled sibling never finishes and so closes its stage (see the entry
-//     guard and isTerminalChildStatus).
-//   - issue.ParentIssueID must be set
+//     (done or cancelled, including custom statuses in those categories). The
+//     status write records the transition itself (migration 553), so repeat
+//     saves of an already-terminal child never fire. Cancelled counts because
+//     a cancelled sibling never finishes and so closes its stage.
 //   - parent must not be "done" or "cancelled" — the parent is already
 //     closed and a notification has no follow-up to drive
 //   - parent must not be "backlog" — a parent parked in backlog is being
@@ -42,6 +44,8 @@ import (
 //     and there is nothing to "trigger" on a human assignee. Skipping the
 //     comment entirely (Bohan's call on MUL-2538) also sidesteps the
 //     mention question — no comment, no mention, no inbox row.
+//   - the rule is on for the parent (per-issue override, else the workspace
+//     default).
 //   - the completion must close a STAGE barrier (MUL-3508). Sub-issues under
 //     a parent can be grouped into ordered stages via issue.stage; the
 //     notification + wake fire only when every sibling in the lowest
@@ -64,112 +68,6 @@ import (
 // the child title cannot light up unrelated members. The parent assignee's
 // own trigger is fired explicitly by dispatchParentAssigneeTrigger below,
 // with the idempotency guard documented there.
-//
-// Errors are logged at warn level and swallowed: this is a best-effort
-// notification on the side of a successful status update; failing it must
-// not roll back the user's status change.
-func (h *Handler) notifyParentOfChildDone(ctx context.Context, prev, issue db.Issue) {
-	if !issue.ParentIssueID.Valid {
-		return
-	}
-	// Fire on a transition INTO a terminal status (done OR cancelled), not only
-	// `done`. A cancelled child can close a stage too: isTerminalChildStatus
-	// treats cancelled as terminal (a cancelled sibling never finishes, so it
-	// must not hold the stage open), so the barrier has to be evaluated when the
-	// last open child of a stage is cancelled. Keying on the transition also
-	// makes a later cancelled -> done edit a no-op (terminal -> terminal), which
-	// avoids a lagging duplicate wake.
-	// Both sides of the transition are resolved to the canonical status they
-	// inherit, so a move into a custom done/cancelled status fires the barrier
-	// exactly like a move into Done or Cancelled. (MUL-6243)
-	effective := h.childStatusResolver(ctx)
-	prevStatus, err := effective(prev)
-	if err != nil {
-		slog.Warn("child done: failed to resolve previous child status", "error", err, "child_id", uuidToString(issue.ID))
-		return
-	}
-	nowStatus, err := effective(issue)
-	if err != nil {
-		slog.Warn("child done: failed to resolve child status", "error", err, "child_id", uuidToString(issue.ID))
-		return
-	}
-	prevTerminal := isTerminalChildStatus(prevStatus)
-	nowTerminal := isTerminalChildStatus(nowStatus)
-	if prevTerminal || !nowTerminal {
-		return
-	}
-	parent, err := h.Queries.GetIssue(ctx, issue.ParentIssueID)
-	if err != nil {
-		slog.Warn("child done: failed to load parent",
-			"error", err,
-			"child_id", uuidToString(issue.ID),
-			"parent_id", uuidToString(issue.ParentIssueID))
-		return
-	}
-	// Custom terminal statuses close this out. Only the fixed backlog key parks it,
-	// exactly like Done/Cancelled and Backlog do. (MUL-6243)
-	parentStatus, err := effective(parent)
-	if err != nil {
-		slog.Warn("child done: failed to resolve parent status", "error", err, "parent_id", uuidToString(parent.ID))
-		return
-	}
-	if parentStatus == "done" || parentStatus == "cancelled" {
-		return
-	}
-	// A parent parked in backlog is deliberately held for later. Posting the
-	// system comment would wake its assignee, and the woken agent can then
-	// promote sibling backlog sub-issues into todo — the surprise auto-
-	// activation reported in #4320 / MUL-3497. Skip the whole notification so
-	// a backlog parent stays inert until the user explicitly promotes it.
-	if parentStatus == "backlog" {
-		return
-	}
-	// Human-assigned parents read their own timeline; an automated system
-	// comment is just noise and there is no agent task to trigger. Skip the
-	// whole notification (comment + mention + inbox row) — MUL-2538.
-	if parent.AssigneeType.Valid && parent.AssigneeType.String == "member" {
-		return
-	}
-	// The per-issue system rule can turn this wake off or add an instruction.
-	enabled, supplement := h.childDoneRule(ctx, parent)
-	if !enabled {
-		return
-	}
-
-	// Stage barrier (MUL-3508 / discussion #4320). The notification + assignee
-	// wake fire only when this completion *closes a stage* — i.e. every sibling
-	// in the lowest unfinished stage is now terminal. An unstaged sibling set is
-	// one implicit stage, so this collapses to "wake once when the last
-	// sub-issue finishes" instead of the old fire-on-every-child behavior that
-	// caused the surprise cascade. A completion that does not close a stage is
-	// silent: no comment, no wake. ListChildIssues already reflects this child's
-	// committed terminal status (the status update commits before this runs).
-	children, err := h.Queries.ListChildIssues(ctx, parent.ID)
-	if err != nil {
-		slog.Warn("child done: failed to list siblings for stage barrier",
-			"error", err,
-			"child_id", uuidToString(issue.ID),
-			"parent_id", uuidToString(parent.ID))
-		return
-	}
-	statuses, err := resolveChildStatuses(children, effective)
-	if err != nil {
-		slog.Warn("child done: failed to resolve sibling statuses", "error", err, "parent_id", uuidToString(parent.ID))
-		return
-	}
-	if !stageBarrierClosed(children, issue, statuses.isTerminal) {
-		return
-	}
-	staged := siblingsAreStaged(children)
-	// When the set is staged and the barrier closed, the completed child is
-	// guaranteed to carry a stage (stageBarrierClosed returns false for an
-	// unstaged completed child in a staged set), so issue.Stage.Int32 is safe.
-	var closedStage int32
-	if staged {
-		closedStage = issue.Stage.Int32
-	}
-	h.postChildDoneComment(ctx, parent, issue, children, staged, closedStage, false, statuses, nil, supplement)
-}
 
 // notifyParentsOfBatchChildDone emits child-done parent notifications for a
 // whole batch AFTER every status write has committed. `completed` is the set of
@@ -184,12 +82,15 @@ func (h *Handler) notifyParentOfChildDone(ctx context.Context, prev, issue db.Is
 // here makes the result order-independent — each affected parent gets at most
 // one comment built from the final state, plus one wake pinned to that comment.
 //
-// Best-effort, mirroring notifyParentOfChildDone: a failure on one parent is
-// logged and skipped; it never rolls back the committed batch.
-func (h *Handler) notifyParentsOfBatchChildDone(ctx context.Context, completed []db.Issue) {
+// A failure on one parent is logged and skipped; it never rolls back the
+// committed writes. Database read or write failures are also returned, so the
+// recorded transitions stay pending and are retried (see
+// processChildDoneEvents); a status that cannot be resolved is not retried.
+func (h *Handler) notifyParentsOfBatchChildDone(ctx context.Context, completed []db.Issue) error {
 	if len(completed) == 0 {
-		return
+		return nil
 	}
+	var errs []error
 
 	// Group the completed children by parent, preserving first-seen order so the
 	// emitted comments (and any test assertions) are deterministic.
@@ -219,9 +120,12 @@ func (h *Handler) notifyParentsOfBatchChildDone(ctx context.Context, completed [
 		if err != nil {
 			slog.Warn("batch child done: failed to load parent",
 				"error", err, "parent_id", uuidToString(g.parentID))
+			if !errors.Is(err, pgx.ErrNoRows) {
+				errs = append(errs, err)
+			}
 			continue
 		}
-		// Same parent guards as the single path (see notifyParentOfChildDone).
+		// Parent guards (see the rule description above).
 		parentStatus, err := effective(parent)
 		if err != nil {
 			slog.Warn("batch child done: failed to resolve parent status", "error", err, "parent_id", uuidToString(parent.ID))
@@ -245,6 +149,7 @@ func (h *Handler) notifyParentsOfBatchChildDone(ctx context.Context, completed [
 		if err != nil {
 			slog.Warn("batch child done: failed to list siblings for stage barrier",
 				"error", err, "parent_id", uuidToString(parent.ID))
+			errs = append(errs, err)
 			continue
 		}
 
@@ -261,7 +166,9 @@ func (h *Handler) notifyParentsOfBatchChildDone(ctx context.Context, completed [
 			if !stageBarrierClosed(children, g.children[0], statuses.isTerminal) {
 				continue
 			}
-			h.postChildDoneComment(ctx, parent, g.children[0], children, false, 0, batch, statuses, g.children, supplement)
+			if err := h.postChildDoneComment(ctx, parent, g.children[0], children, false, 0, batch, statuses, g.children, supplement); err != nil {
+				errs = append(errs, err)
+			}
 			continue
 		}
 
@@ -277,8 +184,11 @@ func (h *Handler) notifyParentsOfBatchChildDone(ctx context.Context, completed [
 		if !found {
 			continue
 		}
-		h.postChildDoneComment(ctx, parent, rep, children, true, rep.Stage.Int32, batch, statuses, g.children, supplement)
+		if err := h.postChildDoneComment(ctx, parent, rep, children, true, rep.Stage.Int32, batch, statuses, g.children, supplement); err != nil {
+			errs = append(errs, err)
+		}
 	}
+	return errors.Join(errs...)
 }
 
 // highestClosedBatchStage selects the first completed child in the highest
@@ -327,7 +237,7 @@ func highestClosedBatchStage(children, completed []db.Issue, isTerminal func(db.
 
 // postChildDoneComment builds and posts the parent's child-done system comment
 // for a closed stage barrier, then dispatches the parent-assignee trigger. It
-// assumes every guard in notifyParentOfChildDone / notifyParentsOfBatchChildDone
+// assumes every guard in notifyParentsOfBatchChildDone
 // has already passed and that `completed` is a terminal child whose barrier is
 // closed within `children` (the final sibling set).
 //
@@ -335,7 +245,7 @@ func highestClosedBatchStage(children, completed []db.Issue, isTerminal func(db.
 // `staged`/`closedStage` describe the closed barrier (closedStage is unused for
 // an unstaged set). `batch` selects batch-aware wording. `batchCompleted` is the
 // set that transitioned to terminal in this batch; it is nil for single updates.
-func (h *Handler) postChildDoneComment(ctx context.Context, parent, completed db.Issue, children []db.Issue, staged bool, closedStage int32, batch bool, statuses resolvedChildStatuses, batchCompleted []db.Issue, supplement string) {
+func (h *Handler) postChildDoneComment(ctx context.Context, parent, completed db.Issue, children []db.Issue, staged bool, closedStage int32, batch bool, statuses resolvedChildStatuses, batchCompleted []db.Issue, supplement string) error {
 	prefix := h.getIssuePrefix(ctx, completed.WorkspaceID)
 	identifier := prefix + "-" + strconv.Itoa(int(completed.Number))
 	childID := uuidToString(completed.ID)
@@ -457,7 +367,7 @@ func (h *Handler) postChildDoneComment(ctx context.Context, parent, completed db
 			"error", err,
 			"child_id", childID,
 			"parent_id", uuidToString(parent.ID))
-		return
+		return err
 	}
 	comment := created.Comment()
 
@@ -477,6 +387,46 @@ func (h *Handler) postChildDoneComment(ctx context.Context, parent, completed db
 	// title inert and gives the platform a single place to apply the loop
 	// and idempotency guards.
 	h.dispatchParentAssigneeTrigger(ctx, parent, comment)
+	h.recordChildDoneActivity(ctx, parent, completed, comment, children, staged, closedStage)
+	return nil
+}
+
+// recordChildDoneActivity adds the system rule's trigger to the parent's
+// timeline. Clients show this entry in place of the system comment it names;
+// the comment stays, because it is the woken agent's instruction.
+func (h *Handler) recordChildDoneActivity(ctx context.Context, parent, completed db.Issue, comment db.Comment, children []db.Issue, staged bool, closedStage int32) {
+	total := 0
+	for _, c := range children {
+		if !staged || (c.Stage.Valid && c.Stage.Int32 == closedStage) {
+			total++
+		}
+	}
+	details := map[string]any{
+		"rule": systemWakeupChildDone, "comment_id": uuidToString(comment.ID), "total": total,
+		"child_id": uuidToString(completed.ID),
+	}
+	if staged {
+		details["stage"] = closedStage
+	}
+	if parent.AssigneeType.Valid && parent.AssigneeID.Valid {
+		details["target_type"], details["target_id"] = parent.AssigneeType.String, uuidToString(parent.AssigneeID)
+	}
+	raw, _ := json.Marshal(details)
+	activity, err := h.Queries.CreateActivity(ctx, db.CreateActivityParams{
+		ID: dbid.NewV7(), WorkspaceID: parent.WorkspaceID, IssueID: parent.ID,
+		ActorType: strToText("system"), Action: "wakeup_triggered", Details: raw,
+	})
+	if err != nil {
+		slog.Warn("child done: record activity failed", "error", err, "parent_id", uuidToString(parent.ID))
+		return
+	}
+	h.publish(protocol.EventActivityCreated, uuidToString(parent.WorkspaceID), "system", "", map[string]any{
+		"issue_id": uuidToString(parent.ID),
+		"entry": map[string]any{
+			"type": "activity", "id": uuidToString(activity.ID), "actor_type": "system", "actor_id": "",
+			"action": activity.Action, "details": json.RawMessage(raw), "created_at": timestampToString(activity.CreatedAt),
+		},
+	})
 }
 
 // isTerminalChildStatus reports whether a child issue status counts as
@@ -842,7 +792,7 @@ func sanitizeMentionLabel(name string) string {
 // dispatchParentAssigneeTrigger fires the explicit side effect that pairs
 // with the @mention link in the system comment body — an agent task for
 // agent or squad-leader assignees. Member assignees never reach this code
-// path; notifyParentOfChildDone skips them outright. The generic comment
+// path; notifyParentsOfBatchChildDone skips them outright. The generic comment
 // listener is intentionally bypassed (it short-circuits on
 // author_type='system'), so this is the single place where the platform
 // applies the idempotency guard for the child-done notification.

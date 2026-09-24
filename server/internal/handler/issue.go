@@ -4088,13 +4088,11 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		h.dispatchIssueRun(r.Context(), issue, trigger, actorType, actorID, req.HandoffNote)
 	}
 
-	// Platform-driven parent notification: when this issue transitions into
-	// `done` and has a parent, post a top-level system comment on the parent
-	// (MUL-2538 — replaces the agent-prompt rule that caused self-mention
-	// loops in PR #2918). The helper guards on transition + parent state and
-	// fails best-effort.
-	if statusChanged {
-		h.notifyParentOfChildDone(r.Context(), prevIssue, issue)
+	// Platform-driven parent notification (the child-done system rule): the
+	// status write recorded any transition into a closed status; process it
+	// now. A failure is retried by the scheduler sweep.
+	if statusChanged && issue.ParentIssueID.Valid {
+		_ = h.processChildDoneEvents(r.Context(), issue.ParentIssueID)
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -4830,7 +4828,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		// stages at once (MUL-4155). Collect the terminal transitions and let
 		// notifyParentsOfBatchChildDone below evaluate each parent once against
 		// the batch's final committed state. Same transition guard as
-		// notifyParentOfChildDone: a non-terminal -> terminal move on a child.
+		// the recorded transition: a non-terminal -> terminal move on a child.
 		// Resolve both sides to the canonical status they inherit before the
 		// terminal test, so a batch that moves the last child onto a CUSTOM
 		// done/cancelled status still enters the stage barrier below. A literal
@@ -4851,9 +4849,13 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 
 	// Aggregate parent/stage notification over the whole batch's final state so
 	// each affected parent gets at most one accurate comment + wake, independent
-	// of issue_ids order (MUL-4155). Best-effort; failure does not abort the
-	// batch. Single-issue UpdateIssue is unchanged and still notifies inline.
-	h.notifyParentsOfBatchChildDone(r.Context(), childDoneCompleted)
+	// of issue_ids order (MUL-4155). Each status write recorded its transition;
+	// processing claims them per parent. A failure is retried by the sweep.
+	parents := make([]pgtype.UUID, 0, len(childDoneCompleted))
+	for _, child := range childDoneCompleted {
+		parents = append(parents, child.ParentIssueID)
+	}
+	_ = h.processChildDoneEvents(r.Context(), parents...)
 
 	slog.Info("batch update issues", append(logger.RequestAttrs(r), "count", updated)...)
 	writeJSON(w, http.StatusOK, map[string]any{"updated": updated})

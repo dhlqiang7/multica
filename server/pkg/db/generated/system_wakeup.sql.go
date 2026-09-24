@@ -11,6 +11,68 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const claimChildDoneEvents = `-- name: ClaimChildDoneEvents :many
+UPDATE issue_child_done_event SET claimed_at=clock_timestamp()
+WHERE parent_id= $1 AND processed_at IS NULL
+ AND (claimed_at IS NULL OR claimed_at < clock_timestamp()-interval '5 minutes')
+RETURNING id, workspace_id, parent_id, child_id, created_at, claimed_at, processed_at
+`
+
+// Claim a parent's recorded child transitions. A claim that was not finished
+// within five minutes (a crashed or failed attempt) can be claimed again.
+func (q *Queries) ClaimChildDoneEvents(ctx context.Context, parentID pgtype.UUID) ([]IssueChildDoneEvent, error) {
+	rows, err := q.db.Query(ctx, claimChildDoneEvents, parentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []IssueChildDoneEvent{}
+	for rows.Next() {
+		var i IssueChildDoneEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.ParentID,
+			&i.ChildID,
+			&i.CreatedAt,
+			&i.ClaimedAt,
+			&i.ProcessedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const deleteProcessedChildDoneEvents = `-- name: DeleteProcessedChildDoneEvents :execrows
+WITH batch AS MATERIALIZED (
+ SELECT e.id FROM issue_child_done_event e WHERE e.processed_at < $1
+ ORDER BY e.processed_at LIMIT 1000 FOR UPDATE SKIP LOCKED
+)
+DELETE FROM issue_child_done_event d USING batch WHERE d.id=batch.id
+`
+
+func (q *Queries) DeleteProcessedChildDoneEvents(ctx context.Context, cutoff pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteProcessedChildDoneEvents, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const finishChildDoneEvents = `-- name: FinishChildDoneEvents :exec
+UPDATE issue_child_done_event SET processed_at=clock_timestamp() WHERE id=ANY($1::uuid[])
+`
+
+func (q *Queries) FinishChildDoneEvents(ctx context.Context, ids []pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, finishChildDoneEvents, ids)
+	return err
+}
+
 const getIssueSystemWakeup = `-- name: GetIssueSystemWakeup :one
 SELECT issue_id, workspace_id, rule, enabled, instruction, updated_by, updated_at FROM issue_system_wakeup WHERE issue_id= $1 AND workspace_id= $2 AND rule= $3
 `
@@ -34,6 +96,34 @@ func (q *Queries) GetIssueSystemWakeup(ctx context.Context, arg GetIssueSystemWa
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const listStaleChildDoneParents = `-- name: ListStaleChildDoneParents :many
+SELECT DISTINCT parent_id FROM issue_child_done_event
+WHERE processed_at IS NULL
+ AND ((claimed_at IS NULL AND created_at < clock_timestamp()-interval '30 seconds') OR claimed_at < clock_timestamp()-interval '5 minutes')
+LIMIT 50
+`
+
+// Parents whose transitions were not processed right after their write.
+func (q *Queries) ListStaleChildDoneParents(ctx context.Context) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listStaleChildDoneParents)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var parent_id pgtype.UUID
+		if err := rows.Scan(&parent_id); err != nil {
+			return nil, err
+		}
+		items = append(items, parent_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const upsertIssueSystemWakeup = `-- name: UpsertIssueSystemWakeup :one

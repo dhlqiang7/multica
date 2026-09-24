@@ -2074,7 +2074,7 @@ func TestGitHubInstallationBroadcastRedaction(t *testing.T) {
 // must-fix: a merged PR is the dominant path by which a sub-issue actually
 // reaches `done`, and that path goes through maybeAutoCompleteIssue — not the
 // HTTP UpdateIssue / BatchUpdateIssues handlers that originally wired up
-// notifyParentOfChildDone. Without the helper call inside maybeAutoCompleteIssue,
+// the child-done processing. Without the helper call inside maybeAutoCompleteIssue,
 // the parent receives nothing when a child is closed by merging its PR.
 // This test fires a `pull_request closed merged` webhook against a child
 // issue and verifies the parent gets exactly one platform-generated system
