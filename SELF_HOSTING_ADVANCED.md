@@ -230,9 +230,11 @@ recreates the backend without the CA.
 Things to know:
 
 - **The backend reads the CA only when it starts.** After you add or replace a
-  CA, restart the backend (`kubectl -n multica rollout restart deploy/multica-backend`,
-  or the `docker compose … up -d backend` command above). With Helm, a `helm upgrade`
-  also restarts the backend when the ConfigMap has changed.
+  CA file, restart the backend: `kubectl -n multica rollout restart deploy/multica-backend`,
+  or `docker compose -f docker-compose.selfhost.yml -f docker-compose.ca.yml restart backend`.
+  With Compose, `up -d` is not enough here: the container's configuration has
+  not changed, so Compose keeps the running container. With Helm, a
+  `helm upgrade` also restarts the backend when the ConfigMap has changed.
 - **The CA applies to the whole backend process**, not only the Git provider
   integration: every outbound TLS client in the backend that uses the system
   trust store trusts it too.
