@@ -399,10 +399,10 @@ export function createEnDict(allowSignup: boolean): LandingDict {
 
   privacy: {
     title: "Privacy Policy",
-    lastUpdated: "Last updated: September 21, 2026",
+    lastUpdated: "Last updated: September 24, 2026",
     intro: [
       "This Privacy Policy explains how Index Labs (Hong Kong) Limited (“Multica”, “we”, “us”) collects, uses, and shares personal information when you visit multica.ai, contact us, or use Multica Cloud, our hosted service, including the web, desktop, and mobile apps.",
-      "It does not cover Multica deployments you host yourself. That data stays on your infrastructure and we never see it. The only thing a self-hosted server sends us is an anonymous daily snapshot: the server version and approximate counts of workspaces, members, agents, and tasks, with no names, email addresses, or content. You can turn it off with DO_NOT_TRACK=1.",
+      "It does not cover Multica deployments you host yourself. The operator of a self-hosted deployment controls its data, and any AI providers, integrations, or analytics it uses depend on how they configure it. The only thing a self-hosted server sends us is a daily usage snapshot: a random ID for the deployment, so snapshots from the same server can be linked; the server version; approximate counts of workspaces, members, agents, and connected daemons; and the number of tasks started, completed, failed, and cancelled that day. It contains no names, email addresses, or content. Setting DO_NOT_TRACK=1 turns off this snapshot.",
     ],
     sections: [
       {
@@ -412,7 +412,7 @@ export function createEnDict(allowSignup: boolean): LandingDict {
           "Content you create: workspaces, issues, comments, chat messages, attachments, agent instructions, and anything else you or your agents put into Multica Cloud.",
           "Contact Sales inquiries: your name, business email, company name and size, country or region, use case, goals, and communication preferences. To prevent abuse, we also record the IP address and browser user agent the form was sent from.",
           "Billing information: subscription payments are handled by Stripe on pages hosted by Stripe. We never receive or store your full card details.",
-          "Usage and device information: app version, operating system, client type, and a randomly generated installation ID; the name of each machine you connect as a runtime (its hostname by default); and crash and error reports, with email addresses and tokens removed before they are sent.",
+          "Usage and device information: app version, operating system, client type, and a randomly generated installation ID; the name of each machine you connect as a runtime (its hostname by default); and crash and error reports. Before a report is sent, we filter recognizable email addresses and credentials out of the error message, but reports can still contain other details about what went wrong.",
           "Feedback: when you send feedback, we receive your message along with the page, app version, operating system, and any error details.",
         ],
       },
@@ -427,9 +427,16 @@ export function createEnDict(allowSignup: boolean): LandingDict {
         ],
       },
       {
+        heading: "Legal bases",
+        paragraphs: [
+          "Where the law requires a legal basis for processing, we rely on performing our contract with you, to provide Multica Cloud; our legitimate interests in securing, supporting, and improving Multica and responding to inquiries; your consent, for marketing messages; and compliance with our legal obligations.",
+        ],
+      },
+      {
         heading: "AI features",
         paragraphs: [
-          "Your coding agents run on your own machines or on runtimes you connect; Multica coordinates their tasks. Some Multica Cloud features, such as chat titles and suggested follow-ups, send the relevant chat messages to a third-party large language model provider to generate the result. We do not use your content to train AI models.",
+          "Your coding agents run on your own machines or on runtimes you connect, using the coding tools and accounts you set up. An agent running on your machine does not mean the model runs there: those tools send prompts, code, files, and tool results to their model providers, under the terms of the tool and account you use. Multica coordinates the agents’ tasks.",
+          "Some Multica Cloud features, such as chat titles and suggested follow-ups, send your first chat message or a few recent messages to a third-party large language model provider we choose, to generate the result. Multica does not use your content to train AI models.",
         ],
       },
       {
@@ -442,7 +449,9 @@ export function createEnDict(allowSignup: boolean): LandingDict {
       {
         heading: "Who we share information with",
         paragraphs: [
-          "We share personal information only with service providers that help us run Multica, under agreements that limit how they use it, or when the law requires it. These include:",
+          "Information you put into a workspace is visible to its other members and admins, and to the agents and integrations they authorize, according to the workspace’s permissions. If your workspace belongs to an organization, that organization manages its content and may handle requests about it.",
+          "We also disclose information when the law requires it, and to a buyer or successor if Multica is involved in a merger, acquisition, or sale of assets.",
+          "Beyond that, we share personal information only with the service providers that help us run Multica and with integrations you choose to connect:",
         ],
         bullets: [
           "Amazon Web Services: hosting, file storage, and content delivery",
@@ -453,7 +462,6 @@ export function createEnDict(allowSignup: boolean): LandingDict {
           "Google: sign-in, if you choose Sign in with Google",
           "Large language model providers: the AI features described above",
           "Integrations you connect, such as Slack, Lark, DingTalk, WeCom, Telegram, GitHub, GitLab, or apps connected through Composio: the data you choose to exchange with them, which is also subject to their own terms",
-          "A buyer or successor, if Multica is involved in a merger, acquisition, or sale of assets",
         ],
       },
       {
@@ -465,13 +473,13 @@ export function createEnDict(allowSignup: boolean): LandingDict {
       {
         heading: "How long we keep information",
         paragraphs: [
-          "We keep account information and workspace content for as long as your account or workspace exists. When a workspace owner deletes a workspace, its issues, comments, and other content are deleted. Sign-in codes expire after 10 minutes. We keep Contact Sales inquiries and feedback for as long as they are useful for following up with you and improving Multica, and delete them on request.",
+          "We keep account information and workspace content for as long as your account or workspace exists. When a workspace owner deletes a workspace, its issues, comments, and other content are removed from Multica Cloud, though backups we keep for recovery may still contain copies for a period afterwards. To have files uploaded to a deleted workspace erased from our file storage, email [support@multica.ai](mailto:support@multica.ai). We keep billing records for as long as accounting and tax rules require, and product analytics, crash reports, Contact Sales inquiries, and feedback for as long as they are useful for supporting you and improving Multica. We delete inquiries and feedback on request.",
         ],
       },
       {
         heading: "Your choices and rights",
         paragraphs: [
-          "Depending on where you live, you may have the right to access, correct, delete, or export your personal information, and to object to or restrict certain processing. You can update your profile in Multica at any time and delete a workspace you own from its settings. For anything else, including deleting your account, email [support@multica.ai](mailto:support@multica.ai). We will respond within 30 days.",
+          "Depending on where you live, you may have the right to access, correct, delete, or export your personal information; to object to or restrict certain processing; to withdraw consent you have given, such as for marketing messages; and to complain to your local data protection authority. You can update your profile in Multica at any time and delete a workspace you own from its settings. For anything else, including deleting your account, email [support@multica.ai](mailto:support@multica.ai). We will respond within 30 days.",
         ],
       },
       {

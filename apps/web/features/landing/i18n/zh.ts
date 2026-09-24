@@ -383,10 +383,10 @@ export function createZhDict(allowSignup: boolean): LandingDict {
 
   privacy: {
     title: "隐私政策",
-    lastUpdated: "最后更新：2026 年 9 月 21 日",
+    lastUpdated: "最后更新：2026 年 9 月 24 日",
     intro: [
       "本隐私政策说明 Index Labs (Hong Kong) Limited（下称「Multica」或「我们」）在你访问 multica.ai、联系我们或使用我们的托管服务 Multica Cloud（包括网页端、桌面端和移动端）时，如何收集、使用和共享个人信息。",
-      "本政策不适用于你自行部署的 Multica：这些数据保留在你自己的基础设施上，我们无法看到。自托管服务器唯一会发送给我们的，是每天一次的匿名快照，包含服务器版本，以及 workspace、成员、智能体和任务的大致数量，不含任何姓名、邮箱或内容。你可以设置 DO_NOT_TRACK=1 关闭它。",
+      "本政策不适用于你自行部署的 Multica。自托管部署的数据由部署方控制，它使用哪些 AI 服务商、集成或分析工具，取决于部署方的配置。自托管服务器唯一会发送给我们的是每天一次的使用快照，内容包括：一个随机生成的部署 ID（用于关联同一台服务器的历次快照）、服务器版本、workspace、成员、智能体和已连接守护进程的大致数量，以及当天开始、完成、失败和取消的任务数。快照不含任何姓名、邮箱或内容。设置 DO_NOT_TRACK=1 即可关闭这份快照。",
       "本政策以英文版本为准。如中文版本与英文版本不一致，以英文版本为准。",
     ],
     sections: [
@@ -397,7 +397,7 @@ export function createZhDict(allowSignup: boolean): LandingDict {
           "你创建的内容：workspace、issue、评论、聊天消息、附件、智能体指令，以及你或你的智能体放进 Multica Cloud 的其他内容。",
           "联系商务表单：你的姓名、工作邮箱、公司名称和规模、国家或地区、使用场景、目标，以及你的沟通偏好。为了防止滥用，我们还会记录提交表单时的 IP 地址和浏览器 user agent。",
           "账单信息：订阅付款由 Stripe 在其托管的页面上处理，我们不会接收或存储你的完整银行卡信息。",
-          "使用和设备信息：应用版本、操作系统、客户端类型和一个随机生成的安装 ID；你连接为运行时的每台机器的名称（默认是其主机名）；以及崩溃和错误报告，发送前会去除其中的邮箱地址和令牌。",
+          "使用和设备信息：应用版本、操作系统、客户端类型和一个随机生成的安装 ID；你连接为运行时的每台机器的名称（默认是其主机名）；以及崩溃和错误报告。报告发送前，我们会从错误信息中过滤掉能识别出的邮箱地址和凭据，但报告仍可能包含与出错情况相关的其他细节。",
           "反馈：你提交反馈时，我们会收到反馈内容，以及所在页面、应用版本、操作系统和相关的错误信息。",
         ],
       },
@@ -412,9 +412,16 @@ export function createZhDict(allowSignup: boolean): LandingDict {
         ],
       },
       {
+        heading: "法律依据",
+        paragraphs: [
+          "在法律要求说明处理依据的地区，我们依据以下几点处理个人信息：履行与你之间的合同，以提供 Multica Cloud；我们在保障安全、提供支持、改进 Multica 和回复咨询方面的正当利益；你对接收营销信息的同意；以及履行我们的法律义务。",
+        ],
+      },
+      {
         heading: "AI 功能",
         paragraphs: [
-          "你的编码智能体运行在你自己的机器或你连接的运行时上，Multica 负责协调它们的任务。Multica Cloud 的部分功能（如生成聊天标题和推荐后续操作）会把相关的聊天消息发送给第三方大语言模型服务商来生成结果。我们不会用你的内容训练 AI 模型。",
+          "你的编码智能体运行在你自己的机器或你连接的运行时上，使用的是你配置的编码工具和账户。智能体在本机运行，不代表模型也在本机推理：这些工具会把提示词、代码、文件和工具调用结果发送给各自的模型服务商，并受你所用工具和账户的条款约束。Multica 负责协调智能体的任务。",
+          "Multica Cloud 的部分功能（如生成聊天标题和推荐后续操作）会把你的第一条聊天消息或最近几条消息，发送给我们选用的第三方大语言模型服务商来生成结果。Multica 不会用你的内容训练 AI 模型。",
         ],
       },
       {
@@ -427,7 +434,9 @@ export function createZhDict(allowSignup: boolean): LandingDict {
       {
         heading: "我们与谁共享信息",
         paragraphs: [
-          "我们只会与帮助我们运营 Multica 的服务商共享个人信息，并通过协议限制他们的使用方式；或者在法律要求时共享。这些服务商包括：",
+          "你放进 workspace 的信息，会按 workspace 的权限设置，被其他成员和管理员，以及他们授权的智能体和集成看到。如果你的 workspace 属于某个组织，其中的内容由该组织管理，相关请求也可能由该组织处理。",
+          "在法律要求时，我们会披露相关信息；如果 Multica 发生合并、收购或资产出售，相关信息也可能转移给买方或继任方。",
+          "除此之外，我们只会与帮助我们运营 Multica 的服务商，以及你选择连接的集成共享个人信息：",
         ],
         bullets: [
           "Amazon Web Services：托管、文件存储和内容分发",
@@ -438,7 +447,6 @@ export function createZhDict(allowSignup: boolean): LandingDict {
           "Google：当你选择使用 Google 登录时",
           "大语言模型服务商：上文所述的 AI 功能",
           "你连接的集成，如 Slack、飞书、钉钉、企业微信、Telegram、GitHub、GitLab、通过 Composio 连接的应用：你选择通过它们收发的数据，同时受这些服务商自身条款的约束",
-          "买方或继任方：如果 Multica 发生合并、收购或资产出售",
         ],
       },
       {
@@ -450,13 +458,13 @@ export function createZhDict(allowSignup: boolean): LandingDict {
       {
         heading: "信息的保留期限",
         paragraphs: [
-          "账户信息和 workspace 内容会在你的账户或 workspace 存在期间一直保留。workspace 所有者删除 workspace 时，其中的 issue、评论等内容会被删除。登录验证码 10 分钟后失效。联系商务表单和反馈会在跟进和改进产品所需的期间内保留，你也可以要求我们删除。",
+          "账户信息和 workspace 内容会在你的账户或 workspace 存在期间一直保留。workspace 所有者删除 workspace 后，其中的 issue、评论等内容会从 Multica Cloud 中移除，但用于恢复的备份在之后一段时间内仍可能包含副本。如需从我们的文件存储中清除已删除 workspace 里上传的文件，请发邮件至 [support@multica.ai](mailto:support@multica.ai)。账单记录按会计和税务规定要求的期限保留；产品分析数据、崩溃报告、联系商务表单和反馈，会在为你提供支持和改进 Multica 所需的期间内保留。你可以要求我们删除联系商务表单和反馈。",
         ],
       },
       {
         heading: "你的选择和权利",
         paragraphs: [
-          "根据你所在地的法律，你可能有权访问、更正、删除或导出你的个人信息，以及反对或限制某些处理。你可以随时在 Multica 中更新个人资料，也可以在设置中删除你拥有的 workspace。其他请求（包括删除账户），请发邮件至 [support@multica.ai](mailto:support@multica.ai)，我们会在 30 天内回复。",
+          "根据你所在地的法律，你可能有权访问、更正、删除或导出你的个人信息，反对或限制某些处理，撤回你已给出的同意（例如接收营销信息的同意），以及向当地的数据保护机构投诉。你可以随时在 Multica 中更新个人资料，也可以在设置中删除你拥有的 workspace。其他请求（包括删除账户），请发邮件至 [support@multica.ai](mailto:support@multica.ai)，我们会在 30 天内回复。",
         ],
       },
       {
