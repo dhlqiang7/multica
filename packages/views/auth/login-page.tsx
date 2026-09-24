@@ -20,11 +20,12 @@ import {
   InputOTPSlot,
 } from "@multica/ui/components/ui/input-otp";
 import { useAuthStore } from "@multica/core/auth";
-import { useConfigStore } from "@multica/core/config";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { api } from "@multica/core/api";
 import type { User } from "@multica/core/types";
 import { useT } from "../i18n";
+// selfhost：固定密码登录扩展（见 selfhost-login.tsx）
+import { SelfhostPasswordField, useSelfhostPasswordField } from "./selfhost-login";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -110,13 +111,10 @@ export function LoginPage({
 }: LoginPageProps) {
   const { t } = useT("auth");
   const qc = useQueryClient();
-  // 登录形态由服务端 MULTICA_AUTH_MODE 经 /api/config 下发：
-  // password → 邮箱+固定密码；passwordless → 仅邮箱；code → 验证码
-  const authMode = useConfigStore((s) => s.authMode);
-  const isPasswordMode = authMode === "password";
+  // selfhost：密码模式状态托管在扩展模块，上游装配点仅此一处
+  const selfhostPw = useSelfhostPasswordField();
   const [step, setStep] = useState<"email" | "code" | "cli_confirm">("email");
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -186,7 +184,7 @@ export function LoginPage({
         setError(t(($) => $.common.email_required));
         return;
       }
-      if (isPasswordMode && !password) {
+      if (selfhostPw.isPasswordMode && !selfhostPw.password) {
         setError(t(($) => $.common.password_required));
         return;
       }
@@ -197,7 +195,7 @@ export function LoginPage({
         // 显示后端 401 message 并保留在当前页重试
         const direct = await useAuthStore
           .getState()
-          .sendCode(email, isPasswordMode ? password : undefined);
+          .sendCode(email, selfhostPw.isPasswordMode ? selfhostPw.password : undefined);
         if (direct) {
           // 无码直登：凭据已落地。CLI 授权场景用 cookie 会话换 bearer
           // 回调本地 listener；普通场景与 handleVerify 收尾一致——
@@ -227,7 +225,7 @@ export function LoginPage({
         setLoading(false);
       }
     },
-    [email, password, t, isPasswordMode, cliCallback, onTokenObtained, onSuccess, qc],
+    [email, t, selfhostPw, cliCallback, onTokenObtained, onSuccess, qc],
   );
 
   const handleVerify = useCallback(
@@ -480,19 +478,11 @@ export function LoginPage({
                 required
               />
             </div>
-            {isPasswordMode && (
-              <div className="space-y-2">
-                <Label htmlFor="login-password">
-                  {t(($) => $.common.password_label)}
-                </Label>
-                <Input
-                  id="login-password"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                />
-              </div>
+            {selfhostPw.isPasswordMode && (
+              <SelfhostPasswordField
+                value={selfhostPw.password}
+                onChange={selfhostPw.setPassword}
+              />
             )}
             {error && (
               <p className="text-body text-destructive">{error}</p>
@@ -505,7 +495,7 @@ export function LoginPage({
             form="login-form"
             className="w-full"
             size="lg"
-            disabled={!email || (isPasswordMode && !password) || loading}
+            disabled={!email || (selfhostPw.isPasswordMode && !selfhostPw.password) || loading}
           >
             {loading
               ? t(($) => $.signin.sending)

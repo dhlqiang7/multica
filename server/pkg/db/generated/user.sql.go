@@ -295,29 +295,6 @@ func (q *Queries) SetStarterContentState(ctx context.Context, arg SetStarterCont
 	return i, err
 }
 
-const setUserPasswordHash = `-- name: SetUserPasswordHash :execrows
-UPDATE "user" SET
-    password_hash = NULLIF($1::text, ''),
-    updated_at = now()
-WHERE email = $2
-`
-
-type SetUserPasswordHashParams struct {
-	PasswordHash string `json:"password_hash"`
-	Email        string `json:"email"`
-}
-
-// 固定密码登录模式（MULTICA_AUTH_MODE=password）：写入/清除 bcrypt 哈希。
-// 空字符串表示清除密码（该账号退回不可用密码登录）。
-// sqlc.arg + ::text 注解：NULLIF 表达式下 sqlc 无法推断参数类型。
-func (q *Queries) SetUserPasswordHash(ctx context.Context, arg SetUserPasswordHashParams) (int64, error) {
-	result, err := q.db.Exec(ctx, setUserPasswordHash, arg.PasswordHash, arg.Email)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const updateUser = `-- name: UpdateUser :one
 UPDATE "user" SET
     name = COALESCE($2, name),

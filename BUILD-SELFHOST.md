@@ -247,3 +247,33 @@ curl -s -X POST localhost:8080/auth/send-code -H 'Content-Type: application/json
 # 错误/缺失密码 → 401 {"error":"invalid email or password"}
 curl -s localhost:8080/api/config    # 含 "auth_mode":"password"
 ```
+
+## 13. 同步上游（selfhost 定制层结构）
+
+定制代码按"独立文件 + 上游最小装配点"组织，rebase/merge upstream 时
+冲突面最小。**纯新增文件（永不冲突）**：
+
+| 文件 | 内容 |
+|---|---|
+| `server/internal/handler/auth_selfhost.go` | 直登全部逻辑（模式开关/密码校验/JWT 签发） |
+| `server/cmd/multica/cmd_user_password.go` | `user set-password` 子命令（init() 自挂载） |
+| `server/pkg/db/queries/user_selfhost.sql` | SetUserPasswordHash（sqlc 独立生成文件） |
+| `server/migrations/545_user_password_hash.*.sql` | 密码列迁移 |
+| `packages/views/auth/selfhost-login.tsx` | 密码框组件 + 状态 hook |
+| `docker/*selfhost*`、compose override、本文档 | 部署层 |
+
+**上游文件装配点（同步时可能冲突，机械可解）**：
+- `server/internal/handler/auth.go`：SendCodeRequest.Password 字段 + SendCode 内 1 处 `maybeDirectLogin` 调用（共 ~9 行）
+- `server/internal/handler/config.go`：auth_mode 字段下发（~8 行）
+- `packages/core/*` 5 文件：类型/签名扩展（sendCode 可选参、authMode 状态、schema 字段）
+- `packages/views/auth/login-page.tsx`：~40 行装配（import + hook + direct 分支 + 密码框挂载）
+- 5 语言 `locales/*/auth.json`：password_label/password_required 2 键
+- `server/go.mod/go.sum`：bcrypt 依赖
+
+同步流程：
+```bash
+git fetch origin && git rebase origin/main   # 或 merge
+# 冲突仅限上述装配点：保留上游改动 + 保留 selfhost 行即可
+make sqlc                                     # 迁移/查询变化后重新生成
+# 然后按 §3-§5 重新编译部署
+```
