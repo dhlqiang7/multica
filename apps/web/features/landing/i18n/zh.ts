@@ -169,7 +169,7 @@ export function createZhDict(
       {
         title: "\u968f\u5904\u81ea\u6258\u7ba1",
         description:
-          "\u5728\u4f60\u81ea\u5df1\u7684\u57fa\u7840\u8bbe\u65bd\u4e0a\u8fd0\u884c Multica\u3002Docker Compose\u3001\u5355\u4e2a\u4e8c\u8fdb\u5236\u6216 Kubernetes\u2014\u2014\u4f60\u7684\u6570\u636e\u6c38\u8fdc\u4e0d\u4f1a\u79bb\u5f00\u4f60\u7684\u7f51\u7edc\u3002",
+          "\u5728\u4f60\u81ea\u5df1\u7684\u57fa\u7840\u8bbe\u65bd\u4e0a\u8fd0\u884c Multica\u3002Docker Compose\u3001\u5355\u4e2a\u4e8c\u8fdb\u5236\u6216 Kubernetes——工作区数据始终保存在你自己掌控的服务器上。",
       },
       {
         title: "\u65e0\u4f9b\u5e94\u5546\u9501\u5b9a",
@@ -206,7 +206,7 @@ export function createZhDict(
       {
         question: "可以商用吗？",
         answer:
-          "可以。在你自己的组织内部使用 Multica 是免费的，包括为整个团队自托管。只有把 Multica 提供给组织外部的人使用时，比如作为托管服务或代运维服务，才需要商业授权。常见场景见[授权说明](/licensing)。",
+          "可以。在你自己的组织内部使用 Multica 是免费的，包括为整个团队自托管。只有两种情况需要商业授权：把 Multica 提供给组织外部的人使用（比如作为托管服务或代运维服务），或者把它嵌入你销售或分发的产品中。常见场景见[授权说明](/licensing)。",
       },
       {
         question:
@@ -222,7 +222,7 @@ export function createZhDict(
       {
         question: "\u6211\u7684\u4ee3\u7801\u5b89\u5168\u5417\uff1f智能体 \u5728\u54ea\u91cc\u6267\u884c\uff1f",
         answer:
-          "智能体 \u5728\u4f60\u7684\u673a\u5668\uff08\u672c\u5730\u5b88\u62a4\u8fdb\u7a0b\uff09\u6216\u4f60\u81ea\u5df1\u7684\u4e91\u57fa\u7840\u8bbe\u65bd\u4e0a\u6267\u884c\u3002\u4ee3\u7801\u6c38\u8fdc\u4e0d\u4f1a\u7ecf\u8fc7 Multica \u670d\u52a1\u5668\u3002\u5e73\u53f0\u53ea\u534f\u8c03\u4efb\u52a1\u72b6\u6001\u548c\u5e7f\u64ad\u4e8b\u4ef6\u3002",
+          "智能体在你的机器（通过本地守护进程）或你连接的运行时上运行，直接在你的代码仓库里工作。工作区里的内容——任务、评论、聊天消息、附件，以及智能体上报的进度——由 Multica 存储；智能体所用的编码工具会把提示词和代码发送给你配置的模型服务商。想让工作区数据留在自己的服务器上，可以自托管 Multica。详见[隐私政策](/privacy)。",
       },
       {
         question: "\u6211\u53ef\u4ee5\u8fd0\u884c\u591a\u5c11\u4e2a 智能体\uff1f",
@@ -288,7 +288,7 @@ export function createZhDict(
       "\u6211\u4eec\u8ba4\u4e3a\uff0c\u7c7b\u4f3c\u7684\u8f6c\u6298\u70b9\u6b63\u5728\u518d\u6b21\u51fa\u73b0\u3002\u51e0\u5341\u5e74\u6765\uff0c\u8f6f\u4ef6\u56e2\u961f\u4e00\u76f4\u5904\u4e8e\u4e00\u79cd\u5355\u7ebf\u7a0b\u7684\u5de5\u4f5c\u6a21\u5f0f\uff0c\u4e00\u4e2a\u5de5\u7a0b\u5e08\u5904\u7406\u4e00\u4e2a\u4efb\u52a1\uff0c\u4e00\u6b21\u53ea\u4e13\u6ce8\u4e8e\u4e00\u4e2a\u4e0a\u4e0b\u6587\u3002AI agents \u6539\u53d8\u4e86\u8fd9\u4e2a\u7b49\u5f0f\u3002Multica \u5c06\u201c\u5206\u65f6\u201d\u91cd\u65b0\u5e26\u56de\u8fd9\u4e2a\u65f6\u4ee3\uff0c\u53ea\u4e0d\u8fc7\u4eca\u5929\u5728\u7cfb\u7edf\u4e2d\u8fdb\u884c\u591a\u8def\u590d\u7528\u7684\u201c\u7528\u6237\u201d\uff0c\u65e2\u5305\u62ec\u4eba\u7c7b\uff0c\u4e5f\u5305\u62ec\u81ea\u4e3b\u4ee3\u7406\u3002",
       "在 Multica 中，agents 是一级团队成员。它们会被分配任务，汇报进展，提出阻塞，并交付代码，就像人类同事一样。任务分配、活动时间线、task 生命周期，以及运行时基础设施，Multica 从第一天起就是围绕这一理念构建的。",
       "\u548c\u5f53\u5e74\u7684 Multics \u4e00\u6837\uff0c\u8fd9\u4e00\u5224\u65ad\u5efa\u7acb\u5728\u201c\u591a\u8def\u590d\u7528\u201d\u4e4b\u4e0a\u3002\u4e00\u4e2a\u5c0f\u56e2\u961f\u4e0d\u8be5\u56e0\u4e3a\u4eba\u6570\u5c11\u5c31\u663e\u5f97\u80fd\u529b\u6709\u9650\u3002\u6709\u4e86\u5408\u9002\u7684\u7cfb\u7edf\uff0c\u4e24\u540d\u5de5\u7a0b\u5e08\u52a0\u4e0a\u4e00\u7ec4 agents\uff0c\u5c31\u80fd\u53d1\u6325\u51fa\u4e8c\u5341\u4eba\u56e2\u961f\u7684\u63a8\u8fdb\u901f\u5ea6\u3002",
-      "Multica 的源代码公开，并且可以免费自托管。你的数据始终保留在自己的基础设施中。\u4f60\u53ef\u4ee5\u5ba1\u67e5\u6bcf\u4e00\u884c\u4ee3\u7801\uff0c\u6269\u5c55 API\uff0c\u63a5\u5165\u81ea\u5df1\u7684 LLM providers\uff0c\u4e5f\u53ef\u4ee5\u5411\u793e\u533a\u8d21\u732e\u4ee3\u7801\u3002",
+      "Multica 的源代码公开，并且可以免费自托管，工作区数据始终保存在你自己的基础设施中。\u4f60\u53ef\u4ee5\u5ba1\u67e5\u6bcf\u4e00\u884c\u4ee3\u7801\uff0c\u6269\u5c55 API\uff0c\u63a5\u5165\u81ea\u5df1\u7684 LLM providers\uff0c\u4e5f\u53ef\u4ee5\u5411\u793e\u533a\u8d21\u732e\u4ee3\u7801\u3002",
     ],
     cta: "在 GitHub 上查看",
     team: {
@@ -325,7 +325,7 @@ export function createZhDict(
       items: [
         {
           scenario: "你的组织内部使用 Multica",
-          example: "自托管，不限 workspace 数量。",
+          example: "自托管，不限工作区数量。",
           required: false,
         },
         {
@@ -389,15 +389,15 @@ export function createZhDict(
     lastUpdated: "最后更新：2026 年 9 月 24 日",
     intro: [
       "本隐私政策说明 Index Labs (Hong Kong) Limited（下称「Multica」或「我们」）在你访问 multica.ai、联系我们或使用我们的托管服务 Multica Cloud（包括网页端、桌面端和移动端）时，如何收集、使用和共享个人信息。",
-      "本政策不适用于你自行部署的 Multica。自托管部署的数据由部署方控制，它使用哪些 AI 服务商、集成或分析工具，取决于部署方的配置。自托管服务器唯一会发送给我们的是每天一次的使用快照，内容包括：一个随机生成的部署 ID（用于关联同一台服务器的历次快照）、服务器版本、workspace、成员、智能体和已连接守护进程的大致数量，以及当天开始、完成、失败和取消的任务数。快照不含任何姓名、邮箱或内容。设置 DO_NOT_TRACK=1 即可关闭这份快照。",
+      "本政策不适用于你自行部署的 Multica。自托管部署的数据由部署方控制，它使用哪些 AI 服务商、集成或分析工具，取决于部署方的配置。自托管服务器唯一会发送给我们的是每天一次的使用快照，内容包括：一个随机生成的部署 ID（用于关联同一台服务器的历次快照）、服务器版本、工作区、成员、智能体和已连接守护进程的大致数量，以及当天开始、完成、失败和取消的运行次数。快照不含任何姓名、邮箱或内容。设置 DO_NOT_TRACK=1 即可关闭这份快照。",
       "本政策以英文版本为准。如中文版本与英文版本不一致，以英文版本为准。",
     ],
     sections: [
       {
         heading: "我们收集的信息",
         bullets: [
-          "账户信息：你的姓名、邮箱地址和头像。如果你使用 Google 登录，我们会从 Google 获得你的姓名、邮箱地址和头像。你也可以填写语言、时区、个人简介等资料，以及回答新手引导中的问题，例如你的角色、使用场景、从哪里了解到 Multica。",
-          "你创建的内容：workspace、issue、评论、聊天消息、附件、智能体指令，以及你或你的智能体放进 Multica Cloud 的其他内容。",
+          "账户信息：你的姓名、邮箱地址和头像。如果你使用 Google 登录，我们会从 Google 获得你的姓名、邮箱地址和头像。你也可以填写语言、时区、个人简介等资料，以及回答上手引导中的问题，例如你的角色、使用场景、从哪里了解到 Multica。",
+          "你创建的内容：工作区、任务、评论、聊天消息、附件、智能体指令，以及你或你的智能体放进 Multica Cloud 的其他内容。",
           "联系商务表单：你的姓名、工作邮箱、公司名称和规模、国家或地区、使用场景、目标，以及你的沟通偏好。为了防止滥用，我们还会记录提交表单时的 IP 地址和浏览器 user agent。",
           "账单信息：订阅付款由 Stripe 在其托管的页面上处理，我们不会接收或存储你的完整银行卡信息。",
           "使用和设备信息：应用版本、操作系统、客户端类型和一个随机生成的安装 ID；你连接为运行时的每台机器的名称（默认是其主机名）；以及崩溃和错误报告。报告发送前，我们会从错误信息中过滤掉能识别出的邮箱地址和凭据，但报告仍可能包含与出错情况相关的其他细节。",
@@ -407,9 +407,9 @@ export function createZhDict(
       {
         heading: "我们如何使用信息",
         bullets: [
-          "提供、运营和保护 Multica Cloud，包括登录、同步 workspace、发送通知和邀请。",
+          "提供、运营和保护 Multica Cloud，包括登录、同步工作区、发送通知和邀请。",
           "回复联系商务表单和支持请求。",
-          "发送服务消息，例如登录验证码和 workspace 邀请。只有在你主动同意后，我们才会发送产品动态或营销信息，你可以随时退订。",
+          "发送服务消息，例如登录验证码和工作区邀请。只有在你主动同意后，我们才会发送产品动态或营销信息，你可以随时退订。",
           "了解 Multica 的使用情况、修复问题并改进产品。",
           "防止滥用，并履行法律义务。",
         ],
@@ -423,21 +423,21 @@ export function createZhDict(
       {
         heading: "AI 功能",
         paragraphs: [
-          "你的编码智能体运行在你自己的机器或你连接的运行时上，使用的是你配置的编码工具和账户。智能体在本机运行，不代表模型也在本机推理：这些工具会把提示词、代码、文件和工具调用结果发送给各自的模型服务商，并受你所用工具和账户的条款约束。Multica 负责协调智能体的任务。",
+          "你的编码智能体运行在你自己的机器或你连接的运行时上，使用的是你配置的编码工具和账户。智能体在本机运行，不代表模型也在本机推理：这些工具会把提示词、代码、文件和工具调用结果发送给各自的模型服务商，并受你所用工具和账户的条款约束。Multica 负责协调智能体的工作。",
           "Multica Cloud 的部分功能（如生成聊天标题和推荐后续操作）会把你的第一条聊天消息或最近几条消息，发送给我们选用的第三方大语言模型服务商来生成结果。Multica 不会用你的内容训练 AI 模型。",
         ],
       },
       {
         heading: "Cookie 与分析",
         paragraphs: [
-          "我们使用必要的 Cookie 来保持你的登录状态、防范跨站请求伪造，以及让你访问自己上传的文件。我们还会用 Cookie 记住你是通过哪个推广活动或网站来到这里的（最长 30 天），以及你选择的语言和最近打开的 workspace。",
+          "我们使用必要的 Cookie 来保持你的登录状态、防范跨站请求伪造，以及让你访问自己上传的文件。我们还会用 Cookie 记住你是通过哪个推广活动或网站来到这里的（最长 30 天），以及你选择的语言和最近打开的工作区。",
           "我们使用 PostHog 了解产品使用情况并收集崩溃报告。你登录后，PostHog 会收到你账户的姓名和邮箱，以便我们把报告和你的账户对应起来。我们不使用广告 Cookie，也不出售你的个人信息。",
         ],
       },
       {
         heading: "我们与谁共享信息",
         paragraphs: [
-          "你放进 workspace 的信息，会按 workspace 的权限设置，被其他成员和管理员，以及他们授权的智能体和集成看到。如果你的 workspace 属于某个组织，其中的内容由该组织管理，相关请求也可能由该组织处理。",
+          "你放进工作区的信息，会按工作区的权限设置，被其他成员和管理员，以及他们授权的智能体和集成看到。如果你的工作区属于某个组织，其中的内容由该组织管理，相关请求也可能由该组织处理。",
           "在法律要求时，我们会披露相关信息；如果 Multica 发生合并、收购或资产出售，相关信息也可能转移给买方或继任方。",
           "除此之外，我们只会与帮助我们运营 Multica 的服务商，以及你选择连接的集成共享个人信息：",
         ],
@@ -461,13 +461,13 @@ export function createZhDict(
       {
         heading: "信息的保留期限",
         paragraphs: [
-          "账户信息和 workspace 内容会在你的账户或 workspace 存在期间一直保留。workspace 所有者删除 workspace 后，其中的 issue、评论等内容会从 Multica Cloud 中移除，但用于恢复的备份在之后一段时间内仍可能包含副本。如需从我们的文件存储中清除已删除 workspace 里上传的文件，请发邮件至 [support@multica.ai](mailto:support@multica.ai)。账单记录按会计和税务规定要求的期限保留；产品分析数据、崩溃报告、联系商务表单和反馈，会在为你提供支持和改进 Multica 所需的期间内保留。你可以要求我们删除联系商务表单和反馈。",
+          "账户信息和工作区内容会在你的账户或工作区存在期间一直保留。工作区所有者删除工作区后，其中的任务、评论等内容会从 Multica Cloud 中移除，但用于恢复的备份在之后一段时间内仍可能包含副本。如需从我们的文件存储中清除已删除工作区里上传的文件，请发邮件至 [support@multica.ai](mailto:support@multica.ai)。账单记录按会计和税务规定要求的期限保留；产品分析数据、崩溃报告、联系商务表单和反馈，会在为你提供支持和改进 Multica 所需的期间内保留。你可以要求我们删除联系商务表单和反馈。",
         ],
       },
       {
         heading: "你的选择和权利",
         paragraphs: [
-          "根据你所在地的法律，你可能有权访问、更正、删除或导出你的个人信息，反对或限制某些处理，撤回你已给出的同意（例如接收营销信息的同意），以及向当地的数据保护机构投诉。你可以随时在 Multica 中更新个人资料，也可以在设置中删除你拥有的 workspace。其他请求（包括删除账户），请发邮件至 [support@multica.ai](mailto:support@multica.ai)，我们会在 30 天内回复。",
+          "根据你所在地的法律，你可能有权访问、更正、删除或导出你的个人信息，反对或限制某些处理，撤回你已给出的同意（例如接收营销信息的同意），以及向当地的数据保护机构投诉。你可以随时在 Multica 中更新个人资料，也可以在设置中删除你拥有的工作区。其他请求（包括删除账户），请发邮件至 [support@multica.ai](mailto:support@multica.ai)，我们会在 30 天内回复。",
         ],
       },
       {

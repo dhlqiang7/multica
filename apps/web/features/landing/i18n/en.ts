@@ -169,7 +169,7 @@ export function createEnDict(
       {
         title: "Self-host anywhere",
         description:
-          "Run Multica on your own infrastructure. Docker Compose, single binary, or Kubernetes \u2014 your data never leaves your network.",
+          "Run Multica on your own infrastructure. Docker Compose, single binary, or Kubernetes — your workspace data stays on servers you control.",
       },
       {
         title: "No vendor lock-in",
@@ -206,7 +206,7 @@ export function createEnDict(
       {
         question: "Can I use Multica commercially?",
         answer:
-          "Yes. Using Multica inside your own organization is free, including self-hosting it for your whole team. You only need a commercial license to offer Multica to people outside your organization, for example as a hosted or managed service. The [licensing FAQ](/licensing) walks through common scenarios.",
+          "Yes. Using Multica inside your own organization is free, including self-hosting it for your whole team. You need a commercial license only to offer Multica to people outside your organization, such as running it as a hosted or managed service for them, or to embed it in a product you sell or distribute. The [licensing FAQ](/licensing) walks through common scenarios.",
       },
       {
         question:
@@ -222,7 +222,7 @@ export function createEnDict(
       {
         question: "Is my code safe? Where does agent execution happen?",
         answer:
-          "Agent execution happens on your machine (local daemon) or your own cloud infrastructure. Code never passes through Multica servers. The platform only coordinates task state and broadcasts events.",
+          "Agents run on your machine (through the local daemon) or on runtimes you connect, working directly in your repositories. What goes into a workspace — issues, comments, chat messages, attachments, and the progress agents report — is stored by Multica, and your agents’ coding tools send prompts and code to the model providers you configure. To keep workspace data on your own servers, self-host Multica. See the [privacy policy](/privacy) for details.",
       },
       {
         question: "How many agents can I run?",
@@ -288,7 +288,7 @@ export function createEnDict(
       "We think the same inflection is happening again. For decades, software teams have been single-threaded \u2014 one engineer, one task, one context switch at a time. AI agents change that equation. Multica brings time-sharing back, but for an era where the \u201cusers\u201d multiplexing the system are both humans and autonomous agents.",
       "In Multica, agents are first-class teammates. They get assigned issues, report progress, raise blockers, and ship code \u2014 just like their human colleagues. The assignee picker, the activity timeline, the task lifecycle, and the runtime infrastructure are all built around this idea from day one.",
       "Like Multics before it, the bet is on multiplexing: a small team shouldn\u2019t feel small. With the right system, two engineers and a fleet of agents can move like twenty.",
-      "The source code is public and you can self-host Multica for free. Your data stays on your infrastructure. Inspect every line, extend the API, bring your own LLM providers, and contribute back to the community.",
+      "The source code is public and you can self-host Multica for free, keeping your workspace data on your own infrastructure. Inspect every line, extend the API, bring your own LLM providers, and contribute back to the community.",
     ],
     cta: "View on GitHub",
     team: {
@@ -322,7 +322,7 @@ export function createEnDict(
     ],
     rule: {
       title: "The rule of thumb",
-      text: "Is anyone outside your organization driving the instance \u2014 creating tasks, talking to agents, or triggering work? If so, through any interface (web, Slack, or API), that is a hosted service. If they only receive results your team produced with Multica, that is internal use.",
+      text: "Is anyone outside your organization driving the instance — creating issues, talking to agents, or triggering work? If so, through any interface (web, Slack, or API), that is a hosted service. If they only receive results your team produced with Multica, that is internal use.",
     },
     scenarios: {
       title: "Common scenarios",
@@ -405,7 +405,7 @@ export function createEnDict(
     lastUpdated: "Last updated: September 24, 2026",
     intro: [
       "This Privacy Policy explains how Index Labs (Hong Kong) Limited (“Multica”, “we”, “us”) collects, uses, and shares personal information when you visit multica.ai, contact us, or use Multica Cloud, our hosted service, including the web, desktop, and mobile apps.",
-      "It does not cover Multica deployments you host yourself. The operator of a self-hosted deployment controls its data, and any AI providers, integrations, or analytics it uses depend on how they configure it. The only thing a self-hosted server sends us is a daily usage snapshot: a random ID for the deployment, so snapshots from the same server can be linked; the server version; approximate counts of workspaces, members, agents, and connected daemons; and the number of tasks started, completed, failed, and cancelled that day. It contains no names, email addresses, or content. Setting DO_NOT_TRACK=1 turns off this snapshot.",
+      "It does not cover Multica deployments you host yourself. The operator of a self-hosted deployment controls its data, and any AI providers, integrations, or analytics it uses depend on how they configure it. The only thing a self-hosted server sends us is a daily usage snapshot: a random ID for the deployment, so snapshots from the same server can be linked; the server version; approximate counts of workspaces, members, agents, and connected daemons; and the number of agent runs started, completed, failed, and cancelled that day. It contains no names, email addresses, or content. Setting DO_NOT_TRACK=1 turns off this snapshot.",
     ],
     sections: [
       {
@@ -438,7 +438,7 @@ export function createEnDict(
       {
         heading: "AI features",
         paragraphs: [
-          "Your coding agents run on your own machines or on runtimes you connect, using the coding tools and accounts you set up. An agent running on your machine does not mean the model runs there: those tools send prompts, code, files, and tool results to their model providers, under the terms of the tool and account you use. Multica coordinates the agents’ tasks.",
+          "Your coding agents run on your own machines or on runtimes you connect, using the coding tools and accounts you set up. An agent running on your machine does not mean the model runs there: those tools send prompts, code, files, and tool results to their model providers, under the terms of the tool and account you use. Multica coordinates their work.",
           "Some Multica Cloud features, such as chat titles and suggested follow-ups, send your first chat message or a few recent messages to a third-party large language model provider we choose, to generate the result. Multica does not use your content to train AI models.",
         ],
       },
