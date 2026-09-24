@@ -526,14 +526,14 @@
     },
     "runs_7d": "최근 7일 실행",
     "ends": "종료",
-    "until_issue_ends": "이슈 종료 시까지",
+    "until_issue_ends": "태스크 종료 시까지",
     "fires_once": "한 번 실행",
     "assignee_target": "담당자 · {{name}}",
     "no_target": "에이전트 담당자 없음",
     "banner_other": "깨우기 {{count}}개가 자동으로 일시중지됨: {{issue}} “{{condition}}” — {{reason}}",
     "banner_view": "보기",
     "create": "깨우기 추가",
-    "create_pick_issue": "깨우기를 추가할 이슈 선택",
-    "create_pick_issue_description": "깨우기는 이 이슈에 속하며 이슈가 끝나면 함께 끝납니다."
+    "create_pick_issue": "깨우기를 추가할 태스크 선택",
+    "create_pick_issue_description": "깨우기는 이 태스크에 속하며 태스크가 끝나면 함께 끝납니다."
   }
 }

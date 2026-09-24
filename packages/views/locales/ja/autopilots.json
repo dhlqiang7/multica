@@ -526,14 +526,14 @@
     },
     "runs_7d": "直近 7 日の実行",
     "ends": "期限",
-    "until_issue_ends": "イシュー終了まで",
+    "until_issue_ends": "タスク終了まで",
     "fires_once": "一度だけ起動",
     "assignee_target": "担当者 · {{name}}",
     "no_target": "エージェントの担当者なし",
     "banner_other": "{{count}} 件の起動が自動で一時停止しました：{{issue}}「{{condition}}」— {{reason}}",
     "banner_view": "表示",
     "create": "起動を追加",
-    "create_pick_issue": "起動を追加するイシューを選択",
-    "create_pick_issue_description": "起動はこのイシューに属し、イシューの終了とともに終わります。"
+    "create_pick_issue": "起動を追加するタスクを選択",
+    "create_pick_issue_description": "起動はこのタスクに属し、タスクの終了とともに終わります。"
   }
 }

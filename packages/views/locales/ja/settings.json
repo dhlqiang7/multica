@@ -88,8 +88,8 @@
     "pr_auto_complete_example": "キーワードは PR のタイトルか説明に書きます。例:",
     "pr_auto_complete_example_title": "Closes MUL-123",
     "pr_auto_complete_badge": "PR のマージで自動設定",
-    "child_done_label": "サブイシューのステージが終わったら親イシューの担当者を起こす",
-    "child_done_description": "サブイシューを持つすべてのイシューの既定値です。各イシューの「起動」セクションで個別に変更できます。"
+    "child_done_label": "サブタスクのステージが終わったら親タスクの担当者を起こす",
+    "child_done_description": "サブタスクを持つすべてのタスクの既定値です。各タスクの「起動」セクションで個別に変更できます。"
   },
   "quick_actions": {
     "title": "クイックアクション",

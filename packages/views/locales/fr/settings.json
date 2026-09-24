@@ -88,8 +88,8 @@
     "pr_auto_complete_example": "Écrivez le mot-clé dans le titre ou la description de la PR, par ex.",
     "pr_auto_complete_example_title": "Closes MUL-123",
     "pr_auto_complete_badge": "Définie à la fusion des PR",
-    "child_done_label": "Réveiller le responsable du ticket parent à la fin d’une étape de sous-tickets",
-    "child_done_description": "Valeur par défaut pour tout ticket ayant des sous-tickets. Chaque ticket peut la modifier dans sa section Réveils."
+    "child_done_label": "Réveiller le responsable de la tâche parente à la fin d’une étape de sous-tâches",
+    "child_done_description": "Valeur par défaut pour toute tâche ayant des sous-tâches. Chaque tâche peut la modifier dans sa section Réveils."
   },
   "quick_actions": {
     "title": "Actions rapides",
