@@ -19,7 +19,7 @@ func TestCommentSendIntentMigrationsUpDownUpInIsolatedSchema(t *testing.T) {
 	}
 
 	for _, direction := range []string{"up", "down", "up"} {
-		versions := []string{"550_comment_send_intent", "551_comment_client_request_index"}
+		versions := []string{"550_comment_send_intent", "551_comment_client_request_index", "552_comment_request_dispatched"}
 		if direction == "down" {
 			slices.Reverse(versions)
 		}
@@ -37,11 +37,11 @@ func TestCommentSendIntentMigrationsUpDownUpInIsolatedSchema(t *testing.T) {
 		if err := pool.QueryRow(ctx, `
 			SELECT count(*) FROM information_schema.columns
 			WHERE table_schema = $1 AND table_name = 'comment'
-			  AND column_name IN ('client_request_id', 'suppressed_agent_ids')
+			  AND column_name IN ('client_request_id', 'suppressed_agent_ids', 'client_request_dispatched_at')
 		`, schema).Scan(&columns); err != nil {
 			t.Fatal(err)
 		}
-		if want := map[string]int{"up": 2, "down": 0}[direction]; columns != want {
+		if want := map[string]int{"up": 3, "down": 0}[direction]; columns != want {
 			t.Fatalf("after %s, send-intent columns = %d, want %d", direction, columns, want)
 		}
 	}

@@ -474,10 +474,11 @@ WHERE issue_id = @issue_id
   AND author_id = @author_id
   AND client_request_id = @client_request_id;
 
--- name: SetCommentSuppressedAgents :exec
--- An edit re-decides which agents the comment must not start.
-UPDATE comment SET suppressed_agent_ids = sqlc.narg(suppressed_agent_ids)::uuid[]
-WHERE id = @id;
+-- name: MarkCommentRequestDispatched :exec
+-- The send this comment belongs to has started, steered, or skipped every
+-- agent it addresses; a retry of it only returns the comment.
+UPDATE comment SET client_request_dispatched_at = now()
+WHERE id = @id AND client_request_dispatched_at IS NULL;
 
 -- name: GetDelegatedFailureRecoveryComment :one
 -- The failed task row is locked by the caller before this lookup/insert pair,
@@ -545,6 +546,11 @@ WITH locked_issue AS MATERIALIZED (
     UPDATE comment SET
         content = $2,
         source_task_id = sqlc.narg(source_task_id)::uuid,
+        -- New text re-decides which agents it must not start, under the same
+        -- revision check as the text itself.
+        suppressed_agent_ids = CASE WHEN target.content IS DISTINCT FROM $2
+                                    THEN sqlc.narg(suppressed_agent_ids)::uuid[]
+                                    ELSE comment.suppressed_agent_ids END,
         revision = comment.revision + CASE WHEN target.did_change THEN 1 ELSE 0 END,
         updated_at = CASE WHEN target.did_change THEN now() ELSE comment.updated_at END
     FROM target
