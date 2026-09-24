@@ -152,24 +152,28 @@ func TestCreateCommentSteersOnlyRunningRecipients(t *testing.T) {
 	}
 }
 
-func TestCreateCommentSteersOneRunningTurnPerComment(t *testing.T) {
+func TestCreateCommentSteersSeveralRunningTurns(t *testing.T) {
 	f := newSupplementFixture(t, "codex", "running", true)
-	dbfx.Cleanup(t, `DELETE FROM agent_task_queue WHERE issue_id = $1`, f.issueID)
 	otherAgentID, otherTaskID := runningSteerableTask(t, f, "Second runner")
 	content := agentMention("Supplement", f.agentID) + " and " + agentMention("Second runner", otherAgentID) + " stop touching desktop"
 
 	var created CommentResponse
 	postSteeredComment(t, f.issueID, "", content, f.taskID, otherTaskID).Want(http.StatusCreated).JSON(&created)
-	if len(created.Supplements) != 1 || created.Supplements[0].TaskID != f.taskID {
-		t.Fatalf("receipts = %+v, want the first chosen turn only", created.Supplements)
+	got := map[string]string{}
+	for _, receipt := range created.Supplements {
+		got[receipt.AgentID] = receipt.TaskID
 	}
-	// Servers from before per-run receipts may still claim; the second
-	// recipient takes the comment as a normal trigger instead.
-	if outcome, ok := outcomeFor(created.TriggerOutcomes, otherAgentID); !ok || outcome.Status == DispatchSteered || outcome.Status == DispatchBlocked {
-		t.Fatalf("second recipient outcome = %+v (%v), want a normal trigger", outcome, ok)
+	if len(created.Supplements) != 2 || got[f.agentID] != f.taskID || got[otherAgentID] != otherTaskID {
+		t.Fatalf("receipts = %+v, want one per running turn", created.Supplements)
 	}
-	if n := dbfx.Count(t, `SELECT count(*) FROM task_supplement WHERE task_id = $1`, otherTaskID); n != 0 {
-		t.Fatalf("second turn holds %d receipts, want none", n)
+
+	var timeline []TimelineEntry
+	testutil.Call(t, testHandler.ListTimeline, withURLParam(
+		newRequest(http.MethodGet, "/api/issues/"+f.issueID+"/timeline", nil), "id", f.issueID)).Want(http.StatusOK).JSON(&timeline)
+	for _, entry := range timeline {
+		if entry.ID == created.ID && len(entry.Supplements) != 2 {
+			t.Fatalf("timeline receipts = %+v, want both runs", entry.Supplements)
+		}
 	}
 }
 
