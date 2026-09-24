@@ -94,6 +94,24 @@ describe("IssueUsageDialog", () => {
     expect(screen.getByText(/100% hit rate/)).toBeInTheDocument();
   });
 
+  it("shows an unavailable hit rate when no input-side tokens were reported", () => {
+    open([
+      makeTask({
+        usage: [
+          usage({
+            input_tokens: 0,
+            output_tokens: 1_000,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+          }),
+        ],
+      }),
+    ]);
+
+    expect(screen.getByText("—")).toBeInTheDocument();
+    expect(screen.queryByText(/0% hit rate/)).not.toBeInTheDocument();
+  });
+
   it("keeps the full model list reachable when the cell truncates", () => {
     // A run that spilled across models carries ids long enough to set the
     // table's width on their own; the cell is capped, so the untruncated list
