@@ -217,6 +217,9 @@ export type LandingDict = {
       title: string;
       sub: string;
       installLabel: string;
+      platformGroup: string;
+      platformMacosLinux: string;
+      platformWindows: string;
       startLabel: string;
       sshNote: string;
       copyLabel: string;

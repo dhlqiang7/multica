@@ -29,7 +29,6 @@ import {
   ChatPendingTaskSchema,
   ChatSessionListSchema,
   ChatSessionSchema,
-  CommentSchema,
   PrioritizeQueuedChatTaskResponseSchema,
   CreateFeedbackResponseSchema,
   DuplicateIssueErrorBodySchema,
@@ -542,52 +541,23 @@ describe("IssueTriggerPreviewSchema", () => {
 });
 
 describe("TimelineEntriesSchema", () => {
-  it("preserves optional and nullable delivery task ids across server versions", () => {
-    const baseComment = {
+  it("preserves run-bound supplement delivery receipts", () => {
+    const parsed = TimelineEntriesSchema.parse([{
       type: "comment",
-      id: "comment-1",
+      id: "supplement-1",
       actor_type: "member",
       actor_id: "user-1",
       created_at: "2026-01-01T00:00:00Z",
-      content: "Steered input",
-    };
-    const parsed = TimelineEntriesSchema.parse([
-      {
-        ...baseComment,
-        agent_deliveries: [
-          { agent_id: "a1", agent_name: "Walt", task_id: "task-1", status: "delivered" },
-          { agent_id: "a2", agent_name: "Bob", task_id: null, status: "follow_up" },
-          { agent_id: "a3", agent_name: "Kim", status: "pending" },
-        ],
-      },
-    ]);
-
-    expect(parsed[0]?.agent_deliveries?.map((delivery) => delivery.task_id)).toEqual([
-      "task-1",
-      null,
-      undefined,
-    ]);
-  });
-
-  it("keeps old comment responses valid when delivery task_id is absent", () => {
-    const parsed = CommentSchema.parse({
-      id: "comment-1",
-      issue_id: "issue-1",
-      author_type: "member",
-      author_id: "user-1",
-      content: "Legacy receipt",
-      type: "comment",
-      parent_id: null,
-      reactions: [],
-      attachments: [],
-      created_at: "2026-01-01T00:00:00Z",
-      updated_at: "2026-01-01T00:00:00Z",
-      agent_deliveries: [
-        { agent_id: "a1", agent_name: "Walt", status: "delivered" },
-      ],
+      content: "also cover rollback",
+      supplement_task_id: "task-1",
+      supplement_status: "delivered",
+      supplement_delivered_at: "2026-01-01T00:00:01Z",
+    }]);
+    expect(parsed[0]).toMatchObject({
+      supplement_task_id: "task-1",
+      supplement_status: "delivered",
+      supplement_delivered_at: "2026-01-01T00:00:01Z",
     });
-
-    expect(parsed.agent_deliveries?.[0]?.task_id).toBeUndefined();
   });
 
   it("preserves source_task_id for agent failure comments", () => {
@@ -662,6 +632,20 @@ describe("TimelineEntriesSchema", () => {
 });
 
 describe("AgentTaskListSchema", () => {
+  it("preserves negotiated supplement capability, ordered coverage and permission", () => {
+    const parsed = AgentTaskListSchema.parse([{
+      id: "run",
+      supplement_capability: "task-supplement-v1",
+      supplement_comment_ids: ["comment-1", "comment-2"],
+      can_supplement: true,
+    }]);
+    expect(parsed[0]).toMatchObject({
+      supplement_capability: "task-supplement-v1",
+      supplement_comment_ids: ["comment-1", "comment-2"],
+      can_supplement: true,
+    });
+  });
+
   it.each([true, false, undefined, null, "true", 1])("safely parses comment cancellation metadata: %s", (value) => {
     const parsed = AgentTaskListSchema.parse([{ id: "run", cancelled_by_comment_change: value }]);
     expect(parsed).toHaveLength(1);
@@ -1325,6 +1309,26 @@ describe("AppConfigSchema agent_conversation_starters_supported drift", () => {
     expect(
       AppConfigSchema.parse({ agent_conversation_starters_supported: true })
         .agent_conversation_starters_supported,
+    ).toBe(true);
+  });
+});
+
+describe("AppConfigSchema issue_create_properties_supported drift", () => {
+  it("defaults to false when the server predates atomic create properties", () => {
+    expect(AppConfigSchema.parse({}).issue_create_properties_supported).toBe(false);
+  });
+
+  it("coerces a malformed declaration to false", () => {
+    expect(
+      AppConfigSchema.parse({ issue_create_properties_supported: "yes" })
+        .issue_create_properties_supported,
+    ).toBe(false);
+  });
+
+  it("carries a genuine declaration through", () => {
+    expect(
+      AppConfigSchema.parse({ issue_create_properties_supported: true })
+        .issue_create_properties_supported,
     ).toBe(true);
   });
 });

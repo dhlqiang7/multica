@@ -1,7 +1,8 @@
 "use client";
 
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { CheckCircle2, ChevronRight, ListChevronsDownUp, Copy, Link2, Loader2, MessageSquarePlus, MoreHorizontal, Pencil, RotateCcw, Trash2 } from "lucide-react";
+import { Fragment, memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { CheckCircle2, ChevronRight, CornerUpLeft, ListChevronsDownUp, Copy, Link2, Loader2, MessageSquarePlus, MoreHorizontal, Pencil, RotateCcw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@multica/ui/components/ui/card";
 import { Button, buttonVariants } from "@multica/ui/components/ui/button";
@@ -40,6 +41,8 @@ import { useCommentTriggerPreview } from "../hooks/use-comment-trigger-preview";
 import type { TimelineEntry, Attachment } from "@multica/core/types";
 import { contentReferencesAttachment } from "@multica/core/types";
 import { isDeletedComment } from "@multica/core/issues/comment-deletion";
+import { useRetryTaskSupplement } from "@multica/core/issues/mutations";
+import { issueTasksOptions } from "@multica/core/issues/queries";
 import { useConfigStore } from "@multica/core/config";
 import { selectStandaloneAttachments } from "@multica/core/attachments/image-sequence";
 import { useCommentCollapseStore, useCommentDraftStore } from "@multica/core/issues/stores";
@@ -47,8 +50,9 @@ import { useT } from "../../i18n";
 import { CommentsFoldBar } from "./resolved-thread-bar";
 import { deriveThreadResolution } from "./thread-utils";
 import { RevisionConflictCompare } from "./revision-conflict-compare";
-import { InlineCommentRun, useInlineCommentRunState, type InlineCommentRunState } from "./inline-comment-run";
-import { EMPTY_COMMENT_RUNS, finalAgentReplyByTask, showCommentRunInHeader, type CommentRun } from "./comment-runs";
+import { InlineCommentRun, PlacedInlineCommentRun, useInlineCommentRunState, type InlineCommentRunState } from "./inline-comment-run";
+import { EMPTY_COMMENT_RUNS, orderThreadWithRuns, type CommentRun, type ThreadRunSlot } from "./comment-runs";
+import { descriptionPreview } from "./description-preview";
 import { useCommentAnnotations } from "./use-comment-annotations";
 import { useRunCommentMotion } from "./use-run-comment-motion";
 
@@ -59,52 +63,6 @@ const highlightedCommentBackgroundClass =
   "bg-[color-mix(in_srgb,var(--card)_95%,var(--brand)_5%)]";
 const stickyHeaderFadeClass =
   "after:pointer-events-none after:absolute after:inset-x-0 after:top-full after:h-1 after:bg-[inherit] after:[mask-image:linear-gradient(to_bottom,#000,transparent)] after:[-webkit-mask-image:linear-gradient(to_bottom,#000,transparent)]";
-
-export function CommentDeliveryReceipts({
-  entry,
-  repliesByTask,
-  onLocateComment,
-  className,
-}: {
-  entry: TimelineEntry;
-  repliesByTask?: ReadonlyMap<string, TimelineEntry>;
-  onLocateComment?: (commentId: string) => void;
-  className?: string;
-}) {
-  const { t } = useT("issues");
-  const timeAgo = useTimeAgo();
-  if (!entry.agent_deliveries?.length) return null;
-  return (
-    <div className={cn("mt-1.5 flex flex-col gap-0.5 text-micro text-muted-foreground", className)}>
-      {entry.agent_deliveries.map((delivery) => {
-        const text = delivery.status === "delivered"
-          ? t(($) => $.comment.delivery_delivered, {
-              name: delivery.agent_name,
-              time: delivery.delivered_at ? timeAgo(delivery.delivered_at) : "",
-            })
-          : delivery.status === "pending"
-            ? t(($) => $.comment.delivery_pending, { name: delivery.agent_name })
-            : t(($) => $.comment.delivery_follow_up, { name: delivery.agent_name });
-        const reply = delivery.status === "delivered" && delivery.task_id
-          ? repliesByTask?.get(delivery.task_id)
-          : undefined;
-        if (!reply || reply.comment_type !== "comment" || reply.deleted_at || !onLocateComment) {
-          return <div key={delivery.agent_id}>{text}</div>;
-        }
-        return (
-          <button
-            type="button"
-            key={delivery.agent_id}
-            onClick={() => onLocateComment(reply.id)}
-            className="w-fit cursor-pointer text-left hover:text-foreground hover:underline"
-          >
-            {text} · {t(($) => $.comment.delivery_view_reply)}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
 
 function StickyHeaderShell({
   className,
@@ -176,6 +134,8 @@ interface CommentCardProps {
   onResolveToggle?: (commentId: string, resolved: boolean) => void;
   /** Copy a deep link (`#comment-…`) to a single comment in this thread. */
   onCopyLink?: (commentId: string) => void;
+  /** Scroll to and flash a comment in this thread. */
+  onJumpToComment?: (commentId: string) => void;
   /**
    * When non-null, the thread root is currently rendered as a resolved-but-
    * expanded card. Pass a "Collapse" affordance into the header so the user
@@ -189,8 +149,6 @@ interface CommentCardProps {
    */
   expandedResolvedIds?: ReadonlySet<string>;
   onResolvedExpandChange?: (rootId: string, expand: boolean) => void;
-  /** Scroll and flash a delivered steer run's existing final reply. */
-  onLocateComment?: (commentId: string) => void;
   /** ID of the comment to highlight (flash animation). */
   highlightedCommentId?: string | null;
 }
@@ -653,9 +611,59 @@ function CommentRevisionConflict({
 // Single comment row (used for both parent and replies within the same Card)
 // ---------------------------------------------------------------------------
 
+export function SupplementReceipt({ issueId, entry }: {
+  issueId: string;
+  entry: TimelineEntry;
+}) {
+  if (!entry.supplement_task_id || !entry.supplement_status || entry.supplement_status === "delivered") return null;
+  return <ActiveSupplementReceipt issueId={issueId} entry={entry} />;
+}
+
+function ActiveSupplementReceipt({ issueId, entry }: { issueId: string; entry: TimelineEntry }) {
+  const { t } = useT("issues");
+  const retry = useRetryTaskSupplement(issueId);
+  // Run placement belongs to one card, but every bound supplement must observe
+  // the task's terminal state, including earlier top-level comments.
+  const { data: taskStatus } = useQuery({
+    ...issueTasksOptions(issueId),
+    enabled: !!issueId && !!entry.supplement_task_id && !!entry.supplement_status,
+    select: (tasks) => tasks.find((task) => task.id === entry.supplement_task_id)?.status,
+  });
+  if (!entry.supplement_task_id || !entry.supplement_status || entry.supplement_status === "delivered") return null;
+  const terminal = taskStatus === "completed" || taskStatus === "failed" || taskStatus === "cancelled";
+  const endedBeforeDelivery = terminal
+    && (entry.supplement_status === "pending" || entry.supplement_status === "delivering");
+  if (!endedBeforeDelivery && (entry.supplement_status === "pending" || entry.supplement_status === "delivering")) {
+    return <p role="status" className="mt-1.5 text-caption text-muted-foreground">
+      {t(($) => $.inline_run.supplement_waiting_delivery)}
+    </p>;
+  }
+  const reasonCode = endedBeforeDelivery ? "turn_ended" : entry.supplement_failure_reason;
+  const reason = reasonCode === "turn_ended"
+    ? t(($) => $.inline_run.supplement_failure_turn_ended)
+    : reasonCode === "turn_not_started"
+      ? t(($) => $.inline_run.supplement_failure_turn_not_started)
+      : reasonCode === "provider_rejected"
+        ? t(($) => $.inline_run.supplement_failure_provider_rejected)
+        : reasonCode === "timeout"
+          ? t(($) => $.inline_run.supplement_failure_timeout)
+          : t(($) => $.inline_run.supplement_failure_unknown);
+  return <div role="alert" className="mt-1.5 flex items-center gap-2 text-caption text-destructive">
+    <span>{t(($) => $.inline_run.supplement_not_delivered, { reason })}</span>
+    {!terminal && reasonCode !== "turn_ended" && <Button type="button" size="xs" variant="outline" disabled={retry.isPending}
+      onClick={() => retry.mutate({ taskId: entry.supplement_task_id!, commentId: entry.id }, {
+        onError: () => toast.error(t(($) => $.inline_run.supplement_retry_failed)),
+      })}>
+      {retry.isPending && <Loader2 className="size-3 animate-spin motion-reduce:animate-none" />}
+      {t(($) => $.inline_run.supplement_retry)}
+    </Button>}
+  </div>;
+}
+
 function CommentRow({
   runHeader,
   runMetadata,
+  replyTo,
   issueId,
   entry,
   currentUserId,
@@ -669,11 +677,10 @@ function CommentRow({
   onCreateSubIssue,
   onResolveToggle,
   onCopyLink,
-  deliveryRepliesByTask,
-  onLocateComment,
 }: {
   runHeader?: ReactNode;
   runMetadata?: ReactNode;
+  replyTo?: ReactNode;
   issueId: string;
   entry: TimelineEntry;
   currentUserId?: string;
@@ -690,8 +697,6 @@ function CommentRow({
   onCreateSubIssue?: (commentId: string) => void;
   onResolveToggle?: (commentId: string, resolved: boolean) => void;
   onCopyLink?: (commentId: string) => void;
-  deliveryRepliesByTask?: ReadonlyMap<string, TimelineEntry>;
-  onLocateComment?: (commentId: string) => void;
 }) {
   const { t } = useT("issues");
   const locale = useLocale();
@@ -701,8 +706,9 @@ function CommentRow({
   const edit = useEditAttachmentState(issueId, entry, onEdit);
 
   const isOwn = entry.actor_type === "member" && entry.actor_id === currentUserId;
-  const canEditEntry = isOwn || (canModerate && entry.actor_type === "member");
-  const canDeleteEntry = isOwn || canModerate;
+  const canEditEntry = !entry.supplement_task_id && (isOwn || (canModerate && entry.actor_type === "member"));
+  const supplementInFlight = entry.supplement_task_id && (entry.supplement_status === "pending" || entry.supplement_status === "delivering");
+  const canDeleteEntry = !supplementInFlight && (isOwn || canModerate);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const reactions = entry.reactions ?? [];
@@ -844,6 +850,7 @@ function CommentRow({
           />
         </div>
       </StickyHeaderShell>
+      {replyTo && <div className="pl-12 pr-4 max-md:pl-3 max-md:pr-3 pb-1.5">{replyTo}</div>}
 
       {edit.editing ? (
         <div
@@ -932,12 +939,9 @@ function CommentRow({
             <ReadonlyContent content={entry.content ?? ""} attachments={entry.attachments} />
           </div>
           <AttachmentList attachments={entry.attachments} content={entry.content} className="mt-1.5 pl-12 pr-4 max-md:pl-3 max-md:pr-3" />
-          <CommentDeliveryReceipts
-            entry={entry}
-            repliesByTask={deliveryRepliesByTask}
-            onLocateComment={onLocateComment}
-            className="pl-12 pr-4 max-md:pl-3 max-md:pr-3"
-          />
+          <div className="pl-12 pr-4 max-md:pl-3 max-md:pr-3">
+            <SupplementReceipt issueId={issueId} entry={entry} />
+          </div>
           {retryableAgentFailureComment(entry) && (
             <TaskCommentRetryButton
               issueId={issueId}
@@ -960,12 +964,31 @@ function CommentRow({
   );
 }
 
+/** Names the input a run answers once other rows separate the two (MUL-7628). */
+function ReplyToQuote({ entry, onJump }: { entry: TimelineEntry; onJump?: (commentId: string) => void }) {
+  const { t } = useT("issues");
+  const { getActorName } = useActorName();
+  const label = t(($) => $.comment.replying_to, {
+    name: entry.actor_name || getActorName(entry.actor_type, entry.actor_id),
+    preview: descriptionPreview(entry.content ?? ""),
+  });
+  return (
+    <button type="button" disabled={!onJump} onClick={() => onJump?.(entry.id)} title={label}
+      className="flex max-w-full min-w-0 items-center gap-1.5 rounded-xs text-left text-caption text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:hover:text-muted-foreground">
+      <CornerUpLeft aria-hidden className="size-3 shrink-0" />
+      <span className="min-w-0 truncate">{label}</span>
+    </button>
+  );
+}
+
 /** A run without a persisted reply still belongs to the agent, never its trigger author. */
-export function AgentRunComment({ run, standalone = false, commentProps, entering = false }: {
+export function AgentRunComment({ run, standalone = false, commentProps, entering = false, replyTo }: {
   run: CommentRun;
   standalone?: boolean;
   entering?: boolean;
   commentProps?: CommentCardProps;
+  /** The input this run answers, shown when the thread no longer places the two together. */
+  replyTo?: ReactNode;
 }) {
   const viewState = useInlineCommentRunState();
   const replyEntry = commentProps?.entry;
@@ -987,12 +1010,11 @@ export function AgentRunComment({ run, standalone = false, commentProps, enterin
         <CommentRow {...commentProps}
           isHighlighted={commentProps.highlightedCommentId === reply?.id}
           isResolution={!!reply?.resolved_at}
-          runHeader={showCommentRunInHeader(run)
-            ? <InlineCommentRun run={run} viewState={viewState} presentation="header" /> : undefined}
-          runMetadata={!showCommentRunInHeader(run)
-            ? <InlineCommentRun run={run} viewState={viewState} /> : undefined} />
+          replyTo={replyTo}
+          runHeader={<PlacedInlineCommentRun run={run} viewState={viewState} presentation="header" />}
+          runMetadata={<PlacedInlineCommentRun run={run} viewState={viewState} />} />
       ) : <div className="px-4 max-md:px-3">
-        <InlineCommentRun run={run} viewState={viewState} showIdentity />
+        <InlineCommentRun run={run} viewState={viewState} showIdentity replyTo={replyTo} />
       </div>}
     </div>
   );
@@ -1026,10 +1048,10 @@ function CommentCardImpl({
   onCreateSubIssue,
   onResolveToggle,
   onCopyLink,
+  onJumpToComment,
   onCollapseResolved,
   expandedResolvedIds,
   onResolvedExpandChange,
-  onLocateComment,
   highlightedCommentId,
 }: CommentCardProps) {
   const { t } = useT("issues");
@@ -1059,51 +1081,36 @@ function CommentCardImpl({
   const edit = useEditAttachmentState(issueId, entry, onEdit);
 
   const isOwn = entry.actor_type === "member" && entry.actor_id === currentUserId;
-  const canEditEntry = isOwn || (canModerate && entry.actor_type === "member");
-  const canDeleteEntry = isOwn || canModerate;
+  const canEditEntry = !entry.supplement_task_id && (isOwn || (canModerate && entry.actor_type === "member"));
+  const supplementInFlight = entry.supplement_status === "pending" || entry.supplement_status === "delivering";
+  const canDeleteEntry = !supplementInFlight && (isOwn || canModerate);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const allNestedReplies = replies;
-  const deliveryRepliesByTask = useMemo(
-    () => finalAgentReplyByTask([entry, ...allNestedReplies]),
-    [entry, allNestedReplies],
-  );
   // What the thread shows. Tombstones are excluded from display and counts but
   // stay in `allNestedReplies`, which run anchoring and "has replies" reason
   // over. Every tombstone has at least one live descendant (the server prunes
   // one that loses its last reply), so no content hides behind this.
   const visibleReplies = allNestedReplies.filter((reply) => !isDeletedComment(reply));
-  // A run anchored here renders in one slot after its input, ending with its
-  // reply (the run's latest comment). The rest of what the run posted in this
-  // thread joins that slot in posting order; left in the chronological list,
-  // it would render after the reply it preceded (MUL-7548).
-  const slottedRuns = runs.filter((run) => run.hasReply && run.anchorCommentId && run.commentId !== entry.id);
-  const runOutputs = new Map(slottedRuns.map((run) => [run.task.id,
-    allNestedReplies.filter((reply) => reply.actor_type === "agent" && reply.source_task_id === run.task.id)]));
-  const slottedReplyIds = new Set(slottedRuns.flatMap((run) =>
-    [run.commentId, ...(runOutputs.get(run.task.id) ?? []).map((reply) => reply.id)]));
   const renderRuns = (commentId: string, presentation: "inline" | "header" = "inline") => runs.filter((run) => run.commentId === commentId && run.hasReply
-    && showCommentRunInHeader(run) === (presentation === "header")
     && (!run.anchorCommentId || run.anchorCommentId === commentId || replyFolded))
-    .map((run) => <InlineCommentRun key={run.task.id} run={run} presentation={presentation} viewState={run.commentId === entry.id ? runViewState : undefined} />);
+    .map((run) => <PlacedInlineCommentRun key={run.task.id} run={run} presentation={presentation} viewState={run.commentId === entry.id ? runViewState : undefined} />);
 
-  const renderAnchoredRuns = (commentId: string) => runs.filter((run) => run.anchorCommentId === commentId
-    && !(replyFolded && run.hasReply))
-    .map((run) => {
-      const reply = run.hasReply ? allNestedReplies.find((entry) => entry.id === run.commentId) : undefined;
-      return <Fragment key={run.task.id}>
-        {runOutputs.get(run.task.id)?.filter((output) => output.id !== run.commentId).map(renderReply)}
-        <AgentRunComment run={run} entering={enteringRunIds?.has(run.task.id)} commentProps={reply ? {
-          issueId, entry: reply, replies: [], currentUserId, canModerate, onReply, onEdit, onDelete,
-          onToggleReaction, onCreateSubIssue, onResolveToggle, onCopyLink, highlightedCommentId, enteringRunIds,
-          onLocateComment,
-        } : undefined} />{reply && reply.id !== commentId && renderAnchoredRuns(reply.id)}</Fragment>;
-    });
+  // A run slot renders the run's latest comment, or its activity until it
+  // posts one.
+  const renderThreadRow = (row: TimelineEntry | ThreadRunSlot) => "run" in row ? (
+    <AgentRunComment key={row.run.task.id} run={row.run} entering={enteringRunIds?.has(row.run.task.id)}
+      replyTo={row.replyTo && <ReplyToQuote entry={row.replyTo} onJump={onJumpToComment} />}
+      commentProps={row.reply ? {
+        issueId, entry: row.reply, replies: [], currentUserId, canModerate, onReply, onEdit, onDelete,
+        onToggleReaction, onCreateSubIssue, onResolveToggle, onCopyLink, highlightedCommentId, enteringRunIds,
+      } : undefined} />
+  ) : renderReply(row);
 
   const renderReply = (reply: TimelineEntry) => (
     <Fragment key={reply.id}>
-      {/* A tombstone keeps its place in the walk — runs anchored to
-          it still render — but contributes no row of its own. */}
+      {/* A tombstone keeps its place in the thread but contributes no row
+          of its own. */}
       {!isDeletedComment(reply) && (
         <div
           id={`comment-${reply.id}`}
@@ -1128,12 +1135,9 @@ function CommentCardImpl({
             onCreateSubIssue={onCreateSubIssue}
             onResolveToggle={onResolveToggle}
             onCopyLink={onCopyLink}
-            deliveryRepliesByTask={deliveryRepliesByTask}
-            onLocateComment={onLocateComment}
           />
         </div>
       )}
-      {renderAnchoredRuns(reply.id)}
     </Fragment>
   );
 
@@ -1159,6 +1163,12 @@ function CommentCardImpl({
   const resolutionReply = replyResolutionId
     ? allNestedReplies.find((r) => r.id === replyResolutionId) ?? null
     : null;
+  // Replies and run slots in the order they happened (MUL-7628). Folded, the
+  // resolution stays visible along with any run that has not replied yet.
+  const threadRows = replyFolded
+    ? orderThreadWithRuns(entry, resolutionReply ? [resolutionReply] : [], runs.filter((run) => !run.hasReply
+      && (run.anchorCommentId === entry.id || run.anchorCommentId === replyResolutionId)))
+    : orderThreadWithRuns(entry, allNestedReplies, runs);
 
   // Pin the root comment's header to the timeline's scroll parent while the
   // thread is open, so a LONG root comment keeps its author + actions visible
@@ -1448,12 +1458,9 @@ function CommentCardImpl({
                   <ReadonlyContent content={entry.content ?? ""} attachments={entry.attachments} />
                 </div>
                 <AttachmentList attachments={entry.attachments} content={entry.content} className="mt-1.5 pl-8 max-md:pl-0" />
-                <CommentDeliveryReceipts
-                  entry={entry}
-                  repliesByTask={deliveryRepliesByTask}
-                  onLocateComment={onLocateComment}
-                  className="pl-8 max-md:pl-0"
-                />
+                <div className="pl-8 max-md:pl-0">
+                  <SupplementReceipt issueId={issueId} entry={entry} />
+                </div>
                 {retryableAgentFailureComment(entry) && (
                   <TaskCommentRetryButton
                     issueId={issueId}
@@ -1481,7 +1488,6 @@ function CommentCardImpl({
             to mirror the body Panel's collapse visibility. */}
         {open && (
           <>
-          {renderAnchoredRuns(entry.id)}
           {replyFolded ? (
             <>
               {/* reply-mode folded: other replies behind a bar, resolution pinned below */}
@@ -1493,38 +1499,7 @@ function CommentCardImpl({
                   />
                 </div>
               )}
-              {resolutionReply && (
-                <>
-                  <div
-                    id={`comment-${resolutionReply.id}`}
-                    className={cn(
-                      "border-t border-border/50 transition-colors duration-700",
-                      highlightedCommentId === resolutionReply.id && highlightedCommentBackgroundClass,
-                    )}
-                  >
-                    <CommentRow
-                      issueId={issueId}
-                      entry={resolutionReply}
-                      runHeader={renderRuns(resolutionReply.id, "header")}
-                      runMetadata={renderRuns(resolutionReply.id)}
-                      currentUserId={currentUserId}
-                      canModerate={canModerate}
-                      isResolution
-                      isHighlighted={highlightedCommentId === resolutionReply.id}
-                      hasReplies={repliedToIds.has(resolutionReply.id)}
-                      onEdit={onEdit}
-                      onDelete={onDelete}
-                      onToggleReaction={onToggleReaction}
-                      onCreateSubIssue={onCreateSubIssue}
-                      onResolveToggle={onResolveToggle}
-                      onCopyLink={onCopyLink}
-                      deliveryRepliesByTask={deliveryRepliesByTask}
-                      onLocateComment={onLocateComment}
-                    />
-                  </div>
-                  {renderAnchoredRuns(resolutionReply.id)}
-                </>
-              )}
+              {threadRows.map(renderThreadRow)}
             </>
           ) : (
             <>
@@ -1541,7 +1516,7 @@ function CommentCardImpl({
                 </button>
               )}
               {/* Replies — chronological; the resolution keeps its place with a badge */}
-              {allNestedReplies.filter((reply) => !slottedReplyIds.has(reply.id)).map(renderReply)}
+              {threadRows.map(renderThreadRow)}
 
               {/* Reply input */}
               <div className="border-t border-border/50 px-4 max-md:px-3 py-2.5">
