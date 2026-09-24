@@ -1338,10 +1338,15 @@ type prLinkPolicy struct {
 	// unique. The mirror pass then leaves links and statuses untouched for this
 	// delivery rather than guessing either way.
 	indeterminate bool
-	// owner maps an identifier to the one workspace proven to resolve it.
+	// owner maps an identifier to the one auto-linking workspace proven to
+	// resolve it.
 	owner map[string]string
-	// ambiguous lists identifiers that resolved in more than one workspace.
+	// ambiguous lists identifiers that resolved in more than one auto-linking
+	// workspace.
 	ambiguous map[string]bool
+	// sole maps an identifier to the workspace proven to be the only bound one
+	// resolving it, auto-link on or off (see permitsClose).
+	sole map[string]string
 }
 
 // permits reports whether workspaceID may link identifier.
@@ -1353,9 +1358,27 @@ func (c prLinkPolicy) permits(identifier, workspaceID string) bool {
 	return ok && owner == workspaceID
 }
 
+// permitsClose reports whether workspaceID may act on a closing keyword for
+// identifier on the links it already has. Auto-link decides which links get
+// created, not whether their keywords count, so a workspace that turned it off
+// still acts when no other bound workspace resolves the identifier. The
+// auto-linking owner acts too: another resolver with auto-link off holds only
+// links a person added, and does not act.
+func (c prLinkPolicy) permitsClose(identifier, workspaceID string) bool {
+	if c.unrestricted {
+		return true
+	}
+	if owner, ok := c.owner[identifier]; ok && owner == workspaceID {
+		return true
+	}
+	sole, ok := c.sole[identifier]
+	return ok && sole == workspaceID
+}
+
 // resolvePRLinkPolicy determines, before any workspace writes, which claimed
-// identifiers on this PR may link and in which workspace. An identifier
-// is allowed only when exactly one bound workspace was proven to resolve it;
+// identifiers on this PR may link, or carry close intent, and in which
+// workspace. An identifier is allowed only when exactly one bound workspace
+// was proven to resolve it (see permits and permitsClose for which count);
 // misjudging "unique" as "ambiguous" costs a link a person can add by hand,
 // while the reverse would complete someone else's issue.
 func (h *Handler) resolvePRLinkPolicy(ctx context.Context, insts []db.GithubInstallation, p *ghPullRequestPayload) prLinkPolicy {
@@ -1363,7 +1386,7 @@ func (h *Handler) resolvePRLinkPolicy(ctx context.Context, insts []db.GithubInst
 		return prLinkPolicy{unrestricted: true}
 	}
 	idents, _ := prClaimedIdentifiers(p.PullRequest.Title, p.PullRequest.Body, p.PullRequest.Head.Ref)
-	policy := prLinkPolicy{owner: map[string]string{}, ambiguous: map[string]bool{}}
+	policy := prLinkPolicy{owner: map[string]string{}, ambiguous: map[string]bool{}, sole: map[string]string{}}
 	if len(idents) == 0 {
 		return policy
 	}
@@ -1374,21 +1397,25 @@ func (h *Handler) resolvePRLinkPolicy(ctx context.Context, insts []db.GithubInst
 		return prLinkPolicy{indeterminate: true}
 	}
 
-	resolvers := make(map[string][]string, len(idents))
+	type resolver struct {
+		workspaceID string
+		autoLink    bool
+	}
+	resolvers := make(map[string][]resolver, len(idents))
 	for _, inst := range insts {
 		ws, err := h.Queries.GetWorkspace(ctx, inst.WorkspaceID)
 		if err != nil {
 			return indeterminate("github: cannot load bound workspace, leaving links unchanged for this delivery", "err", err)
 		}
-		// A workspace with auto-link off never writes a link row, so it is not
-		// a competing claimant. A settings blob we cannot parse is not evidence
-		// either way, so it fails closed.
+		// A settings blob we cannot parse is not evidence either way, so it
+		// fails closed.
 		autoLink, err := autoLinkPRsEnabledForWorkspace(ws)
 		if err != nil {
 			return indeterminate("github: cannot read workspace auto-link setting, leaving links unchanged for this delivery",
 				"err", err, "workspace_id", uuidToString(inst.WorkspaceID))
 		}
-		if !autoLink {
+		// With GitHub off a workspace acts on nothing, so it claims nothing.
+		if !githubFeaturesEnabled(ws) {
 			continue
 		}
 		prefix := issuePrefixForWorkspace(ws)
@@ -1407,10 +1434,24 @@ func (h *Handler) resolvePRLinkPolicy(ctx context.Context, insts []db.GithubInst
 				return indeterminate("github: cannot resolve identifier in bound workspace, leaving links unchanged for this delivery",
 					"err", err, "identifier", id, "workspace_id", uuidToString(inst.WorkspaceID))
 			}
-			resolvers[id] = append(resolvers[id], uuidToString(inst.WorkspaceID))
+			resolvers[id] = append(resolvers[id], resolver{workspaceID: uuidToString(inst.WorkspaceID), autoLink: autoLink})
 		}
 	}
-	for id, wss := range resolvers {
+	for id, all := range resolvers {
+		if len(all) == 1 {
+			policy.sole[id] = all[0].workspaceID
+		}
+		// A workspace with auto-link off never writes a link row, so it is not
+		// a competing claimant for the link.
+		var wss []string
+		for _, r := range all {
+			if r.autoLink {
+				wss = append(wss, r.workspaceID)
+			}
+		}
+		if len(wss) == 0 {
+			continue
+		}
 		if len(wss) == 1 {
 			policy.owner[id] = wss[0]
 			continue
@@ -1584,11 +1625,10 @@ func (h *Handler) mirrorPullRequestForWorkspace(ctx context.Context, wsID pgtype
 	if err == nil && githubFeaturesEnabled(ws) && !linkPolicy.indeterminate {
 		touched := map[pgtype.UUID]struct{}{}
 		idents, closing := prClaimedIdentifiers(p.PullRequest.Title, p.PullRequest.Body, p.PullRequest.Head.Ref)
-		permits := func(id string) bool { return linkPolicy.permits(id, workspaceID) }
 		if autoLink, _ := autoLinkPRsEnabledForWorkspace(ws); autoLink {
 			linkedIssueIDs, touched = h.reconcileAutoLinks(ctx, ws, pr.ID, state, prAutoLinkInput{
 				idents:    idents,
-				permits:   permits,
+				permits:   func(id string) bool { return linkPolicy.permits(id, workspaceID) },
 				ambiguous: func(id string) bool { return linkPolicy.ambiguous[id] },
 				link: func(issueID pgtype.UUID) (int64, error) {
 					return h.Queries.LinkIssueToPullRequest(ctx, db.LinkIssueToPullRequestParams{IssueID: issueID, PullRequestID: pr.ID})
@@ -1608,7 +1648,7 @@ func (h *Handler) mirrorPullRequestForWorkspace(ctx context.Context, wsID pgtype
 		if p.Action == "closed" || (state != "merged" && state != "closed") {
 			if err := h.Queries.SyncPullRequestCloseIntent(ctx, db.SyncPullRequestCloseIntentParams{
 				PullRequestID:   pr.ID,
-				ClosingIssueIds: h.closingIssueIDs(ctx, ws, closing, permits),
+				ClosingIssueIds: h.closingIssueIDs(ctx, ws, closing, func(id string) bool { return linkPolicy.permitsClose(id, workspaceID) }),
 			}); err != nil {
 				slog.Warn("github: sync close intent failed", "err", err)
 			}
@@ -1732,9 +1772,9 @@ func (h *Handler) reconcileAutoLinks(ctx context.Context, ws db.Workspace, prID 
 // workspace's issues, for the PR-wide close_intent sync: every link of the PR,
 // automatic or manual, gets close intent exactly when its issue is in this
 // list, so a keyword removed from the text stops counting. It honors the
-// delivery's cross-workspace verdict like linking does. Close intent only
-// decides anything once the PR merges — a PR event of its own — so the sync
-// is not one. Never nil: an empty list clears every link's close intent.
+// delivery's cross-workspace verdict (permitsClose on GitHub). Close intent
+// only decides anything once the PR merges — a PR event of its own — so the
+// sync is not one. Never nil: an empty list clears every link's close intent.
 func (h *Handler) closingIssueIDs(ctx context.Context, ws db.Workspace, closing []string, permits func(string) bool) []pgtype.UUID {
 	ids := make([]pgtype.UUID, 0, len(closing))
 	prefix := issuePrefixForWorkspace(ws)

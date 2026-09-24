@@ -3035,6 +3035,75 @@ func TestPRLinkPolicyPermits(t *testing.T) {
 	}
 }
 
+// TestPRLinkPolicyPermitsClose: auto-link decides which links get created, not
+// whether a closing keyword counts on links a workspace already has. A
+// workspace that is the only resolver acts with auto-link off; a resolver
+// that shares the identifier with an auto-linking owner does not.
+func TestPRLinkPolicyPermitsClose(t *testing.T) {
+	const wsA, wsB = "workspace-a", "workspace-b"
+
+	for _, tc := range []struct {
+		name   string
+		policy prLinkPolicy
+		ws     string
+		want   bool
+	}{
+		{"zero value denies", prLinkPolicy{}, wsA, false},
+		{"single-binding delivery is unrestricted", prLinkPolicy{unrestricted: true}, wsA, true},
+		{"auto-linking owner acts", prLinkPolicy{owner: map[string]string{"ABC-100": wsA}}, wsA, true},
+		{"sole resolver with auto-link off acts", prLinkPolicy{sole: map[string]string{"ABC-100": wsA}}, wsA, true},
+		{"resolver beside an auto-linking owner does not act", prLinkPolicy{owner: map[string]string{"ABC-100": wsA}}, wsB, false},
+		{"ambiguous identifier is denied everywhere", prLinkPolicy{ambiguous: map[string]bool{"ABC-100": true}}, wsA, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.policy.permitsClose("ABC-100", tc.ws); got != tc.want {
+				t.Errorf("permitsClose(ABC-100, %s) = %v, want %v", tc.ws, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestWebhook_AutoLinkOffKeepsValidClosingKeyword: turning auto-link off in a
+// workspace that shares its installation with another must not drop a closing
+// keyword only this workspace resolves — the merge still completes the issue
+// (PR #8794 re-review).
+func TestWebhook_AutoLinkOffKeepsValidClosingKeyword(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("handler test fixture not initialized (no DB?)")
+	}
+	for _, shared := range []bool{false, true} {
+		name := "single workspace"
+		if shared {
+			name = "shared installation, unique prefix"
+		}
+		t.Run(name, func(t *testing.T) {
+			const secret = "auto-link-off-keeps-keyword-secret"
+			const installationID int64 = 30264013
+			t.Setenv("GITHUB_WEBHOOK_SECRET", secret)
+			setWorkspaceIssuePrefixForTest(t, "RVA")
+			if shared {
+				bindSecondWorkspaceForTest(t, "auto-link-off-other-workspace", "RVB", installationID)
+			}
+			issue := prAutoCompleteTestIssue(t, name, installationID)
+			var previous []byte
+			dbfx.QueryRow(t, `SELECT settings FROM workspace WHERE id = $1`, testWorkspaceID).Scan(&previous)
+			t.Cleanup(func() {
+				testPool.Exec(context.Background(), `UPDATE workspace SET settings = $1 WHERE id = $2`, previous, testWorkspaceID)
+			})
+
+			firePRWebhook(t, secret, installationID, 1, "Session refactor", "Closes "+issue.Identifier, "refactor/session", "opened")
+			if got := prAutoCompleteStateForTest(t, issue.ID); got.State != prAutoCompleteWaiting {
+				t.Fatalf("before turning auto-link off: auto_complete = %+v, want waiting", got)
+			}
+			dbfx.Exec(t, `UPDATE workspace SET settings = COALESCE(settings, '{}'::jsonb) || '{"github_auto_link_prs_enabled": false}'::jsonb WHERE id = $1`, testWorkspaceID)
+			firePRWebhook(t, secret, installationID, 1, "Session refactor", "Closes "+issue.Identifier, "refactor/session", "merged")
+			if got := issueStatusForTest(t, issue.ID); got != "done" {
+				t.Errorf("keyword kept, auto-link off: status = %q, want done (auto_complete = %+v)", got, prAutoCompleteStateForTest(t, issue.ID))
+			}
+		})
+	}
+}
+
 // TestWebhook_PullRequest_UniqueResolverAmongBindingsStillAutoCompletes is the
 // other half of the #6804 fix: withholding links must be scoped to the
 // identifiers we could not attribute. Two workspaces share an installation and
