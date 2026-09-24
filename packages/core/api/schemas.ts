@@ -3587,7 +3587,7 @@ export const WorkspaceWakeupPageSchema = z.object({
     // System rule rows have no target when the issue has no agent assignee,
     // and no revision.
     agent_id: z.string().nullish().transform((v) => v ?? ""),
-    revision: z.number().int().positive().nullish().transform((v) => v ?? undefined),
+    revision: z.number().int().positive().nullish().catch(undefined).transform((v) => v ?? undefined),
     source: z.enum(["member", "agent", "system"]).catch("member").default("member"),
     runs_7d: z.number().int().nonnegative().default(0),
     rule: z.literal("child_done").nullish().catch(null),

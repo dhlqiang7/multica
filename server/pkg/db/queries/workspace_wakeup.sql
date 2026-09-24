@@ -45,7 +45,7 @@ LEFT JOIN "user" actor_user ON actor_user.id=actor_member.user_id
   COALESCE(ta.id,leader.id),COALESCE(ta.name,leader.name,''),'event','continuous','{}'::text[],NULL::text,
   NULL::uuid,''::text,NULL::uuid,NULL::text,NULL::uuid,
   NULL::bigint,NULL::text,'UTC',
-  NULL::timestamptz,COALESCE(o.enabled,ws.settings->'system_wakeup_child_done' IS DISTINCT FROM 'false'::jsonb),0::bigint,NULL::timestamptz,NULL::uuid,NULL::text,p.created_at,
+  NULL::timestamptz,COALESCE(o.enabled,ws.settings->'system_wakeup_child_done' IS DISTINCT FROM 'false'::jsonb),NULL::bigint,NULL::timestamptz,NULL::uuid,NULL::text,p.created_at,
   NULL::timestamptz,NULL::bigint,NULL::text,NULL::timestamptz,
   NULL::jsonb,NULL::int,0,NULL::text,
   false,NULL::text,

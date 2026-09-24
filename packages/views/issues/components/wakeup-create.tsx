@@ -56,6 +56,7 @@ import { useT } from "../../i18n";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { PickerEmpty, PickerItem, PickerSection, PropertyPicker } from "./pickers/property-picker";
 import { IssuePickerModal } from "../../modals/issue-picker-modal";
+import { useStatusLabel } from "../utils/status-label";
 import { useWakeupText } from "./wakeup-presentation";
 import {
   WAKEUP_EVENT_TYPES,
@@ -777,6 +778,7 @@ function FieldParams({
 }) {
   const { t } = useT("issues");
   const statuses = useIssueStatuses(workspaceId);
+  const statusLabel = useStatusLabel(workspaceId);
   const { data: labels = [] } = useQuery(labelListOptions(workspaceId));
   const { data: allProperties = [] } = useQuery(propertyListOptions(workspaceId));
   const properties = allProperties.filter((p) => !p.archived);
@@ -802,7 +804,7 @@ function FieldParams({
         label={t(($) => $.wakeups.create.choose_status)}
         placeholder={t(($) => $.wakeups.create.choose_status)}
         value={draft.fieldTarget}
-        options={statuses.activeStatuses.map((s) => ({ value: s.key, label: statuses.labelOf(s.key) }))}
+        options={statuses.activeStatuses.map((s) => ({ value: s.key, label: statusLabel(s.key) }))}
         onChange={(fieldTarget) => update({ fieldTarget })}
       />
     );

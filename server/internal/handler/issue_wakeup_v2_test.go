@@ -113,6 +113,7 @@ type workspaceWakeupRow struct {
 	Rule            *string `json:"rule"`
 	SystemStage     *int    `json:"system_stage"`
 	SystemRemaining *int    `json:"system_remaining"`
+	Revision        *int64  `json:"revision"`
 	Enabled         bool    `json:"enabled"`
 	PausedReason    *string `json:"paused_reason"`
 	Runs7d          int     `json:"runs_7d"`
@@ -171,7 +172,7 @@ func TestWorkspaceWakeupsListSourcesSystemRulesAndPaused(t *testing.T) {
 	}
 	system, ok := byID[fx.parent.ID]
 	if !ok || system.Source != "system" || system.Rule == nil || *system.Rule != "child_done" || system.SystemStage == nil || *system.SystemStage != 1 ||
-		system.SystemRemaining == nil || *system.SystemRemaining != 1 || !system.Enabled || !system.CanManage {
+		system.SystemRemaining == nil || *system.SystemRemaining != 1 || !system.Enabled || !system.CanManage || system.Revision != nil {
 		t.Fatalf("system row: %+v (found %t)", system, ok)
 	}
 	if byID[member].Source != "member" || byID[member].Condition == nil {
