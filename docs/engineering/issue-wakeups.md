@@ -396,3 +396,41 @@ the subscription revision avoids invalidating receipts and queued work on a text
 edit. This additive endpoint needs no migration and does not change existing
 clients. Deploy the API before using the editor; an older API rejects the new
 endpoint and the editor keeps the unsaved text.
+
+
+## Deadlines, member-created rules and the child-done system rule
+
+Rules can end on their own. `expires_in_seconds` is a relative wait stored in
+`expiry_seconds`; re-enabling restarts it from now. `expires_at` is an absolute
+end, typically a recurring check's end date; a passed absolute end cannot be
+re-enabled without replacing the rule. Single-time (`at`) rules end when they
+fire and take no deadline. Rules without either field keep the previous
+open-ended behavior, so existing agent-created rules are unaffected.
+
+The scheduler treats `enabled AND expires_at <= now()` as a candidate (partial
+index 549). Under the usual rule lock, a reached deadline disables the rule and
+sets `timed_out_at`; `disabled_at` stays NULL because it means "turned off by a
+person" and claim-time checks refuse wakeup runs whose rule has `disabled_at`.
+Inputs captured before the deadline still dispatch. `on_timeout=wake` (event
+rules only) records one `wakeup.timeout` receipt, so the target runs once to
+escalate, extend or stop; `end` (the default) ends without a run.
+
+Members create rules from the issue sidebar with the existing create endpoint;
+the form maps choices (a time, a recurring check with an end date, someone's
+reply, an agent's run ending, or raw events) onto the same configuration an
+agent sends. List responses add `created_by_agent`, `created_by_name` and the
+redacted `source_agent_*` of the run that created a rule.
+
+The parent-assignee wake on a closed sub-issue stage used to be implicit.
+`GET /api/issues/{id}/system-wakeups` now describes it (lowest open stage,
+remaining sub-issues, target, and why it would not wake anyone), and
+`PUT /api/issues/{id}/system-wakeups/child_done` stores a per-issue override in
+`issue_system_wakeup`: `enabled=false` suppresses the stage notification and
+wake; `instruction` (at most 4,000 bytes) is appended to the stage comment.
+A missing row, or a failed read, keeps the previous behavior. Issue and
+workspace deletion remove override rows. The trigger itself still runs after
+the status write commits; moving it into that transaction is follow-up work.
+
+Migrations 548–551 are additive. Deploy them before the server; deploy the
+server before the updated web and desktop clients, which call the new
+endpoints. Older clients ignore the new response fields.
