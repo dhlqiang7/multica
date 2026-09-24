@@ -1,0 +1,19 @@
+# 运行时镜像：宿主机预编译的 Go 产物 + 迁移 + entrypoint。
+# 结构对齐仓库根 Dockerfile 的 runtime stage，仅构建方式不同
+# （编译在宿主机完成，镜像内零网络、零编译）。
+# 由 docker/assemble-prebuilt-context.sh 拷入 prebuilt-context/ 后使用。
+FROM alpine:3.21
+
+RUN apk add --no-cache ca-certificates tzdata
+
+WORKDIR /app
+
+COPY backend-bin/ ./
+COPY migrations/ ./migrations/
+COPY LICENSE NOTICE ./
+COPY entrypoint.sh .
+RUN sed -i 's/\r$//' entrypoint.sh && chmod +x entrypoint.sh
+
+EXPOSE 8080
+
+ENTRYPOINT ["./entrypoint.sh"]

@@ -1,0 +1,19 @@
+# Self-host 运行时镜像 override：镜像内容全部来自宿主机预编译产物
+# （server/bin 五个 Go 二进制 + apps/web Next standalone），
+# 构建过程见 docker/assemble-prebuilt-context.sh。
+# 用法：
+#   bash docker/assemble-prebuilt-context.sh
+#   docker compose -f docker-compose.selfhost.yml \
+#                  -f docker-compose.selfhost.prebuilt.yml up -d --build
+services:
+  backend:
+    image: multica-backend:selfhost
+    build:
+      context: ./docker/prebuilt-context
+      dockerfile: Dockerfile.backend
+
+  frontend:
+    image: multica-web:selfhost
+    build:
+      context: ./docker/prebuilt-context
+      dockerfile: Dockerfile.web
