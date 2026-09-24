@@ -154,6 +154,7 @@ function Wrapper({ children }: { children: ReactNode }) {
 
 describe("UsageSection — Viewing timezone wiring", () => {
   beforeEach(() => {
+    usageOverride.rows = null;
     runtimeUsageOptions.mockClear();
     runtimeUsageByAgentOptions.mockClear();
   });
@@ -193,6 +194,25 @@ describe("UsageSection — Viewing timezone wiring", () => {
     fireEvent.click(screen.getByRole("button", { name: "7d" }));
 
     expect(flows.at(-1)).toHaveAttribute("aria-label", "1K");
+  });
+
+  it("includes cache writes in the cache hit-rate denominator", () => {
+    usageOverride.rows = [
+      {
+        runtime_id: "r-1",
+        date: new Date().toISOString().slice(0, 10),
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 72_000,
+        cache_write_tokens: 28_000,
+      },
+    ];
+
+    render(<UsageSection runtime={RUNTIME} />, { wrapper: Wrapper });
+
+    expect(screen.getByText(/72% hit/)).toBeInTheDocument();
   });
 });
 
