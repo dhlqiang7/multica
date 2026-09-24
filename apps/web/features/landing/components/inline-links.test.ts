@@ -1,9 +1,7 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { parseInlineLinks } from "./inline-links";
-import { createEnDict } from "../i18n/en";
-import { createJaDict } from "../i18n/ja";
-import { createKoDict } from "../i18n/ko";
-import { createZhDict } from "../i18n/zh";
+import { createLandingDict } from "../i18n/dictionary";
 
 describe("parseInlineLinks", () => {
   it("returns plain text untouched", () => {
@@ -30,12 +28,9 @@ describe("parseInlineLinks", () => {
 });
 
 describe("trust pages copy", () => {
-  const dicts = [
-    createEnDict(true),
-    createZhDict(true),
-    createJaDict(true),
-    createKoDict(true),
-  ];
+  const dicts = (["en", "zh-Hans", "ja", "ko"] as const).map((locale) =>
+    createLandingDict(locale, true),
+  );
 
   it("links the privacy consent to the privacy policy in every locale", () => {
     for (const t of dicts) {
