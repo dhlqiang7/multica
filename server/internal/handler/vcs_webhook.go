@@ -227,17 +227,13 @@ func (h *Handler) mirrorVCSPullRequest(ctx context.Context, conn db.VcsConnectio
 	if err == nil {
 		var touched map[pgtype.UUID]struct{}
 		idents, closing := prClaimedIdentifiers(ev.Title, ev.Body, ev.Branch)
+		permits := func(string) bool { return true }
 		linkedIssueIDs, touched = h.reconcileAutoLinks(ctx, ws, pr.ID, ev.State, prAutoLinkInput{
-			idents:            idents,
-			closing:           closing,
-			freezeCloseIntent: !ev.Terminal() && (ev.State == "merged" || ev.State == "closed"),
-			permits:           func(string) bool { return true },
-			ambiguous:         func(string) bool { return false },
-			link: func(issueID pgtype.UUID, closeIntent bool) (int64, error) {
-				return h.Queries.LinkIssueToVCSPullRequest(ctx, db.LinkIssueToVCSPullRequestParams{IssueID: issueID, PullRequestID: pr.ID, CloseIntent: closeIntent})
-			},
-			setCloseIntent: func(issueID pgtype.UUID, closeIntent bool) error {
-				return h.Queries.SetIssueVCSPullRequestCloseIntent(ctx, db.SetIssueVCSPullRequestCloseIntentParams{IssueID: issueID, PullRequestID: pr.ID, CloseIntent: closeIntent})
+			idents:    idents,
+			permits:   permits,
+			ambiguous: func(string) bool { return false },
+			link: func(issueID pgtype.UUID) (int64, error) {
+				return h.Queries.LinkIssueToVCSPullRequest(ctx, db.LinkIssueToVCSPullRequestParams{IssueID: issueID, PullRequestID: pr.ID})
 			},
 			unlink: func(issueID pgtype.UUID) (int64, error) {
 				return h.Queries.UnlinkIssueFromVCSPullRequest(ctx, db.UnlinkIssueFromVCSPullRequestParams{IssueID: issueID, PullRequestID: pr.ID})
@@ -246,6 +242,16 @@ func (h *Handler) mirrorVCSPullRequest(ctx context.Context, conn db.VcsConnectio
 				return h.Queries.ListAutoLinkedIssueIDsForVCSPullRequest(ctx, pr.ID)
 			},
 		})
+		// Close intent follows the PR text up to and including the merge/close
+		// event, on every link of the PR (see closingIssueIDs).
+		if ev.Terminal() || (ev.State != "merged" && ev.State != "closed") {
+			if err := h.Queries.SyncVCSPullRequestCloseIntent(ctx, db.SyncVCSPullRequestCloseIntentParams{
+				PullRequestID:   pr.ID,
+				ClosingIssueIds: h.closingIssueIDs(ctx, ws, closing, permits),
+			}); err != nil {
+				slog.Warn("vcs: sync close intent failed", "err", err)
+			}
+		}
 		if ev.State == "merged" && prevState != "merged" {
 			issueIDs, err := h.Queries.ListIssueIDsForVCSPullRequest(ctx, pr.ID)
 			if err != nil {

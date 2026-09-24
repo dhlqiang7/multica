@@ -208,9 +208,9 @@ func (q *Queries) GetVCSPullRequestInWorkspace(ctx context.Context, arg GetVCSPu
 const linkIssueToVCSPullRequest = `-- name: LinkIssueToVCSPullRequest :execrows
 
 INSERT INTO issue_vcs_pull_request (
-    issue_id, pull_request_id, linked_by_type, linked_by_id, close_intent
+    issue_id, pull_request_id, linked_by_type, linked_by_id
 ) VALUES (
-    $1, $2, 'system', NULL, $3
+    $1, $2, 'system', NULL
 )
 ON CONFLICT (issue_id, pull_request_id) DO NOTHING
 `
@@ -218,7 +218,6 @@ ON CONFLICT (issue_id, pull_request_id) DO NOTHING
 type LinkIssueToVCSPullRequestParams struct {
 	IssueID       pgtype.UUID `json:"issue_id"`
 	PullRequestID pgtype.UUID `json:"pull_request_id"`
-	CloseIntent   bool        `json:"close_intent"`
 }
 
 // =====================
@@ -226,7 +225,7 @@ type LinkIssueToVCSPullRequestParams struct {
 // =====================
 // Mirrors LinkIssueToPullRequest: automatic link, 1 only when new.
 func (q *Queries) LinkIssueToVCSPullRequest(ctx context.Context, arg LinkIssueToVCSPullRequestParams) (int64, error) {
-	result, err := q.db.Exec(ctx, linkIssueToVCSPullRequest, arg.IssueID, arg.PullRequestID, arg.CloseIntent)
+	result, err := q.db.Exec(ctx, linkIssueToVCSPullRequest, arg.IssueID, arg.PullRequestID)
 	if err != nil {
 		return 0, err
 	}
@@ -533,20 +532,21 @@ func (q *Queries) RotateVCSConnectionWebhookSecret(ctx context.Context, arg Rota
 	return i, err
 }
 
-const setIssueVCSPullRequestCloseIntent = `-- name: SetIssueVCSPullRequestCloseIntent :exec
-UPDATE issue_vcs_pull_request SET close_intent = $3
-WHERE issue_id = $1 AND pull_request_id = $2 AND close_intent <> $3
+const syncVCSPullRequestCloseIntent = `-- name: SyncVCSPullRequestCloseIntent :exec
+UPDATE issue_vcs_pull_request
+SET close_intent = (issue_id = ANY($1::uuid[]))
+WHERE pull_request_id = $2
+  AND close_intent <> (issue_id = ANY($1::uuid[]))
 `
 
-type SetIssueVCSPullRequestCloseIntentParams struct {
-	IssueID       pgtype.UUID `json:"issue_id"`
-	PullRequestID pgtype.UUID `json:"pull_request_id"`
-	CloseIntent   bool        `json:"close_intent"`
+type SyncVCSPullRequestCloseIntentParams struct {
+	ClosingIssueIds []pgtype.UUID `json:"closing_issue_ids"`
+	PullRequestID   pgtype.UUID   `json:"pull_request_id"`
 }
 
-// Mirrors SetIssuePullRequestCloseIntent.
-func (q *Queries) SetIssueVCSPullRequestCloseIntent(ctx context.Context, arg SetIssueVCSPullRequestCloseIntentParams) error {
-	_, err := q.db.Exec(ctx, setIssueVCSPullRequestCloseIntent, arg.IssueID, arg.PullRequestID, arg.CloseIntent)
+// Mirrors SyncPullRequestCloseIntent.
+func (q *Queries) SyncVCSPullRequestCloseIntent(ctx context.Context, arg SyncVCSPullRequestCloseIntentParams) error {
+	_, err := q.db.Exec(ctx, syncVCSPullRequestCloseIntent, arg.ClosingIssueIds, arg.PullRequestID)
 	return err
 }
 

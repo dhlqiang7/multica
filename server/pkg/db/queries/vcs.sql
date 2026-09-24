@@ -172,16 +172,18 @@ WHERE pr.connection_id = $1 AND pr.head_sha = $2 AND pr.head_sha <> '';
 -- name: LinkIssueToVCSPullRequest :execrows
 -- Mirrors LinkIssueToPullRequest: automatic link, 1 only when new.
 INSERT INTO issue_vcs_pull_request (
-    issue_id, pull_request_id, linked_by_type, linked_by_id, close_intent
+    issue_id, pull_request_id, linked_by_type, linked_by_id
 ) VALUES (
-    $1, $2, 'system', NULL, $3
+    $1, $2, 'system', NULL
 )
 ON CONFLICT (issue_id, pull_request_id) DO NOTHING;
 
--- name: SetIssueVCSPullRequestCloseIntent :exec
--- Mirrors SetIssuePullRequestCloseIntent.
-UPDATE issue_vcs_pull_request SET close_intent = $3
-WHERE issue_id = $1 AND pull_request_id = $2 AND close_intent <> $3;
+-- name: SyncVCSPullRequestCloseIntent :exec
+-- Mirrors SyncPullRequestCloseIntent.
+UPDATE issue_vcs_pull_request
+SET close_intent = (issue_id = ANY(sqlc.arg('closing_issue_ids')::uuid[]))
+WHERE pull_request_id = sqlc.arg('pull_request_id')
+  AND close_intent <> (issue_id = ANY(sqlc.arg('closing_issue_ids')::uuid[]));
 
 -- name: LinkIssueToVCSPullRequestManually :execrows
 INSERT INTO issue_vcs_pull_request (

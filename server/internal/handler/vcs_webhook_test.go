@@ -271,9 +271,14 @@ func TestAutoCompleteSpansProviders(t *testing.T) {
 		t.Fatalf("UpsertVCSPullRequest: %v", err)
 	}
 	if _, err := testHandler.Queries.LinkIssueToVCSPullRequest(ctx, db.LinkIssueToVCSPullRequestParams{
-		IssueID: parseUUID(issue.ID), PullRequestID: vcsPR.ID, CloseIntent: true,
+		IssueID: parseUUID(issue.ID), PullRequestID: vcsPR.ID,
 	}); err != nil {
 		t.Fatalf("LinkIssueToVCSPullRequest: %v", err)
+	}
+	if err := testHandler.Queries.SyncVCSPullRequestCloseIntent(ctx, db.SyncVCSPullRequestCloseIntentParams{
+		PullRequestID: vcsPR.ID, ClosingIssueIds: []pgtype.UUID{parseUUID(issue.ID)},
+	}); err != nil {
+		t.Fatalf("SyncVCSPullRequestCloseIntent: %v", err)
 	}
 
 	testHandler.maybeAutoCompleteIssue(ctx, parseUUID(testWorkspaceID), parseUUID(issue.ID), nil)
@@ -344,6 +349,52 @@ func TestDeleteIssue_VCSLinkCleanupIsWorkspaceScoped(t *testing.T) {
 	}
 	if linkCount() != 0 {
 		t.Errorf("link rows should be gone after correct delete, got %d", linkCount())
+	}
+}
+
+// A merge whose text no longer closes the issue clears the close intent an
+// earlier event recorded, even though the link itself is kept after merge
+// (PR #8794 review; mirrors TestWebhook_RemovedKeywordStopsCounting).
+func TestVCSWebhook_MergeWithoutKeywordDoesNotComplete(t *testing.T) {
+	ctx := context.Background()
+	box := withVCSBox(t)
+	connID := seedVCSConnection(t, ctx, box, "forgejo", "https://forgejo.test")
+	issue := newVCSIssue(t, "Keyword removed before merge")
+	t.Cleanup(func() { cleanupVCS(ctx, issue.ID) })
+
+	fire := func(action, state string, merged bool, body, updatedAt string) {
+		raw, _ := json.Marshal(map[string]any{
+			"action": action,
+			"pull_request": map[string]any{
+				"number": 9, "html_url": "https://forgejo.test/acme/widget/pulls/9",
+				"title": "Session refactor", "body": body, "state": state, "merged": merged,
+				"created_at": "2026-05-01T00:00:00Z", "updated_at": updatedAt,
+				"merged_at": "2026-05-02T00:00:00Z",
+				"head":      map[string]any{"ref": "refactor", "sha": "def"},
+				"user":      map[string]any{"username": "octo"},
+			},
+			"repository": map[string]any{"name": "widget", "owner": map[string]any{"username": "acme"}},
+		})
+		w := httptest.NewRecorder()
+		testHandler.HandleVCSWebhook(w, vcsWebhookReq(connID, map[string]string{
+			"X-Gitea-Event": "pull_request", "X-Gitea-Signature": giteaSig(raw),
+		}, raw))
+		if w.Code != http.StatusAccepted {
+			t.Fatalf("%s event: %d %s", action, w.Code, w.Body.String())
+		}
+	}
+
+	fire("opened", "open", false, "Closes "+issue.Identifier, "2026-05-01T00:00:00Z")
+	fire("closed", "closed", true, "Related to "+issue.Identifier, "2026-05-02T00:00:00Z")
+
+	updated, _ := testHandler.Queries.GetIssue(ctx, parseUUID(issue.ID))
+	if updated.Status == "done" {
+		t.Errorf("merged without a closing keyword, but the issue moved to done")
+	}
+	var links int
+	testPool.QueryRow(ctx, `SELECT count(*) FROM issue_vcs_pull_request WHERE issue_id = $1`, issue.ID).Scan(&links)
+	if links != 1 {
+		t.Errorf("the merged PR must stay linked, got %d links", links)
 	}
 }
 

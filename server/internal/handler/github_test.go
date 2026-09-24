@@ -164,7 +164,7 @@ func TestPRClaimedIdentifiers(t *testing.T) {
 	if want := []string{"ABC-1", "ABC-3", "ABC-4"}; !reflect.DeepEqual(idents, want) {
 		t.Errorf("idents = %v, want %v", idents, want)
 	}
-	if want := map[string]bool{"ABC-4": true}; !reflect.DeepEqual(closing, want) {
+	if want := []string{"ABC-4"}; !reflect.DeepEqual(closing, want) {
 		t.Errorf("closing = %v, want %v", closing, want)
 	}
 }
@@ -1065,8 +1065,11 @@ func linkMergedGitHubPRForTest(t *testing.T, issueID, repo string) {
 		testPool.Exec(bg, `DELETE FROM issue_pull_request WHERE pull_request_id = $1`, pr.ID)
 		testPool.Exec(bg, `DELETE FROM github_pull_request WHERE id = $1`, pr.ID)
 	})
-	if _, err := testHandler.Queries.LinkIssueToPullRequest(ctx, db.LinkIssueToPullRequestParams{IssueID: parseUUID(issueID), PullRequestID: pr.ID, CloseIntent: true}); err != nil {
+	if _, err := testHandler.Queries.LinkIssueToPullRequest(ctx, db.LinkIssueToPullRequestParams{IssueID: parseUUID(issueID), PullRequestID: pr.ID}); err != nil {
 		t.Fatalf("link: %v", err)
+	}
+	if err := testHandler.Queries.SyncPullRequestCloseIntent(ctx, db.SyncPullRequestCloseIntentParams{PullRequestID: pr.ID, ClosingIssueIds: []pgtype.UUID{parseUUID(issueID)}}); err != nil {
+		t.Fatalf("close intent: %v", err)
 	}
 }
 
@@ -1284,6 +1287,74 @@ func TestWebhook_CloseIntentFollowsPRTextUntilMerge(t *testing.T) {
 	}
 	if list := listIssuePRsForTest(t, manual.ID); len(list.PullRequests) != 1 || list.PullRequests[0].LinkSource != "manual" {
 		t.Errorf("pull_requests = %+v, want the manual link kept", list.PullRequests)
+	}
+}
+
+// TestWebhook_RemovedKeywordStopsCounting: dropping "Closes" from the PR text
+// clears close intent on every link of the PR, not only on identifiers the PR
+// still claims — a manual link, or an automatic link whose merge event (which
+// carries the final text) arrives before the edit event (PR #8794 review).
+func TestWebhook_RemovedKeywordStopsCounting(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("handler test fixture not initialized (no DB?)")
+	}
+	for _, tc := range []struct {
+		name            string
+		manual          bool
+		editBeforeMerge bool
+	}{
+		{"manual link, keyword edited to a mention", true, true},
+		{"automatic link, merge arrives before the edit", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const secret = "removed-keyword-secret"
+			const installationID int64 = 30264011
+			t.Setenv("GITHUB_WEBHOOK_SECRET", secret)
+			issue := prAutoCompleteTestIssue(t, tc.name, installationID)
+
+			firePRWebhook(t, secret, installationID, 1, "Session refactor", "Closes "+issue.Identifier, "refactor/session", "opened")
+			if tc.manual {
+				req := withURLParam(newRequest("POST", "/api/issues/"+issue.ID+"/pull-requests", map[string]any{"url": "https://github.com/acme/widget/pull/1"}), "id", issue.ID)
+				testutil.Call(t, testHandler.LinkIssuePullRequest, req).Want(http.StatusOK)
+			}
+			if tc.editBeforeMerge {
+				firePRWebhook(t, secret, installationID, 1, "Session refactor", "Related to "+issue.Identifier, "refactor/session", "edited")
+				if got := prAutoCompleteStateForTest(t, issue.ID); got.State != prAutoCompleteNoCloseIntent {
+					t.Errorf("after removing the keyword: auto_complete = %+v, want no_close_intent", got)
+				}
+			}
+			firePRWebhook(t, secret, installationID, 1, "Session refactor", "Related to "+issue.Identifier, "refactor/session", "merged")
+			if got := issueStatusForTest(t, issue.ID); got != "in_progress" {
+				t.Errorf("merged without a closing keyword: status = %q, want in_progress", got)
+			}
+		})
+	}
+}
+
+// TestWebhook_AutoLinkOffStillReadsCloseIntent: turning auto-link off stops
+// new links, not the reading of existing links' keywords — otherwise a
+// keyword removed afterwards would still complete the issue (PR #8794 review).
+func TestWebhook_AutoLinkOffStillReadsCloseIntent(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("handler test fixture not initialized (no DB?)")
+	}
+	const secret = "auto-link-off-close-intent-secret"
+	const installationID int64 = 30264012
+	t.Setenv("GITHUB_WEBHOOK_SECRET", secret)
+	issue := prAutoCompleteTestIssue(t, "auto-link off after linking", installationID)
+	var previous []byte
+	dbfx.QueryRow(t, `SELECT settings FROM workspace WHERE id = $1`, testWorkspaceID).Scan(&previous)
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `UPDATE workspace SET settings = $1 WHERE id = $2`, previous, testWorkspaceID)
+	})
+
+	title := issue.Identifier + ": session refactor"
+	firePRWebhook(t, secret, installationID, 1, title, "Closes "+issue.Identifier, "refactor/session", "opened")
+	dbfx.Exec(t, `UPDATE workspace SET settings = COALESCE(settings, '{}'::jsonb) || '{"github_auto_link_prs_enabled": false}'::jsonb WHERE id = $1`, testWorkspaceID)
+	firePRWebhook(t, secret, installationID, 1, title, "", "refactor/session", "edited")
+	firePRWebhook(t, secret, installationID, 1, title, "", "refactor/session", "merged")
+	if got := issueStatusForTest(t, issue.ID); got != "in_progress" {
+		t.Errorf("keyword removed while auto-link was off: status = %q, want in_progress", got)
 	}
 }
 

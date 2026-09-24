@@ -1583,21 +1583,15 @@ func (h *Handler) mirrorPullRequestForWorkspace(ctx context.Context, wsID pgtype
 	ws, err := h.Queries.GetWorkspace(ctx, wsID)
 	if err == nil && githubFeaturesEnabled(ws) && !linkPolicy.indeterminate {
 		touched := map[pgtype.UUID]struct{}{}
+		idents, closing := prClaimedIdentifiers(p.PullRequest.Title, p.PullRequest.Body, p.PullRequest.Head.Ref)
+		permits := func(id string) bool { return linkPolicy.permits(id, workspaceID) }
 		if autoLink, _ := autoLinkPRsEnabledForWorkspace(ws); autoLink {
-			idents, closing := prClaimedIdentifiers(p.PullRequest.Title, p.PullRequest.Body, p.PullRequest.Head.Ref)
 			linkedIssueIDs, touched = h.reconcileAutoLinks(ctx, ws, pr.ID, state, prAutoLinkInput{
-				idents:  idents,
-				closing: closing,
-				// The merge/close event itself still records the PR text; only
-				// later edits of a merged or closed PR are ignored.
-				freezeCloseIntent: p.Action != "closed" && (state == "merged" || state == "closed"),
-				permits:           func(id string) bool { return linkPolicy.permits(id, workspaceID) },
-				ambiguous:         func(id string) bool { return linkPolicy.ambiguous[id] },
-				link: func(issueID pgtype.UUID, closeIntent bool) (int64, error) {
-					return h.Queries.LinkIssueToPullRequest(ctx, db.LinkIssueToPullRequestParams{IssueID: issueID, PullRequestID: pr.ID, CloseIntent: closeIntent})
-				},
-				setCloseIntent: func(issueID pgtype.UUID, closeIntent bool) error {
-					return h.Queries.SetIssuePullRequestCloseIntent(ctx, db.SetIssuePullRequestCloseIntentParams{IssueID: issueID, PullRequestID: pr.ID, CloseIntent: closeIntent})
+				idents:    idents,
+				permits:   permits,
+				ambiguous: func(id string) bool { return linkPolicy.ambiguous[id] },
+				link: func(issueID pgtype.UUID) (int64, error) {
+					return h.Queries.LinkIssueToPullRequest(ctx, db.LinkIssueToPullRequestParams{IssueID: issueID, PullRequestID: pr.ID})
 				},
 				unlink: func(issueID pgtype.UUID) (int64, error) {
 					return h.Queries.UnlinkIssueFromPullRequest(ctx, db.UnlinkIssueFromPullRequestParams{IssueID: issueID, PullRequestID: pr.ID})
@@ -1606,6 +1600,18 @@ func (h *Handler) mirrorPullRequestForWorkspace(ctx context.Context, wsID pgtype
 					return h.Queries.ListAutoLinkedIssueIDsForPullRequest(ctx, pr.ID)
 				},
 			})
+		}
+		// Close intent is read from the PR text whether or not auto-link is on:
+		// the flag decides which links get created, not whether an existing
+		// link's keyword still stands. The merge/close event itself still
+		// records the text; later edits of a merged or closed PR do not.
+		if p.Action == "closed" || (state != "merged" && state != "closed") {
+			if err := h.Queries.SyncPullRequestCloseIntent(ctx, db.SyncPullRequestCloseIntentParams{
+				PullRequestID:   pr.ID,
+				ClosingIssueIds: h.closingIssueIDs(ctx, ws, closing, permits),
+			}); err != nil {
+				slog.Warn("github: sync close intent failed", "err", err)
+			}
 		}
 		// A merge is a PR event for every issue this PR is linked to, manual
 		// links included.
@@ -1636,18 +1642,12 @@ func (h *Handler) mirrorPullRequestForWorkspace(ctx context.Context, wsID pgtype
 
 // prAutoLinkInput is what reconcileAutoLinks needs from one provider.
 type prAutoLinkInput struct {
-	idents  []string        // identifiers the PR claims (see prClaimedIdentifiers)
-	closing map[string]bool // claimed identifiers that follow a closing keyword
-	// freezeCloseIntent keeps the close_intent recorded at the PR's merge/close
-	// event: a later edit must not rewrite that decision, and a link first
-	// made after it carries no close intent.
-	freezeCloseIntent bool
-	permits           func(identifier string) bool           // cross-workspace verdict (always true for VCS)
-	ambiguous         func(identifier string) bool           // resolved in several workspaces
-	link              func(pgtype.UUID, bool) (int64, error) // automatic link with close intent; 1 when new
-	setCloseIntent    func(pgtype.UUID, bool) error          // update close intent on an existing link
-	unlink            func(pgtype.UUID) (int64, error)       // drop a link; 1 when removed
-	listAuto          func() ([]pgtype.UUID, error)          // issues currently auto-linked to the PR
+	idents    []string                         // identifiers the PR claims (see prClaimedIdentifiers)
+	permits   func(identifier string) bool     // cross-workspace verdict (always true for VCS)
+	ambiguous func(identifier string) bool     // resolved in several workspaces
+	link      func(pgtype.UUID) (int64, error) // automatic link; 1 when new
+	unlink    func(pgtype.UUID) (int64, error) // drop a link; 1 when removed
+	listAuto  func() ([]pgtype.UUID, error)    // issues currently auto-linked to the PR
 }
 
 // reconcileAutoLinks makes the PR's automatic links match its claims. It
@@ -1655,16 +1655,15 @@ type prAutoLinkInput struct {
 // whose link set changed (a PR event for auto-complete).
 //
 //   - A claimed identifier that resolves here links, unless a person removed
-//     that PR from that issue before. Its close intent follows the PR text
-//     until the PR merges or closes — on manual links too, since it describes
-//     the PR, not who linked it.
+//     that PR from that issue before.
 //   - An automatic link the PR no longer claims is dropped while the PR is still
 //     open. After merge/close it is kept: a later title edit must not take the
 //     delivered work off the issue.
 //   - An automatic link for an identifier that turned out to be ambiguous
 //     across bound workspaces is always dropped (see prLinkPolicy).
 //
-// Manual links are never removed here.
+// Manual links are never touched here, and close intent is not either (see
+// closingIssueIDs).
 func (h *Handler) reconcileAutoLinks(ctx context.Context, ws db.Workspace, prID pgtype.UUID, state string, in prAutoLinkInput) ([]string, map[pgtype.UUID]struct{}) {
 	touched := map[pgtype.UUID]struct{}{}
 	linked := make([]string, 0)
@@ -1691,18 +1690,10 @@ func (h *Handler) reconcileAutoLinks(ctx context.Context, ws db.Workspace, prID 
 			continue
 		}
 		claimed[issue.ID] = struct{}{}
-		closeIntent := in.closing[id] && !in.freezeCloseIntent
-		rows, err := in.link(issue.ID, closeIntent)
+		rows, err := in.link(issue.ID)
 		if err != nil {
 			slog.Warn("pr link: link failed", "err", err)
 			continue
-		}
-		if rows == 0 && !in.freezeCloseIntent {
-			// Close intent decides nothing until the PR merges — a PR event of
-			// its own — so updating it does not re-run the decision.
-			if err := in.setCloseIntent(issue.ID, closeIntent); err != nil {
-				slog.Warn("pr link: close intent update failed", "err", err)
-			}
 		}
 		linked = append(linked, uuidToString(issue.ID))
 		if rows > 0 {
@@ -1735,6 +1726,27 @@ func (h *Handler) reconcileAutoLinks(ctx context.Context, ws db.Workspace, prID 
 		}
 	}
 	return linked, touched
+}
+
+// closingIssueIDs resolves the identifiers a PR closes with a keyword to this
+// workspace's issues, for the PR-wide close_intent sync: every link of the PR,
+// automatic or manual, gets close intent exactly when its issue is in this
+// list, so a keyword removed from the text stops counting. It honors the
+// delivery's cross-workspace verdict like linking does. Close intent only
+// decides anything once the PR merges — a PR event of its own — so the sync
+// is not one. Never nil: an empty list clears every link's close intent.
+func (h *Handler) closingIssueIDs(ctx context.Context, ws db.Workspace, closing []string, permits func(string) bool) []pgtype.UUID {
+	ids := make([]pgtype.UUID, 0, len(closing))
+	prefix := issuePrefixForWorkspace(ws)
+	for _, id := range closing {
+		if !permits(id) {
+			continue
+		}
+		if issue, ok := h.lookupIssueByIdentifier(ctx, ws.ID, prefix, id); ok {
+			ids = append(ids, issue.ID)
+		}
+	}
+	return ids
 }
 
 // derivePRMergeableState resolves the upsert behaviour for the PR row's
@@ -1849,11 +1861,10 @@ func extractMatchedIdentifiers(re *regexp.Regexp, parts ...string) []string {
 // it closes. The title and branch name link an issue; a closing keyword in the
 // title or body ("Closes MUL-1") links it too and marks the PR as the one that
 // completes it. A bare mention in the body claims nothing.
-func prClaimedIdentifiers(title, body, branch string) ([]string, map[string]bool) {
-	idents := extractIdentifiers(title, branch)
-	closing := map[string]bool{}
-	for _, id := range extractClosingIdentifiers(title, body) {
-		closing[id] = true
+func prClaimedIdentifiers(title, body, branch string) (idents, closing []string) {
+	idents = extractIdentifiers(title, branch)
+	closing = extractClosingIdentifiers(title, body)
+	for _, id := range closing {
 		if !slices.Contains(idents, id) {
 			idents = append(idents, id)
 		}
