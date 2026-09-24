@@ -391,6 +391,8 @@ WHERE c.issue_id = @issue_id
       WHERE s.comment_id = c.id AND s.workspace_id = c.workspace_id
         AND bound.agent_id = @agent_id
   )
+  -- Nor does a comment whose author chose not to start this agent for it.
+  AND NOT COALESCE(@agent_id::uuid = ANY(c.suppressed_agent_ids), false)
   AND (
       (
           c.author_type IN ('member', 'agent')
@@ -455,14 +457,27 @@ WITH touched_issue AS (
     WHERE issue.id = sqlc.arg(issue_id) AND issue.workspace_id = sqlc.arg(workspace_id)
     RETURNING issue.id, issue.workspace_id, issue.revision
 ), inserted_comment AS (
-    INSERT INTO comment (issue_id, workspace_id, author_type, author_id, content, type, parent_id, source_task_id, quick_action_id, via_plugin_id, id)
-    SELECT ti.id, ti.workspace_id, sqlc.arg(author_type), sqlc.arg(author_id), sqlc.arg(content), sqlc.arg(type), sqlc.narg(parent_id), sqlc.narg(source_task_id), sqlc.narg(quick_action_id), sqlc.narg(via_plugin_id), COALESCE(sqlc.narg('id')::uuid, gen_random_uuid())
+    INSERT INTO comment (issue_id, workspace_id, author_type, author_id, content, type, parent_id, source_task_id, quick_action_id, via_plugin_id, client_request_id, suppressed_agent_ids, id)
+    SELECT ti.id, ti.workspace_id, sqlc.arg(author_type), sqlc.arg(author_id), sqlc.arg(content), sqlc.arg(type), sqlc.narg(parent_id), sqlc.narg(source_task_id), sqlc.narg(quick_action_id), sqlc.narg(via_plugin_id), sqlc.narg(client_request_id), sqlc.narg(suppressed_agent_ids)::uuid[], COALESCE(sqlc.narg('id')::uuid, gen_random_uuid())
     FROM touched_issue ti
     RETURNING *
 )
 SELECT inserted_comment.*, touched_issue.revision AS issue_revision
 FROM inserted_comment
 JOIN touched_issue ON touched_issue.id = inserted_comment.issue_id;
+
+-- name: GetCommentByClientRequest :one
+-- The comment an author already saved for this logical send, deleted or not:
+-- a retry must never post the same input twice.
+SELECT * FROM comment
+WHERE issue_id = @issue_id
+  AND author_id = @author_id
+  AND client_request_id = @client_request_id;
+
+-- name: SetCommentSuppressedAgents :exec
+-- An edit re-decides which agents the comment must not start.
+UPDATE comment SET suppressed_agent_ids = sqlc.narg(suppressed_agent_ids)::uuid[]
+WHERE id = @id;
 
 -- name: GetDelegatedFailureRecoveryComment :one
 -- The failed task row is locked by the caller before this lookup/insert pair,

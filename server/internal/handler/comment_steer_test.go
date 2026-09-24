@@ -1,9 +1,12 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -246,5 +249,115 @@ func TestCreateCommentSteerRetryAfterLostResponseIsIdempotent(t *testing.T) {
 	}
 	if n := dbfx.Count(t, `SELECT count(*) FROM comment WHERE issue_id = $1 AND content = 'Apply this once'`, f.issueID); n != 1 {
 		t.Fatalf("retransmission created %d comments, want one", n)
+	}
+}
+
+func TestCreateCommentRetryAfterASteerFellBackSavesOneComment(t *testing.T) {
+	f := newSupplementFixture(t, "codex", "running", true)
+	dbfx.Exec(t, `UPDATE comment SET content = $2 WHERE id = $1`, f.triggerID, agentMention("A", f.agentID)+" original")
+	dbfx.Cleanup(t, `DELETE FROM agent_task_queue WHERE issue_id = $1`, f.issueID)
+	// The chosen turn finishes between the composer preview and the first POST,
+	// so the send falls back to a normal trigger and holds no receipt.
+	dbfx.Exec(t, `UPDATE agent_task_queue SET status = 'completed', completed_at = now() WHERE id = $1`, f.taskID)
+	body := map[string]any{
+		"content": "fallback retry once", "parent_id": f.triggerID,
+		"steer_task_ids": []string{f.taskID}, "client_request_id": "0199a4e8-22ce-7b01-bba5-222222222222",
+	}
+	send := func() *testutil.Response {
+		return testutil.Call(t, testHandler.CreateComment, withURLParam(
+			newRequest(http.MethodPost, "/api/issues/"+f.issueID+"/comments", body), "id", f.issueID))
+	}
+	var first, retried CommentResponse
+	send().Want(http.StatusCreated).JSON(&first)
+	send().Want(http.StatusOK).JSON(&retried)
+	if retried.ID != first.ID {
+		t.Fatalf("retry returned %s, want the saved comment %s", retried.ID, first.ID)
+	}
+	if n := dbfx.Count(t, `SELECT count(*) FROM comment WHERE issue_id = $1 AND content = 'fallback retry once'`, f.issueID); n != 1 {
+		t.Fatalf("same request created %d comments after fallback, want 1", n)
+	}
+	if n := dbfx.Count(t, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1 AND status = 'queued'`, f.issueID); n != 1 {
+		t.Fatalf("same request queued %d follow-up runs, want 1", n)
+	}
+}
+
+func TestCreateCommentConcurrentSteerTwinsSaveOneComment(t *testing.T) {
+	f := newSupplementFixture(t, "codex", "running", true)
+	dbfx.Exec(t, `UPDATE comment SET content = $2 WHERE id = $1`, f.triggerID, agentMention("A", f.agentID)+" original")
+	dbfx.Exec(t, `UPDATE agent_task_queue SET delivered_comment_ids = ARRAY[trigger_comment_id] WHERE id = $1`, f.taskID)
+	dbfx.Cleanup(t, `DELETE FROM agent_task_queue WHERE issue_id = $1`, f.issueID)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	// Hold the turn so whichever send saves the comment first waits to bind it.
+	tx, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.Background())
+	if _, err := tx.Exec(ctx, `SELECT id FROM agent_task_queue WHERE id = $1 FOR UPDATE`, f.taskID); err != nil {
+		t.Fatal(err)
+	}
+	body := map[string]any{
+		"content": "concurrent retry once", "parent_id": f.triggerID,
+		"steer_task_ids": []string{f.taskID}, "client_request_id": "0199a4e8-22ce-7b01-bba5-333333333333",
+	}
+	responses := make(chan *httptest.ResponseRecorder, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			response := httptest.NewRecorder()
+			testHandler.CreateComment(response, withURLParam(newRequest(http.MethodPost, "/api/issues/"+f.issueID+"/comments", body), "id", f.issueID))
+			responses <- response
+		}()
+	}
+	receive := func() *httptest.ResponseRecorder {
+		select {
+		case response := <-responses:
+			return response
+		case <-ctx.Done():
+			t.Fatal("send did not finish")
+			return nil
+		}
+	}
+	// The twin answers with the saved comment while the first send still waits.
+	if twin := receive(); twin.Code != http.StatusOK {
+		t.Fatalf("twin: %d %s, want the saved comment (200)", twin.Code, twin.Body.String())
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if first := receive(); first.Code != http.StatusCreated {
+		t.Fatalf("first send: %d %s", first.Code, first.Body.String())
+	}
+	if n := dbfx.Count(t, `SELECT count(*) FROM comment WHERE issue_id = $1 AND content = 'concurrent retry once'`, f.issueID); n != 1 {
+		t.Fatalf("same request created %d comments, want 1", n)
+	}
+	completeTaskViaDaemon(t, f.taskID)
+	if n := dbfx.Count(t, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1`, f.issueID); n != 1 {
+		t.Fatalf("completion replayed a duplicate into %d runs, want 1", n)
+	}
+}
+
+func TestCompletionKeepsAnAgentTheAuthorChoseNotToStart(t *testing.T) {
+	f := newSupplementFixture(t, "codex", "running", true)
+	dbfx.Cleanup(t, `DELETE FROM agent_task_queue WHERE issue_id = $1`, f.issueID)
+	otherAgent, otherTask := runningSteerableTask(t, f, "Other recipient")
+	content := agentMention("A", f.agentID) + " and " + agentMention("B", otherAgent) + " only do this once"
+	dbfx.Exec(t, `UPDATE comment SET content = $2 WHERE id = $1`, f.triggerID, content)
+	dbfx.Exec(t, `UPDATE agent_task_queue SET trigger_comment_id = $2, comment_thread_id = $2, delivered_comment_ids = ARRAY[$2::uuid] WHERE id = $1`, otherTask, f.triggerID)
+	postSteeredComment(t, f.issueID, f.triggerID, content, f.taskID, otherTask).Want(http.StatusCreated)
+	// A missed it; B read it and is still working.
+	dbfx.Exec(t, `UPDATE agent_task_queue SET status = 'failed', completed_at = now() WHERE id = $1`, f.taskID)
+	dbfx.Exec(t, `UPDATE task_supplement SET status = 'failed' WHERE task_id = $1`, f.taskID)
+	dbfx.Exec(t, `UPDATE task_supplement SET status = 'delivered' WHERE task_id = $1`, otherTask)
+	// "Send as a new run" for A: the same text, not starting B.
+	body := map[string]any{"content": content, "parent_id": f.triggerID, "suppress_agent_ids": []string{otherAgent}}
+	testutil.Call(t, testHandler.CreateComment, withURLParam(
+		newRequest(http.MethodPost, "/api/issues/"+f.issueID+"/comments", body), "id", f.issueID)).Want(http.StatusCreated)
+	if n := dbfx.Count(t, `SELECT count(*) FROM agent_task_queue WHERE agent_id = $1`, otherAgent); n != 1 {
+		t.Fatalf("resend started another B run: %d", n)
+	}
+	completeTaskViaDaemon(t, otherTask)
+	if n := dbfx.Count(t, `SELECT count(*) FROM agent_task_queue WHERE agent_id = $1`, otherAgent); n != 1 {
+		t.Fatalf("B's completion replayed the resend into %d runs, want 1", n)
 	}
 }

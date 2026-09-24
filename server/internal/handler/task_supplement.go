@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -137,31 +138,39 @@ type commentSteer struct {
 	ClientRequestID pgtype.UUID
 }
 
-// replaySteeredComment answers a retried steering send whose first attempt
-// was saved but whose response was lost: the chosen turn already holds a
-// receipt for this request, so the original comment is returned as-is.
-func (h *Handler) replaySteeredComment(ctx context.Context, issue db.Issue, authorID pgtype.UUID, steer commentSteer) (CommentResponse, bool) {
-	if !steer.ClientRequestID.Valid {
-		return CommentResponse{}, false
+// commentForRequest finds the comment an author already saved for this
+// logical send, so a retry after a lost response never posts it twice —
+// whether that send steered a running turn or fell back to a normal trigger.
+func (h *Handler) commentForRequest(ctx context.Context, issue db.Issue, authorID, requestID pgtype.UUID) (db.Comment, bool) {
+	if !requestID.Valid {
+		return db.Comment{}, false
 	}
-	for _, taskID := range steer.TaskIDs {
-		existing, err := h.Queries.GetTaskSupplementByRequest(ctx, db.GetTaskSupplementByRequestParams{
-			TaskID: taskID, WorkspaceID: issue.WorkspaceID, AuthorID: authorID, ClientRequestID: steer.ClientRequestID,
-		})
-		if err != nil || existing.IssueID != issue.ID {
-			continue
-		}
-		comment, err := h.Queries.GetCommentInWorkspace(ctx, db.GetCommentInWorkspaceParams{
-			ID: existing.CommentID, WorkspaceID: issue.WorkspaceID,
-		})
-		if err != nil || comment.DeletedAt.Valid {
-			continue
-		}
-		resp := commentToResponse(comment, nil, nil)
-		applyCommentSupplements(&resp, h.listCommentSupplements(ctx, issue.WorkspaceID, []pgtype.UUID{comment.ID})[uuidToString(comment.ID)])
-		return resp, true
+	comment, err := h.Queries.GetCommentByClientRequest(ctx, db.GetCommentByClientRequestParams{
+		IssueID: issue.ID, AuthorID: authorID, ClientRequestID: requestID,
+	})
+	if err != nil {
+		return db.Comment{}, false
 	}
-	return CommentResponse{}, false
+	return comment, true
+}
+
+// writeReplayedComment answers a retried send with the comment it already
+// saved, as it stands now, including every receipt it holds.
+func (h *Handler) writeReplayedComment(ctx context.Context, w http.ResponseWriter, issue db.Issue, comment db.Comment) {
+	if comment.DeletedAt.Valid {
+		writeError(w, http.StatusConflict, "this message was already sent and then deleted")
+		return
+	}
+	resp := commentToResponse(comment, nil, nil)
+	applyCommentSupplements(&resp, h.listCommentSupplements(ctx, issue.WorkspaceID, []pgtype.UUID{comment.ID})[uuidToString(comment.ID)])
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// isCommentRequestConflict reports that a concurrent twin of this send saved
+// its comment first.
+func isCommentRequestConflict(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "comment_client_request_uidx"
 }
 
 // steerCommentAgentTriggers binds a member comment to the turn its author

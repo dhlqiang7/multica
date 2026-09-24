@@ -1495,8 +1495,8 @@ type CreateCommentRequest struct {
 	// has ended, or cannot take additional input, is never swapped for another
 	// one: its agent keeps the normal trigger.
 	SteerTaskIDs []string `json:"steer_task_ids"`
-	// ClientRequestID identifies one logical steering send, so a retry after
-	// a lost response returns the original comment instead of a second one.
+	// ClientRequestID identifies one logical send, so a retry after a lost
+	// response returns the original comment instead of posting a second one.
 	ClientRequestID *string `json:"client_request_id"`
 }
 
@@ -1795,8 +1795,8 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	if authorType != "member" {
 		steer = commentSteer{}
 	}
-	if replayed, ok := h.replaySteeredComment(r.Context(), issue, parseUUID(authorID), steer); ok {
-		writeJSON(w, http.StatusOK, replayed)
+	if existing, ok := h.commentForRequest(r.Context(), issue, parseUUID(authorID), steer.ClientRequestID); ok {
+		h.writeReplayedComment(r.Context(), w, issue, existing)
 		return
 	}
 
@@ -1911,6 +1911,11 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 		Type:         req.Type,
 		ParentID:     parentID,
 		SourceTaskID: sourceTaskID,
+		// The request and the author's "don't start" choices outlive this
+		// call: a retry replays the comment, and completion replay skips the
+		// agents it names.
+		ClientRequestID:    steer.ClientRequestID,
+		SuppressedAgentIds: suppressAgentIDs,
 	}
 	var created db.CreateCommentRow
 	var err error
@@ -1969,6 +1974,12 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 		// The issue was deleted, possibly while this waited for its row lock.
 		writeError(w, http.StatusNotFound, "issue not found")
 		return
+	}
+	if isCommentRequestConflict(err) {
+		if existing, ok := h.commentForRequest(r.Context(), issue, parseUUID(authorID), steer.ClientRequestID); ok {
+			h.writeReplayedComment(r.Context(), w, issue, existing)
+			return
+		}
 	}
 	if err != nil {
 		slog.Warn("create comment failed", append(logger.RequestAttrs(r), "error", err, "issue_id", issueID)...)
@@ -3625,6 +3636,13 @@ func (h *Handler) UpdateComment(w http.ResponseWriter, r *http.Request) {
 		}
 
 		h.retriggerCancelledTaskSurvivors(r.Context(), issue, cancelled, existing.ID)
+		// The edit's "don't start" choices replace the original ones, so
+		// completion replay follows what the edited comment asks for.
+		if err := h.Queries.SetCommentSuppressedAgents(r.Context(), db.SetCommentSuppressedAgentsParams{
+			ID: comment.ID, SuppressedAgentIds: suppressAgentIDs,
+		}); err != nil {
+			slog.Warn("record edited comment suppression failed", append(logger.RequestAttrs(r), "error", err, "comment_id", commentId)...)
+		}
 		return h.triggerTasksForComment(r.Context(), issue, comment, parentComment, actorType, actorID, h.invokeOriginatorFromRequest(r, actorType, actorID), suppressAgentIDs, commentSteer{})
 	}
 
