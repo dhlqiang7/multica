@@ -261,6 +261,9 @@ curl -s localhost:8080/api/config    # 含 "auth_mode":"password"
 | `server/migrations/545_user_password_hash.*.sql` | 密码列迁移 |
 | `packages/views/auth/selfhost-login.tsx` | 密码框组件 + 状态 hook（含 desktop 凭据取回/回写） |
 | `apps/desktop/src/main/selfhost-credentials.ts` | desktop 凭据加密存储（safeStorage + IPC，§14.2） |
+| `server/internal/handler/auth_selfhost_test.go` | 模式分发 13 case + 密码校验 5 case + 端到端 2 case |
+| `apps/desktop/src/main/selfhost-credentials.test.ts` | IPC 9 case（安全边界：不落明文/损坏回落 null） |
+| `packages/views/auth/selfhost-login.test.tsx` | hook 5 case（web 降级/桥接取回/回写） |
 | `docker/*selfhost*`、compose override、本文档 | 部署层 |
 
 **上游文件装配点（同步时可能冲突，机械可解）**：
@@ -310,3 +313,18 @@ password 模式下 desktop 免每次手输：Electron `safeStorage` 加密（Win
 ### 14.4 升级重编范围
 
 本轮仅动 desktop/web（views），server 零改动：web 需 `STANDALONE=true` 重编 + 镜像；desktop 按 §6 重打 Windows 包；服务端二进制与镜像不动。
+
+### 14.5 验收测试（改动后跑）
+
+```bash
+# 服务端：认证模式分发 + 密码校验 + 直登端到端
+cd server && go test ./internal/handler/ -run 'TestCurrentAuthMode|TestVerifyUserPassword|TestMaybeDirectLoginPasswordEndToEnd'
+# desktop：凭据 IPC（加密不可用/密文损坏等安全边界）
+cd apps/desktop && npx vitest run src/main/selfhost-credentials.test.ts
+# 前端：密码 hook 降级与桥接
+cd packages/views && npx vitest run auth/selfhost-login.test.tsx
+```
+
+全量回归：`go test ./internal/handler/`、`npx vitest run`（views 5478 / desktop 674 用例）。
+另有两处既有测试随 selfhost 装配点同步适配：`login-page.test.tsx` sendCode
+第二可选参、`updater-preferences.test.ts` 默认值反转（同步上游冲突时一并处理）。

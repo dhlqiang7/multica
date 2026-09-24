@@ -187,7 +187,8 @@ describe("LoginPage", () => {
     await user.type(screen.getByLabelText(/email/i), "test@example.com");
     await user.click(screen.getByRole("button", { name: /continue/i }));
 
-    expect(mockSendCode).toHaveBeenCalledWith("test@example.com");
+    // selfhost：sendCode 第二参为可选密码（非 password 模式传 undefined）
+    expect(mockSendCode).toHaveBeenCalledWith("test@example.com", undefined);
   });
 
   it("shows 'Sending code...' while submitting", async () => {
