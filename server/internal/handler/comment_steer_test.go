@@ -151,28 +151,24 @@ func TestCreateCommentSteersOnlyRunningRecipients(t *testing.T) {
 	}
 }
 
-func TestCreateCommentSteersSeveralRunningTurns(t *testing.T) {
+func TestCreateCommentSteersOneRunningTurnPerComment(t *testing.T) {
 	f := newSupplementFixture(t, "codex", "running", true)
+	dbfx.Cleanup(t, `DELETE FROM agent_task_queue WHERE issue_id = $1`, f.issueID)
 	otherAgentID, otherTaskID := runningSteerableTask(t, f, "Second runner")
 	content := agentMention("Supplement", f.agentID) + " and " + agentMention("Second runner", otherAgentID) + " stop touching desktop"
 
 	var created CommentResponse
 	postSteeredComment(t, f.issueID, "", content, f.taskID, otherTaskID).Want(http.StatusCreated).JSON(&created)
-	got := map[string]string{}
-	for _, receipt := range created.Supplements {
-		got[receipt.AgentID] = receipt.TaskID
+	if len(created.Supplements) != 1 || created.Supplements[0].TaskID != f.taskID {
+		t.Fatalf("receipts = %+v, want the first chosen turn only", created.Supplements)
 	}
-	if len(created.Supplements) != 2 || got[f.agentID] != f.taskID || got[otherAgentID] != otherTaskID {
-		t.Fatalf("receipts = %+v, want one per running turn", created.Supplements)
+	// Servers from before per-run receipts may still claim; the second
+	// recipient takes the comment as a normal trigger instead.
+	if outcome, ok := outcomeFor(created.TriggerOutcomes, otherAgentID); !ok || outcome.Status == DispatchSteered || outcome.Status == DispatchBlocked {
+		t.Fatalf("second recipient outcome = %+v (%v), want a normal trigger", outcome, ok)
 	}
-
-	var timeline []TimelineEntry
-	testutil.Call(t, testHandler.ListTimeline, withURLParam(
-		newRequest(http.MethodGet, "/api/issues/"+f.issueID+"/timeline", nil), "id", f.issueID)).Want(http.StatusOK).JSON(&timeline)
-	for _, entry := range timeline {
-		if entry.ID == created.ID && len(entry.Supplements) != 2 {
-			t.Fatalf("timeline receipts = %+v, want both runs", entry.Supplements)
-		}
+	if n := dbfx.Count(t, `SELECT count(*) FROM task_supplement WHERE task_id = $1`, otherTaskID); n != 0 {
+		t.Fatalf("second turn holds %d receipts, want none", n)
 	}
 }
 
@@ -344,20 +340,42 @@ func TestCompletionKeepsAnAgentTheAuthorChoseNotToStart(t *testing.T) {
 	content := agentMention("A", f.agentID) + " and " + agentMention("B", otherAgent) + " only do this once"
 	dbfx.Exec(t, `UPDATE comment SET content = $2 WHERE id = $1`, f.triggerID, content)
 	dbfx.Exec(t, `UPDATE agent_task_queue SET trigger_comment_id = $2, comment_thread_id = $2, delivered_comment_ids = ARRAY[$2::uuid] WHERE id = $1`, otherTask, f.triggerID)
-	postSteeredComment(t, f.issueID, f.triggerID, content, f.taskID, otherTask).Want(http.StatusCreated)
-	// A missed it; B read it and is still working.
-	dbfx.Exec(t, `UPDATE agent_task_queue SET status = 'failed', completed_at = now() WHERE id = $1`, f.taskID)
-	dbfx.Exec(t, `UPDATE task_supplement SET status = 'failed' WHERE task_id = $1`, f.taskID)
-	dbfx.Exec(t, `UPDATE task_supplement SET status = 'delivered' WHERE task_id = $1`, otherTask)
-	// "Send as a new run" for A: the same text, not starting B.
+	// B is working in this thread; the reply goes to A only ("Won't start
+	// this time" for B, or "Send as a new run" for a receipt A missed).
 	body := map[string]any{"content": content, "parent_id": f.triggerID, "suppress_agent_ids": []string{otherAgent}}
 	testutil.Call(t, testHandler.CreateComment, withURLParam(
 		newRequest(http.MethodPost, "/api/issues/"+f.issueID+"/comments", body), "id", f.issueID)).Want(http.StatusCreated)
 	if n := dbfx.Count(t, `SELECT count(*) FROM agent_task_queue WHERE agent_id = $1`, otherAgent); n != 1 {
-		t.Fatalf("resend started another B run: %d", n)
+		t.Fatalf("the reply started another B run: %d", n)
 	}
 	completeTaskViaDaemon(t, otherTask)
 	if n := dbfx.Count(t, `SELECT count(*) FROM agent_task_queue WHERE agent_id = $1`, otherAgent); n != 1 {
-		t.Fatalf("B's completion replayed the resend into %d runs, want 1", n)
+		t.Fatalf("B's completion replayed the reply into %d runs, want 1", n)
+	}
+}
+
+func TestCreateCommentSteerIgnoresATurnOfAnotherIssue(t *testing.T) {
+	f := newSupplementFixture(t, "codex", "running", true)
+	dbfx.Cleanup(t, `DELETE FROM agent_task_queue WHERE issue_id = $1`, f.issueID)
+	// The same agent is also running on another issue.
+	otherIssueID := dbfx.Issue(t, "Another issue")
+	elsewhere := dbfx.Task(t, f.agentID, testutil.Cols{
+		"issue_id": otherIssueID, "runtime_id": f.runtimeID, "status": "running", "started_at": testutil.Raw("now()"),
+	})
+	dbfx.Exec(t, `INSERT INTO task_supplement_capability (task_id, workspace_id, issue_id, capability) VALUES ($1, $2, $3, $4)`,
+		elsewhere, testWorkspaceID, otherIssueID, protocol.DaemonCapabilityTaskSupplementV1)
+	dbfx.Cleanup(t, `DELETE FROM task_supplement_capability WHERE task_id = $1`, elsewhere)
+	content := agentMention("Supplement", f.agentID) + " only web"
+
+	var created CommentResponse
+	postSteeredComment(t, f.issueID, "", content, elsewhere).Want(http.StatusCreated).JSON(&created)
+	if len(created.Supplements) != 0 {
+		t.Fatalf("receipts = %+v, want none for a turn of another issue", created.Supplements)
+	}
+	if n := dbfx.Count(t, `SELECT count(*) FROM task_supplement WHERE task_id = $1`, elsewhere); n != 0 {
+		t.Fatalf("another issue's turn received %d messages", n)
+	}
+	if outcome, ok := outcomeFor(created.TriggerOutcomes, f.agentID); !ok || outcome.Status == DispatchSteered {
+		t.Fatalf("recipient outcome = %+v (%v), want its normal trigger", outcome, ok)
 	}
 }

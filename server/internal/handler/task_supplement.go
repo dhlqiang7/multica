@@ -202,7 +202,12 @@ func (h *Handler) steerCommentAgentTriggers(ctx context.Context, issue db.Issue,
 	for _, trigger := range triggers {
 		agentID := uuidToString(trigger.Agent.ID)
 		taskID, ok := chosen[agentID]
-		if !ok {
+		// One comment steers at most one turn until every server claims
+		// receipts per (comment, run): a server from before that claims all of
+		// a comment's receipts at once, which would mark a second turn's copy
+		// in flight without delivering it. Later recipients keep their normal
+		// trigger meanwhile.
+		if !ok || len(steered) > 0 {
 			kept = append(kept, trigger)
 			continue
 		}
