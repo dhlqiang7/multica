@@ -101,6 +101,13 @@ function subscribeToMainRendererChannel<T>(
 }
 
 const desktopAPI = {
+  // selfhost：password 模式凭据保存（main/selfhost-credentials.ts）
+  selfhost: {
+    getCredentials: (): Promise<{ email: string; password: string } | null> =>
+      ipcRenderer.invoke("selfhost:credentials:get"),
+    saveCredentials: (email: string, password: string): Promise<void> =>
+      ipcRenderer.invoke("selfhost:credentials:set", email, password),
+  },
   /** App version + normalized OS. Read once at preload time so the renderer
    *  can use it synchronously when initializing the API client. */
   appInfo,

@@ -200,6 +200,8 @@ export function LoginPage({
           // 无码直登：凭据已落地。CLI 授权场景用 cookie 会话换 bearer
           // 回调本地 listener；普通场景与 handleVerify 收尾一致——
           // seed workspace 列表后交给 onSuccess 决定去向。
+          // selfhost：验证通过即回写本地加密存储（覆盖式，保持与服务端一致）
+          selfhostPw.persist(email, selfhostPw.password);
           if (cliCallback) {
             const { token } = await api.issueCliToken();
             onTokenObtained?.();
@@ -227,6 +229,27 @@ export function LoginPage({
     },
     [email, t, selfhostPw, cliCallback, onTokenObtained, onSuccess, qc],
   );
+
+  // selfhost：desktop 从本地加密存储恢复了凭据 → 预填邮箱并自动登录
+  // 一次（失败显示 401 信息，不重试；用户可改密手动重登）
+  const selfhostAutoLoginRef = useRef(false);
+  useEffect(() => {
+    const saved = selfhostPw.saved;
+    if (!saved) return;
+    if (!email) {
+      setEmail(saved.email);
+      return;
+    }
+    if (
+      !selfhostAutoLoginRef.current &&
+      email === saved.email &&
+      selfhostPw.password === saved.password &&
+      !loading
+    ) {
+      selfhostAutoLoginRef.current = true;
+      void handleSendCode();
+    }
+  }, [selfhostPw.saved, selfhostPw.password, email, loading, handleSendCode]);
 
   const handleVerify = useCallback(
     async (value: string) => {

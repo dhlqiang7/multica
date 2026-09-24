@@ -259,16 +259,20 @@ curl -s localhost:8080/api/config    # 含 "auth_mode":"password"
 | `server/cmd/multica/cmd_user_password.go` | `user set-password` 子命令（init() 自挂载） |
 | `server/pkg/db/queries/user_selfhost.sql` | SetUserPasswordHash（sqlc 独立生成文件） |
 | `server/migrations/545_user_password_hash.*.sql` | 密码列迁移 |
-| `packages/views/auth/selfhost-login.tsx` | 密码框组件 + 状态 hook |
+| `packages/views/auth/selfhost-login.tsx` | 密码框组件 + 状态 hook（含 desktop 凭据取回/回写） |
+| `apps/desktop/src/main/selfhost-credentials.ts` | desktop 凭据加密存储（safeStorage + IPC，§14.2） |
 | `docker/*selfhost*`、compose override、本文档 | 部署层 |
 
 **上游文件装配点（同步时可能冲突，机械可解）**：
 - `server/internal/handler/auth.go`：SendCodeRequest.Password 字段 + SendCode 内 1 处 `maybeDirectLogin` 调用（共 ~9 行）
 - `server/internal/handler/config.go`：auth_mode 字段下发（~8 行）
 - `packages/core/*` 5 文件：类型/签名扩展（sendCode 可选参、authMode 状态、schema 字段）
-- `packages/views/auth/login-page.tsx`：~40 行装配（import + hook + direct 分支 + 密码框挂载）
+- `packages/views/auth/login-page.tsx`：~65 行装配（import + hook + direct 分支 + 密码框挂载 + 凭据预填/自动登录/回写）
 - 5 语言 `locales/*/auth.json`：password_label/password_required 2 键
 - `server/go.mod/go.sum`：bcrypt 依赖
+- `apps/desktop/src/main/index.ts`：import + `registerSelfhostCredentialsHandlers()` 调用（2 行）
+- `apps/desktop/src/preload/index.ts`：desktopAPI.selfhost 桥接（~8 行）
+- `apps/desktop/src/main/updater-preferences.ts` + `updater.test.ts`：自动更新默认 false（1 行 + 对应测试断言反转）
 
 同步流程：
 ```bash
@@ -277,3 +281,32 @@ git fetch origin && git rebase origin/main   # 或 merge
 make sqlc                                     # 迁移/查询变化后重新生成
 # 然后按 §3-§5 重新编译部署
 ```
+
+## 14. OpenClaude runtime / desktop 凭据保存 / 默认关自动更新（2026-09-24）
+
+### 14.1 OpenClaude 作为 agent runtime（零代码，纯配置）
+
+上游 daemon 对 builtin `claude` runtime 硬校验版本 ≥2.0.0（`server/pkg/agent/version.go` MinVersions），OpenClaude 是 0.x 版本线 fork，注册被 skip。**不改编译产物**，用上游官方的自定义 runtime profile 机制绕过（probe 失败也注册 online，不走 min 校验，daemon.go registerCustomRuntimeProfiles）：
+
+1. 建 profile（workspace 级，走 API；`runtime_type=claude` 让 spawn 走 claude.go 命令行）：
+   ```bash
+   curl -X POST localhost:8080/api/workspaces/<ws-id>/runtime-profiles \
+     -H "Authorization: Bearer <token>" -H 'Content-Type: application/json' \
+     -d '{"display_name":"OpenClaude","runtime_type":"claude","command_name":"claude","enabled":true}'
+   ```
+   daemon 感知 profile 变更自动 re-register（MUL-3332），免重启。UI 路径：workspace 设置 → Runtime Profiles。
+2. **root 陷阱**：daemon 以 root 跑，OpenClaude 拒绝 root 下使用 `--permission-mode bypassPermissions`（`cannot be used with root/sudo privileges`）。放行需声明沙箱：systemd unit `/etc/systemd/system/multica-daemon.service` 加 `Environment=CLAUDE_CODE_BUBBLEWRAP=1` 后 `daemon-reload && restart`。pi/codex 不读此变量，无副作用。
+3. 兼容性实测（spawn 确切命令行 `-p --output-format stream-json --input-format stream-json --verbose --permission-mode bypassPermissions --disallowedTools AskUserQuestion`，stdin 保持打开）：事件流 `system→assistant→result`，`result.subtype=success`。`--effort/--strict-mcp-config/--settings/--resume/--max-turns` 均在 `claude --help` 确认支持。
+
+### 14.2 desktop 本地加密保存登录密码
+
+password 模式下 desktop 免每次手输：Electron `safeStorage` 加密（Windows=DPAPI），密文写 `userData/selfhost-credentials.json`（tmp+rename 原子写）。链路：主进程 `selfhost-credentials.ts`（IPC `selfhost:credentials:get|set`，加密不可用即拒绝保存/返回空，绝不落明文）→ preload `desktopAPI.selfhost` → `selfhost-login.tsx` hook 启动取回 → 登录页预填 email+password 并自动登录一次（ref 防重，失败显示 401 不循环）→ 直登成功后回写（覆盖式）。web 端无 `desktopAPI` 桥接，自动降级手输，零影响。
+
+### 14.3 默认关闭自动更新（自编译产物）
+
+- desktop：`updater-preferences.ts` 默认 `automaticUpdates: false`（自编译版本号与官方 release 无对应关系，自动比对会误判甚至下载官方包）。用户仍可在设置里手动开。
+- daemon：`multica config set disable_auto_update true`（已执行，防上游未来改默认）。
+
+### 14.4 升级重编范围
+
+本轮仅动 desktop/web（views），server 零改动：web 需 `STANDALONE=true` 重编 + 镜像；desktop 按 §6 重打 Windows 包；服务端二进制与镜像不动。

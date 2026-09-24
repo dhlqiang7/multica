@@ -175,15 +175,16 @@ describe("setupAutoUpdater", () => {
     rmSync(ctx.userDataPath, { recursive: true, force: true });
   });
 
-  it("enables automatic background updates by default", async () => {
+  // selfhost：默认关闭自动更新（自编译构建，见 updater-preferences.ts）
+  it("disables automatic background updates by default", async () => {
     setupAutoUpdater(() => null);
 
     await expect(invokeIpc("updater:get-preferences")).resolves.toEqual({
-      automaticUpdates: true,
+      automaticUpdates: false,
     });
 
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(ctx.checkForUpdates).toHaveBeenCalledTimes(1);
+    expect(ctx.checkForUpdates).not.toHaveBeenCalled();
   });
 
   it("skips startup and periodic checks when automatic updates are disabled", async () => {

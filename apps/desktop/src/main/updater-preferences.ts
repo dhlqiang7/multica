@@ -2,8 +2,11 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { UpdaterPreferences } from "../shared/updater-types";
 
+// selfhost：默认关闭自动更新——自编译客户端与官方 release 无签名/版本
+// 对应关系，自动比对只会误判（可能下载官方安装包）。上游同步冲突点，
+// 见 BUILD-SELFHOST.md §13。
 export const DEFAULT_UPDATER_PREFERENCES: UpdaterPreferences = {
-  automaticUpdates: true,
+  automaticUpdates: false,
 };
 
 export function updaterPreferencesPath(userDataPath: string): string {

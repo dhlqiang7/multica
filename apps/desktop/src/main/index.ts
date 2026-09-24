@@ -6,6 +6,8 @@ import { electronApp, optimizer, is } from "@electron-toolkit/utils";
 import fixPath from "fix-path";
 import { setupAutoUpdater } from "./updater";
 import { setupDaemonManager } from "./daemon-manager";
+// selfhost：password 模式凭据保存（独立模块，见 BUILD-SELFHOST.md §13）
+import { registerSelfhostCredentialsHandlers } from "./selfhost-credentials";
 import { setupLocalDirectory } from "./local-directory";
 import { openExternalSafely, downloadURLSafely } from "./external-url";
 import { installContextMenu } from "./context-menu";
@@ -841,6 +843,8 @@ if (!gotTheLock) {
     setupAutoUpdater(() => mainWindow);
     setupDaemonManager(() => mainWindow);
     setupLocalDirectory(() => mainWindow);
+    // selfhost：password 模式凭据保存 IPC（见 selfhost-credentials.ts）
+    registerSelfhostCredentialsHandlers();
 
     app.on("activate", () => {
       const window = ensureMainWindow();
