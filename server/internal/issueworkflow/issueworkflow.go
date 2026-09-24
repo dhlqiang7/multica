@@ -388,7 +388,11 @@ func Brief(in BriefInput) string {
 	}
 	b.WriteString("\nThis project's statuses (use only these keys):\n")
 	for _, s := range in.Workflow.Steps {
-		fmt.Fprintf(&b, "- `%s` %s", s.StatusKey, name(s.StatusKey))
+		// Built-in statuses have no stored name; their key reads on its own.
+		fmt.Fprintf(&b, "- `%s`", s.StatusKey)
+		if n := name(s.StatusKey); n != s.StatusKey {
+			fmt.Fprintf(&b, " %s", n)
+		}
 		if in.HandlerName != nil {
 			if who := in.HandlerName(s); who != "" {
 				fmt.Fprintf(&b, " — hands off to %s", who)

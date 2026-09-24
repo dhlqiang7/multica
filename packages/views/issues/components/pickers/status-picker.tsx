@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { CircleEqual } from "lucide-react";
+import { ArrowRight, CircleEqual } from "lucide-react";
 import type { IssueStatus, UpdateIssueRequest } from "@multica/core/types";
 import { STATUS_CONFIG } from "@multica/core/issues/config";
 import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
@@ -110,7 +110,8 @@ export function StatusPicker({
         if (!v) setQuery("");
         setOpen(v);
       }}
-      width="w-52"
+      // Handoff hints need room beside the status name. (MUL-7420)
+      width={workflow ? "w-72" : "w-52"}
       align={align}
       triggerRender={triggerRender}
       searchable={searchable}
@@ -172,7 +173,7 @@ export function StatusPicker({
             icon={option.icon}
             className="h-3.5 w-3.5"
           />
-          <span className="truncate">{option.label}</span>
+          <span className="min-w-12 truncate">{option.label}</span>
           {workflow && <StepHandoffHint step={workflowStep(workflow, option.key)} project={project} />}
         </PickerItem>
       ))}
@@ -187,8 +188,10 @@ function StepHandoffHint({ step, project }: { step: IssueWorkflowStep | undefine
   const handler = handlerLabel(step);
   if (!handler) return null;
   return (
-    <span className="ml-auto max-w-28 shrink-0 truncate pl-2 text-caption text-muted-foreground">
-      {t(($) => $.workflows.hands_off_to, { name: handler })}
+    <span className="ml-auto flex min-w-0 max-w-[55%] items-center gap-1 text-caption text-muted-foreground">
+      <span className="sr-only">{t(($) => $.workflows.hands_off_to, { name: handler })}</span>
+      <ArrowRight aria-hidden className="size-3 shrink-0" />
+      <span aria-hidden className="truncate">{handler}</span>
     </span>
   );
 }

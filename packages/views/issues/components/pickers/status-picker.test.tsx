@@ -206,7 +206,8 @@ describe("StatusPicker in a project that uses a workflow", () => {
     const rows = Array.from(document.querySelectorAll("button[data-picker-item]")).map(
       (el) => el.textContent?.trim(),
     );
-    expect(rows).toEqual(["Todo", "QAHands off to Sentinel", "Done"]);
+    expect(rows).toEqual(["Todo", "QAHands off to SentinelSentinel", "Done"]);
+    expect(screen.getByText("Hands off to Sentinel").className).toContain("sr-only");
     expect(screen.queryByText("In Review")).toBeNull();
   });
 

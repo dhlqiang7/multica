@@ -166,6 +166,7 @@ func TestBriefNamesStepCommandsAndHandlers(t *testing.T) {
 		`"Code review" step of this project's workflow "Delivery"`,
 		"- `implement` Implement — hands off to Forge",
 		"- `code_review` Code review — hands off to Lin (project lead) (current step)",
+		"- `done` Done\n",
 		"Step done: `multica issue status MUL-7 done`",
 		"Needs changes: `multica issue status MUL-7 implement`",
 	} {
@@ -175,5 +176,19 @@ func TestBriefNamesStepCommandsAndHandlers(t *testing.T) {
 	}
 	if strings.Contains(brief, "Cannot proceed") {
 		t.Fatalf("brief offers blocked, which this workflow does not list:\n%s", brief)
+	}
+}
+
+func TestBriefPrintsBuiltInKeysOnce(t *testing.T) {
+	def := Definition{Name: "Flow", InitialStatusKey: "todo", Steps: []Step{{StatusKey: "todo"}, {StatusKey: "in_review", Handler: Handler{Type: HandlerProjectLead}}}}
+	brief := Brief(BriefInput{
+		Workflow:        def,
+		StatusKey:       "in_review",
+		IssueIdentifier: "MUL-1",
+		// Built-ins resolve to no stored name.
+		StatusName: func(string) string { return "" },
+	})
+	if !strings.Contains(brief, "- `todo`\n") || strings.Contains(brief, "`todo` todo") {
+		t.Fatalf("a built-in step should print its key once:\n%s", brief)
 	}
 }
