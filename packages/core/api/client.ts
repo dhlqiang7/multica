@@ -956,15 +956,19 @@ export class ApiClient {
   }
 
   // Auth
-  // 无码直登模式（MULTICA_AUTH_PASSWORDLESS）下后端在 send-code 响应中
-  // 直接返回 LoginResponse（含 token）；常规模式为纯消息响应，此时返回
-  // undefined，调用方按原流程进入输码页。
-  async sendCode(email: string): Promise<LoginResponse | undefined> {
+  // 直登模式（MULTICA_AUTH_MODE=passwordless/password）下后端在 send-code
+  // 响应中直接返回 LoginResponse（含 token）；常规验证码模式为纯消息
+  // 响应，此时返回 undefined，调用方按原流程进入输码页。
+  // password 模式第二参携带固定密码，其余模式忽略。
+  async sendCode(
+    email: string,
+    password?: string,
+  ): Promise<LoginResponse | undefined> {
     const res = await this.fetch<LoginResponse | { message: string }>(
       "/auth/send-code",
       {
         method: "POST",
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, password }),
       },
     );
     return res && "token" in res ? (res as LoginResponse) : undefined;

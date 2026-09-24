@@ -207,3 +207,43 @@ MULTICA_AUTH_PASSWORDLESS=true
 curl -s -X POST localhost:8080/auth/send-code -H 'Content-Type: application/json' \
   -d '{"email":"root@localhost"}'          # 应直接返回 {"token":"...","user":{...}}
 ```
+
+## 12. 固定密码登录（MULTICA_AUTH_MODE=password）
+
+§11 的无码直登完全信任网络层；若端口暴露面更大（如 LAN 转发），可切换为
+**邮箱 + 固定密码**：密码由 CLI 生成（16 字节随机 → base64 22 字符），
+bcrypt 哈希入库，明文仅在生成时输出一次。三个模式统一入口：
+
+```bash
+MULTICA_AUTH_MODE=code          # 官方默认：邮箱验证码
+MULTICA_AUTH_MODE=passwordless  # §11 无码直登（等价旧 MULTICA_AUTH_PASSWORDLESS=true）
+MULTICA_AUTH_MODE=password      # 固定密码（本节）；生产环境强制回落 code
+```
+
+| 改动点 | 文件 | 内容 |
+|---|---|---|
+| 迁移 | `server/migrations/545_user_password_hash.{up,down}.sql` | `"user"` 表新增 `password_hash TEXT` |
+| SQL | `server/pkg/db/queries/user.sql` | `SetUserPasswordHash`（`sqlc.arg` 具名参数，NULLIF 空串→NULL） |
+| 后端 | `server/internal/handler/auth.go` | `currentAuthMode()` 分发；password 分支 verifyUserPassword（bcrypt 比对）→ issueAndRespond 直登；错误一律 401 `invalid email or password`（防账号枚举） |
+| 配置 | `server/internal/handler/config.go` | `/api/config` 增 `auth_mode` 字段（仅非 code 时下发） |
+| CLI | `server/cmd/multica/cmd_user.go` | `multica user set-password <email>`：随机密码生成 + bcrypt 入库，明文仅输出一次，重复执行覆盖 |
+| 前端 | `packages/core/{api/schemas.ts,api/client.ts,config/index.ts,platform/auth-initializer.tsx}`、`packages/views/auth/login-page.tsx`、5 语言 `locales/*/auth.json` | 配置 store 增 `authMode`；登录页按 `password` 模式渲染密码框，`sendCode` 携带密码参数 |
+
+配置（`.env`）：`APP_ENV=development` + `MULTICA_AUTH_MODE=password`
+（同样依赖 prebuilt override 透传，见 §11 注意）。
+
+生成/重置密码——宿主机 5432 不通（postgres 未发布端口），在 backend 容器内执行：
+```bash
+docker exec -w /app multica-backend-1 ./multica user set-password root@localhost
+# email:    root@localhost
+# password: <22字符随机密码>   ← 明文仅此一次
+```
+
+验证：
+```bash
+# 正确密码 → {"token":"...","user":{...}}
+curl -s -X POST localhost:8080/auth/send-code -H 'Content-Type: application/json' \
+  -d '{"email":"root@localhost","password":"<密码>"}'
+# 错误/缺失密码 → 401 {"error":"invalid email or password"}
+curl -s localhost:8080/api/config    # 含 "auth_mode":"password"
+```

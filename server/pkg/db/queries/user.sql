@@ -85,3 +85,12 @@ UPDATE "user" SET
     updated_at = now()
 WHERE id = $1
 RETURNING *;
+
+-- name: SetUserPasswordHash :execrows
+-- 固定密码登录模式（MULTICA_AUTH_MODE=password）：写入/清除 bcrypt 哈希。
+-- 空字符串表示清除密码（该账号退回不可用密码登录）。
+-- sqlc.arg + ::text 注解：NULLIF 表达式下 sqlc 无法推断参数类型。
+UPDATE "user" SET
+    password_hash = NULLIF(sqlc.arg('password_hash')::text, ''),
+    updated_at = now()
+WHERE email = sqlc.arg('email');

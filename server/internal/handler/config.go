@@ -25,6 +25,10 @@ type AppConfig struct {
 	// toggle signup or wire Google OAuth.
 	AllowSignup    bool   `json:"allow_signup"`
 	GoogleClientID string `json:"google_client_id,omitempty"`
+	// AuthMode 告知前端登录形态：passwordless（仅邮箱框，输完即登录）/
+	// password（邮箱+固定密码框）。省略 = code（上游原生验证码流程），
+	// 老前端不受影响。production 服务器恒为省略。
+	AuthMode string `json:"auth_mode,omitempty"`
 	// WorkspaceCreationDisabled mirrors the server-side
 	// DISABLE_WORKSPACE_CREATION env var so the UI can hide every
 	// "Create workspace" affordance on self-hosted instances. Omitted
@@ -117,6 +121,10 @@ func (h *Handler) GetConfig(w http.ResponseWriter, r *http.Request) {
 		AllowSignup:                        os.Getenv("ALLOW_SIGNUP") != "false",
 		GoogleClientID:                     os.Getenv("GOOGLE_CLIENT_ID"),
 		WorkspaceCreationDisabled:          os.Getenv("DISABLE_WORKSPACE_CREATION") == "true",
+	}
+	// code 模式省略字段，保持与上游响应形状一致
+	if m := currentAuthMode(); m != authModeCode {
+		config.AuthMode = string(m)
 	}
 	if h.Storage != nil {
 		config.CdnDomain = h.Storage.CdnDomain()

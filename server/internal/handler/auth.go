@@ -20,6 +20,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"golang.org/x/crypto/bcrypt"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/logger"
@@ -51,6 +52,37 @@ const devVerificationCodeEnv = "MULTICA_DEV_VERIFICATION_CODE"
 
 // 无码直登环境变量开关（见 isPasswordlessAuth）
 const passwordlessAuthEnv = "MULTICA_AUTH_PASSWORDLESS"
+
+// 认证模式总开关：code（默认，上游原生验证码）/ passwordless（输邮箱即
+// 登录）/ password（固定密码，用 `multica user set-password` 生成）。
+// 与 MULTICA_AUTH_PASSWORDLESS 的关系：AUTH_MODE 显式取值优先；未设时
+// 旧开关 =true 等价 passwordless（兼容期）。production 下一律回退 code。
+const authModeEnv = "MULTICA_AUTH_MODE"
+
+type authMode string
+
+const (
+	authModeCode         authMode = "code"
+	authModePasswordless authMode = "passwordless"
+	authModePassword     authMode = "password"
+)
+
+func currentAuthMode() authMode {
+	if isProductionEnv() {
+		return authModeCode
+	}
+	switch authMode(strings.ToLower(strings.TrimSpace(os.Getenv(authModeEnv)))) {
+	case authModePasswordless:
+		return authModePasswordless
+	case authModePassword:
+		return authModePassword
+	default:
+		if strings.EqualFold(strings.TrimSpace(os.Getenv(passwordlessAuthEnv)), "true") {
+			return authModePasswordless
+		}
+		return authModeCode
+	}
+}
 
 // supportedLanguages mirrors `SUPPORTED_LOCALES` in packages/core/i18n/types.ts.
 // Keep both lists in sync when adding a locale — the user-controlled `language`
@@ -117,6 +149,9 @@ type LoginResponse struct {
 
 type SendCodeRequest struct {
 	Email string `json:"email"`
+	// 密码模式（MULTICA_AUTH_MODE=password）下携带固定密码。
+	// 其余模式下忽略，保持旧请求体兼容。
+	Password string `json:"password,omitempty"`
 }
 
 type VerifyCodeRequest struct {
@@ -144,16 +179,6 @@ func isDevVerificationCode(code string) bool {
 	}
 
 	return subtle.ConstantTimeCompare([]byte(code), []byte(devCode)) == 1
-}
-
-// 无码直登开关：仅显式置 true 且非 production 时生效。
-// 面向本地自部署（服务端口只绑 127.0.0.1、经 SSH 隧道访问）的场景——
-// 隧道本身即鉴权层，应用层输邮箱即登录，跳过验证码。
-func isPasswordlessAuth() bool {
-	if isProductionEnv() {
-		return false
-	}
-	return strings.EqualFold(strings.TrimSpace(os.Getenv(passwordlessAuthEnv)), "true")
 }
 
 func isProductionEnv() bool {
@@ -374,51 +399,30 @@ func (h *Handler) SendCode(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 无码直登（MULTICA_AUTH_PASSWORDLESS=true 且非 production）：
-	// signup 资格检查已在上方完成，此处直接按邮箱登录/建号并签发 JWT，
-	// 跳过验证码、邮件与 60s 限流。响应与 VerifyCode 成功响应同构，
-	// 前端识别到 token 字段即直接完成登录，不再进入输码页。
-	if isPasswordlessAuth() {
+	// 非验证码认证模式分派（production 下 currentAuthMode 恒为 code，
+	// 不会进入此块）。signup 资格检查已在上方完成。两种模式的响应均与
+	// VerifyCode 成功响应同构，前端识别 token 字段即直接完成登录。
+	switch currentAuthMode() {
+	case authModePasswordless:
+		// 无码直登：输邮箱即登录（隧道即鉴权层的本地场景）。
 		user, isNew, err := h.findOrCreateUser(r.Context(), email)
 		if err != nil {
-			if errors.Is(err, auth.ErrTemporarilyDisabledUser) {
-				writeError(w, http.StatusForbidden, auth.TemporarilyDisabledUserError)
-				return
-			}
-			var signupErr SignupError
-			if errors.As(err, &signupErr) {
-				writeError(w, http.StatusForbidden, signupErr.Error())
-				return
-			}
-			slog.Warn("passwordless login user lookup failed", append(logger.RequestAttrs(r), "error", err, "email", email)...)
-			writeError(w, http.StatusInternalServerError, "failed to create user")
+			h.writeDirectLoginError(w, r, err, email, "find_user")
 			return
 		}
 		if isNew {
 			obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.Signup(uuidToString(user.ID), user.Email, signupSourceFromRequest(r)))
 		}
-
-		tokenString, err := h.issueJWT(user)
-		if err != nil {
-			if errors.Is(err, auth.ErrTemporarilyDisabledUser) {
-				writeError(w, http.StatusForbidden, auth.TemporarilyDisabledUserError)
-				return
-			}
-			slog.Warn("passwordless login failed", append(logger.RequestAttrs(r), "error", err, "email", email)...)
-			writeError(w, http.StatusInternalServerError, "failed to generate token")
+		h.issueAndRespond(w, r, user, "passwordless")
+		return
+	case authModePassword:
+		// 固定密码：bcrypt 校验通过后直登。不自动建号——凭据必须先由
+		// 管理员用 `multica user set-password` 配置。
+		user, ok := h.verifyUserPassword(w, r, email, req.Password)
+		if !ok {
 			return
 		}
-
-		// 与 VerifyCode 一致：HttpOnly auth cookie + CSRF cookie。
-		if err := auth.SetAuthCookies(w, tokenString); err != nil {
-			slog.Warn("failed to set auth cookies", "error", err)
-		}
-
-		slog.Info("user logged in (passwordless)", append(logger.RequestAttrs(r), "user_id", uuidToString(user.ID), "email", user.Email)...)
-		writeJSON(w, http.StatusOK, LoginResponse{
-			Token: tokenString,
-			User:  h.userToResponse(user),
-		})
+		h.issueAndRespond(w, r, user, "password")
 		return
 	}
 
@@ -455,6 +459,67 @@ func (h *Handler) SendCode(w http.ResponseWriter, r *http.Request) {
 	_ = h.Queries.DeleteExpiredVerificationCodes(r.Context())
 
 	writeJSON(w, http.StatusOK, map[string]string{"message": "Verification code sent"})
+}
+
+// writeDirectLoginError 统一翻译直登路径上 findOrCreateUser/issueJWT 的
+// 错误（临时禁用 / signup 资格 / 内部错误），stage 用于日志定位。
+func (h *Handler) writeDirectLoginError(w http.ResponseWriter, r *http.Request, err error, email, stage string) {
+	if errors.Is(err, auth.ErrTemporarilyDisabledUser) {
+		writeError(w, http.StatusForbidden, auth.TemporarilyDisabledUserError)
+		return
+	}
+	var signupErr SignupError
+	if errors.As(err, &signupErr) {
+		writeError(w, http.StatusForbidden, signupErr.Error())
+		return
+	}
+	slog.Warn("direct login failed", append(logger.RequestAttrs(r), "error", err, "email", email, "stage", stage)...)
+	writeError(w, http.StatusInternalServerError, "failed to log in")
+}
+
+// issueAndRespond 签发 JWT、设置 HttpOnly auth + CSRF cookie（与
+// VerifyCode 成功路径一致）并写出 LoginResponse。method 用于日志区分
+// passwordless / password。
+func (h *Handler) issueAndRespond(w http.ResponseWriter, r *http.Request, user db.User, method string) {
+	tokenString, err := h.issueJWT(user)
+	if err != nil {
+		h.writeDirectLoginError(w, r, err, user.Email, "issue_jwt")
+		return
+	}
+	if err := auth.SetAuthCookies(w, tokenString); err != nil {
+		slog.Warn("failed to set auth cookies", "error", err)
+	}
+	slog.Info("user logged in ("+method+")", append(logger.RequestAttrs(r), "user_id", uuidToString(user.ID), "email", user.Email)...)
+	writeJSON(w, http.StatusOK, LoginResponse{
+		Token: tokenString,
+		User:  h.userToResponse(user),
+	})
+}
+
+// verifyUserPassword 校验固定密码（MULTICA_AUTH_MODE=password）。
+// 失败统一 401 "invalid email or password"——不区分用户不存在 / 未设
+// 密码 / 密码错误，避免账号枚举。bcrypt 计算本身 ~100ms/次构成天然
+// 减速；本模式面向本地/私网部署，未叠加额外失败限流。
+func (h *Handler) verifyUserPassword(w http.ResponseWriter, r *http.Request, email, password string) (db.User, bool) {
+	const invalid = "invalid email or password"
+	if password == "" {
+		writeError(w, http.StatusUnauthorized, invalid)
+		return db.User{}, false
+	}
+	user, err := h.Queries.GetUserByEmail(r.Context(), email)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, invalid)
+		return db.User{}, false
+	}
+	if !user.PasswordHash.Valid {
+		writeError(w, http.StatusUnauthorized, invalid)
+		return db.User{}, false
+	}
+	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash.String), []byte(password)) != nil {
+		writeError(w, http.StatusUnauthorized, invalid)
+		return db.User{}, false
+	}
+	return user, true
 }
 
 func (h *Handler) VerifyCode(w http.ResponseWriter, r *http.Request) {

@@ -9,6 +9,9 @@ interface ConfigState {
   cdnSigned: boolean;
   allowSignup: boolean;
   googleClientId: string;
+  // 登录形态（服务端 MULTICA_AUTH_MODE 下发）：passwordless=仅邮箱框输完
+  // 即登录；password=邮箱+固定密码框；code/缺省=上游原生验证码流程。
+  authMode: "code" | "passwordless" | "password";
   daemonServerUrl: string;
   daemonAppUrl: string;
   // Self-host gate (#3433): when true, every "Create workspace" affordance
@@ -49,6 +52,7 @@ interface ConfigState {
     googleClientId?: string;
     workspaceCreationDisabled?: boolean;
     vcsIntegrationAvailable?: boolean;
+    authMode?: string;
   }) => void;
   setDaemonConfig: (config: {
     daemonServerUrl?: string;
@@ -67,6 +71,7 @@ export const configStore = createStore<ConfigState>((set) => ({
   cdnSigned: false,
   allowSignup: true,
   googleClientId: "",
+  authMode: "code",
   daemonServerUrl: "",
   daemonAppUrl: "",
   workspaceCreationDisabled: false,
@@ -83,7 +88,18 @@ export const configStore = createStore<ConfigState>((set) => ({
     googleClientId = "",
     workspaceCreationDisabled = false,
     vcsIntegrationAvailable = false,
-  }) => set({ allowSignup, googleClientId, workspaceCreationDisabled, vcsIntegrationAvailable }),
+    authMode,
+  }) =>
+    set({
+      allowSignup,
+      googleClientId,
+      workspaceCreationDisabled,
+      vcsIntegrationAvailable,
+      // 仅接受已知值，未知/缺省回落 code（老服务器行为不变）
+      ...(authMode === "passwordless" || authMode === "password"
+        ? { authMode: authMode as ConfigState["authMode"] }
+        : {}),
+    }),
   setDaemonConfig: ({ daemonServerUrl = "", daemonAppUrl = "" }) =>
     set({ daemonServerUrl, daemonAppUrl }),
   setFeatureFlags: (flags = {}) => set({ featureFlags: { ...flags } }),

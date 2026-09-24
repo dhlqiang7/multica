@@ -763,6 +763,9 @@ export interface AppConfigResponse {
    * DELETE /api/comments/{id}/keep-replies. Older servers deleted the replies
    * too, so absent must be treated as false (#8296). */
   comment_delete_keep_replies_supported?: boolean;
+  /** 服务端登录形态（MULTICA_AUTH_MODE）：code | passwordless | password。
+   *  老服务端不下发该字段，缺省视为 code（验证码）。 */
+  auth_mode?: string;
   server_version?: string;
 }
 
@@ -995,6 +998,9 @@ export const AppConfigSchema = z.object({
   cdn_signed: BooleanWithDefaultSchema(false),
   allow_signup: BooleanWithDefaultSchema(true),
   google_client_id: OptionalStringSchema,
+  // 登录形态（MULTICA_AUTH_MODE 下发）："passwordless" | "password"；
+  // 空串 = code（老服务器/production 省略，原生验证码流程）
+  auth_mode: OptionalStringSchema,
   posthog_key: OptionalStringSchema,
   posthog_host: OptionalStringSchema,
   analytics_environment: OptionalStringSchema,
@@ -1015,6 +1021,7 @@ export const EMPTY_APP_CONFIG: AppConfigResponse = {
   cdn_signed: false,
   allow_signup: true,
   google_client_id: "",
+  auth_mode: "",
   daemon_server_url: "",
   daemon_app_url: "",
   workspace_creation_disabled: false,

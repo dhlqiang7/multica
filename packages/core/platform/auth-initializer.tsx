@@ -74,6 +74,8 @@ export function AuthInitializer({
           workspaceCreationDisabled: cfg.workspace_creation_disabled === true,
           // Absent/false on the managed cloud and older servers → section hidden.
           vcsIntegrationAvailable: cfg.vcs_integration_available === true,
+          // 登录形态：老服务器/production 省略 → code（原生验证码）
+          authMode: cfg.auth_mode,
         });
         configStore.getState().setDaemonConfig({
           daemonServerUrl: cfg.daemon_server_url,

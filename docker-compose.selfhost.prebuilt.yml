@@ -11,10 +11,11 @@ services:
     build:
       context: ./docker/prebuilt-context
       dockerfile: Dockerfile.backend
-    # 无码直登开关：上游 selfhost.yml 的 environment 未声明此变量，
-    # .env 里的值不会自动进容器，须在 override 里显式透传。
+    # 登录模式开关透传：上游 selfhost.yml 的 environment 未声明这些
+    # 变量，.env 里的值不会自动进容器，须在 override 里显式透传。
     environment:
       MULTICA_AUTH_PASSWORDLESS: ${MULTICA_AUTH_PASSWORDLESS:-}
+      MULTICA_AUTH_MODE: ${MULTICA_AUTH_MODE:-}
 
   frontend:
     image: multica-web:selfhost
