@@ -1795,29 +1795,9 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	if authorType != "member" {
 		steer = commentSteer{}
 	}
-	// Attempts of one logical send run one at a time: a retry or concurrent
-	// twin waits for the attempt in progress, then finds what it saved.
-	if steer.ClientRequestID.Valid {
-		release, err := h.lockCommentRequest(r.Context(), issue, parseUUID(authorID), steer.ClientRequestID)
-		if isLockTimeout(err) {
-			writeError(w, http.StatusConflict, "this message is still being sent; try again")
-			return
-		}
-		if err != nil {
-			slog.Warn("create comment failed", append(logger.RequestAttrs(r), "error", err, "issue_id", issueID)...)
-			writeError(w, http.StatusInternalServerError, "failed to create comment")
-			return
-		}
-		defer release()
-		if existing, ok := h.commentForRequest(r.Context(), issue, parseUUID(authorID), steer.ClientRequestID); ok {
-			if !existing.DeletedAt.Valid && !existing.ClientRequestDispatchedAt.Valid {
-				// The first attempt saved the comment and stopped before
-				// reaching its agents: finish that part now.
-				h.redispatchComment(context.WithoutCancel(r.Context()), r, issue, existing, authorID, steer)
-			}
-			h.writeReplayedComment(r.Context(), w, issue, existing)
-			return
-		}
+	if existing, ok := h.commentForRequest(r.Context(), issue, parseUUID(authorID), steer.ClientRequestID); ok {
+		h.resumeCommentSend(w, r, issue, existing, authorID, steer)
+		return
 	}
 
 	// sourceTaskID captures the agent's currently-executing task when it posts
@@ -1997,7 +1977,7 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	}
 	if isCommentRequestConflict(err) {
 		if existing, ok := h.commentForRequest(r.Context(), issue, parseUUID(authorID), steer.ClientRequestID); ok {
-			h.writeReplayedComment(r.Context(), w, issue, existing)
+			h.resumeCommentSend(w, r, issue, existing, authorID, steer)
 			return
 		}
 	}
@@ -2007,23 +1987,33 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	comment := created.Comment()
-	// The comment is saved: finish what it sets off even if the client has
-	// gone, so a saved comment always reaches its agents.
-	ctx := context.WithoutCancel(r.Context())
+	// The comment is saved: what it sets off finishes even if the client has
+	// gone, within a bound of its own.
+	ctx, cancel := commentDispatchContext(r)
+	defer cancel()
 
 	// Fetch linked attachments so the response includes them.
 	groupedAtt := h.groupAttachments(r, []pgtype.UUID{comment.ID})
 	resp := commentToResponse(comment, nil, groupedAtt[uuidToString(comment.ID)])
 	resp.IssueRevision = created.IssueRevision
 	slog.Info("comment created", append(logger.RequestAttrs(r), "comment_id", uuidToString(comment.ID), "issue_id", issueID)...)
-	h.publish(protocol.EventCommentCreated, uuidToString(issue.WorkspaceID), authorType, authorID, map[string]any{
-		"comment":             resp,
-		"issue_title":         issue.Title,
-		"issue_assignee_type": textToPtr(issue.AssigneeType),
-		"issue_assignee_id":   uuidToPtr(issue.AssigneeID),
-		"issue_status":        issue.Status,
-		"issue_revision":      created.IssueRevision,
-	})
+	// A send reaches its agents through exactly one attempt, the one that
+	// claims it. If the claim cannot be written, the send has reached no one
+	// yet, and the client's retry claims it instead.
+	if comment.ClientRequestID.Valid {
+		claimed, err := h.Queries.ClaimCommentSendDispatch(ctx, comment.ID)
+		if err != nil {
+			slog.Warn("claim comment send failed", append(logger.RequestAttrs(r), "error", err, "comment_id", uuidToString(comment.ID))...)
+			writeError(w, http.StatusInternalServerError, "failed to send comment")
+			return
+		}
+		if claimed == 0 {
+			// A retry of this send claimed it first and delivers it.
+			writeJSON(w, http.StatusCreated, resp)
+			return
+		}
+	}
+	h.publishCommentCreated(issue, resp, authorType, authorID, created.IssueRevision)
 
 	// The comment is already saved; a blocked mention must not fail the whole
 	// request. Surface the per-target outcomes so the client can show partial
@@ -2036,9 +2026,27 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, resp)
 }
 
+// commentDispatchTimeout bounds what a saved comment sets off once it no
+// longer follows the request's own lifetime.
+const commentDispatchTimeout = 30 * time.Second
+
+func commentDispatchContext(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(r.Context()), commentDispatchTimeout)
+}
+
+func (h *Handler) publishCommentCreated(issue db.Issue, resp CommentResponse, authorType, authorID string, issueRevision int64) {
+	h.publish(protocol.EventCommentCreated, uuidToString(issue.WorkspaceID), authorType, authorID, map[string]any{
+		"comment":             resp,
+		"issue_title":         issue.Title,
+		"issue_assignee_type": textToPtr(issue.AssigneeType),
+		"issue_assignee_id":   uuidToPtr(issue.AssigneeID),
+		"issue_status":        issue.Status,
+		"issue_revision":      issueRevision,
+	})
+}
+
 // dispatchComment sets off what a saved comment asks for: it re-opens its
-// resolved thread and starts, steers, or skips each agent it addresses. A
-// send's comment then records that this is done, so no retry repeats it.
+// resolved thread and starts, steers, or skips each agent it addresses.
 func (h *Handler) dispatchComment(ctx context.Context, r *http.Request, issue db.Issue, comment db.Comment, parentComment, rootComment *db.Comment, authorType, authorID string, suppressAgentIDs []pgtype.UUID, steer commentSteer) []CommentTriggerOutcome {
 	// A reply in a resolved thread re-opens it. Done after CreateComment commits
 	// so the reply is visible regardless of the unresolve outcome. Shared with
@@ -2046,33 +2054,43 @@ func (h *Handler) dispatchComment(ctx context.Context, r *http.Request, issue db
 	// must keep the resolved root in sync.
 	h.TaskService.AutoUnresolveThreadOnReply(ctx, rootComment, uuidToString(issue.WorkspaceID), authorType, authorID, h.wakeupSourceTaskID(r))
 	originatorUserID := h.invokeOriginatorFromRequest(r, authorType, authorID)
-	outcomes := h.triggerTasksForComment(ctx, issue, comment, parentComment, authorType, authorID, originatorUserID, suppressAgentIDs, steer)
-	if comment.ClientRequestID.Valid {
-		if err := h.Queries.MarkCommentRequestDispatched(ctx, comment.ID); err != nil {
-			slog.Warn("mark comment send dispatched failed", "comment_id", uuidToString(comment.ID), "error", err)
-		}
-	}
-	return outcomes
+	return h.triggerTasksForComment(ctx, issue, comment, parentComment, authorType, authorID, originatorUserID, suppressAgentIDs, steer)
 }
 
-// redispatchComment finishes a send whose comment was saved but never reached
-// its agents, with the choices the comment recorded and the turns the retry
-// names.
-func (h *Handler) redispatchComment(ctx context.Context, r *http.Request, issue db.Issue, comment db.Comment, authorID string, steer commentSteer) {
-	var parentComment, rootComment *db.Comment
-	if comment.ParentID.Valid {
-		if parent, err := h.Queries.GetCommentInWorkspace(ctx, db.GetCommentInWorkspaceParams{
-			ID: comment.ParentID, WorkspaceID: issue.WorkspaceID,
-		}); err == nil {
-			parentComment = &parent
+// resumeCommentSend answers a retried send with the comment it saved. If no
+// attempt has claimed the send yet — the first one stopped right after saving
+// it — this one claims it and reaches the comment's agents, with the choices
+// the comment recorded and the turns the retry names.
+func (h *Handler) resumeCommentSend(w http.ResponseWriter, r *http.Request, issue db.Issue, comment db.Comment, authorID string, steer commentSteer) {
+	if !comment.DeletedAt.Valid && !comment.ClientRequestDispatchedAt.Valid {
+		ctx, cancel := commentDispatchContext(r)
+		defer cancel()
+		claimed, err := h.Queries.ClaimCommentSendDispatch(ctx, comment.ID)
+		if err != nil {
+			slog.Warn("claim comment send failed", append(logger.RequestAttrs(r), "error", err, "comment_id", uuidToString(comment.ID))...)
+			writeError(w, http.StatusInternalServerError, "failed to send comment")
+			return
 		}
-		if root, err := h.Queries.GetThreadRoot(ctx, db.GetThreadRootParams{
-			CommentID: comment.ParentID, WorkspaceID: issue.WorkspaceID,
-		}); err == nil {
-			rootComment = &root
+		if claimed > 0 {
+			var parentComment, rootComment *db.Comment
+			if comment.ParentID.Valid {
+				if parent, err := h.Queries.GetCommentInWorkspace(ctx, db.GetCommentInWorkspaceParams{
+					ID: comment.ParentID, WorkspaceID: issue.WorkspaceID,
+				}); err == nil {
+					parentComment = &parent
+				}
+				if root, err := h.Queries.GetThreadRoot(ctx, db.GetThreadRootParams{
+					CommentID: comment.ParentID, WorkspaceID: issue.WorkspaceID,
+				}); err == nil {
+					rootComment = &root
+				}
+			}
+			groupedAtt := h.groupAttachments(r, []pgtype.UUID{comment.ID})
+			h.publishCommentCreated(issue, commentToResponse(comment, nil, groupedAtt[uuidToString(comment.ID)]), comment.AuthorType, authorID, issue.Revision)
+			h.dispatchComment(ctx, r, issue, comment, parentComment, rootComment, comment.AuthorType, authorID, comment.SuppressedAgentIds, steer)
 		}
 	}
-	h.dispatchComment(ctx, r, issue, comment, parentComment, rootComment, comment.AuthorType, authorID, comment.SuppressedAgentIds, steer)
+	h.writeReplayedComment(r.Context(), w, issue, comment)
 }
 
 // clientAuthorableCommentTypes is what POST /comments accepts. `status_change`

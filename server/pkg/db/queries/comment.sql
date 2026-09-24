@@ -474,11 +474,11 @@ WHERE issue_id = @issue_id
   AND author_id = @author_id
   AND client_request_id = @client_request_id;
 
--- name: MarkCommentRequestDispatched :exec
--- The send this comment belongs to has started, steered, or skipped every
--- agent it addresses; a retry of it only returns the comment.
+-- name: ClaimCommentSendDispatch :execrows
+-- Exactly one attempt of a send reaches its agents: the one whose claim
+-- affects a row. Claimed before dispatch, so a retry never repeats it.
 UPDATE comment SET client_request_dispatched_at = now()
-WHERE id = @id AND client_request_dispatched_at IS NULL;
+WHERE id = @id AND client_request_dispatched_at IS NULL AND deleted_at IS NULL;
 
 -- name: GetDelegatedFailureRecoveryComment :one
 -- The failed task row is locked by the caller before this lookup/insert pair,

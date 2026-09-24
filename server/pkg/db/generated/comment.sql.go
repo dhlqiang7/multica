@@ -55,6 +55,21 @@ func (q *Queries) BumpCommentRevision(ctx context.Context, arg BumpCommentRevisi
 	return i, err
 }
 
+const claimCommentSendDispatch = `-- name: ClaimCommentSendDispatch :execrows
+UPDATE comment SET client_request_dispatched_at = now()
+WHERE id = $1 AND client_request_dispatched_at IS NULL AND deleted_at IS NULL
+`
+
+// Exactly one attempt of a send reaches its agents: the one whose claim
+// affects a row. Claimed before dispatch, so a retry never repeats it.
+func (q *Queries) ClaimCommentSendDispatch(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, claimCommentSendDispatch, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const clearOtherThreadResolutions = `-- name: ClearOtherThreadResolutions :many
 WITH RECURSIVE root_of AS (
     -- Walk up from the target to its thread root.
@@ -2121,18 +2136,6 @@ func (q *Queries) LockLiveComment(ctx context.Context, arg LockLiveCommentParams
 		&i.ClientRequestDispatchedAt,
 	)
 	return i, err
-}
-
-const markCommentRequestDispatched = `-- name: MarkCommentRequestDispatched :exec
-UPDATE comment SET client_request_dispatched_at = now()
-WHERE id = $1 AND client_request_dispatched_at IS NULL
-`
-
-// The send this comment belongs to has started, steered, or skipped every
-// agent it addresses; a retry of it only returns the comment.
-func (q *Queries) MarkCommentRequestDispatched(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, markCommentRequestDispatched, id)
-	return err
 }
 
 const resolveComment = `-- name: ResolveComment :one

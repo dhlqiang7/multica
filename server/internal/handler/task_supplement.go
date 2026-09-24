@@ -154,33 +154,6 @@ func (h *Handler) commentForRequest(ctx context.Context, issue db.Issue, authorI
 	return comment, true
 }
 
-// lockCommentRequest holds one logical send until release runs. The lock lives
-// in a transaction of its own: it outlasts a dropped client connection, and it
-// ends with the process, so a retry after a crash can finish the send.
-func (h *Handler) lockCommentRequest(ctx context.Context, issue db.Issue, authorID, requestID pgtype.UUID) (func(), error) {
-	ctx = context.WithoutCancel(ctx)
-	tx, err := h.TxStarter.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// A twin waits for the attempt in progress, but not without bound.
-	_, err = tx.Exec(ctx, "SET LOCAL lock_timeout = '30s'")
-	if err == nil {
-		_, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-			"comment_request:"+uuidToString(issue.ID)+":"+uuidToString(authorID)+":"+uuidToString(requestID))
-	}
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return nil, err
-	}
-	return func() { _ = tx.Rollback(ctx) }, nil
-}
-
-func isLockTimeout(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "55P03"
-}
-
 // writeReplayedComment answers a retried send with the comment it already
 // saved, as it stands now, including every receipt it holds.
 func (h *Handler) writeReplayedComment(ctx context.Context, w http.ResponseWriter, issue db.Issue, comment db.Comment) {
