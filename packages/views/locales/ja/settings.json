@@ -379,7 +379,8 @@
       "quick_actions": "クイックアクション",
       "plugins": "Plugins",
       "mcp": "MCP",
-      "billing": "請求とプラン"
+      "billing": "請求とプラン",
+      "workflows": "ワークフロー"
     },
     "groups": {
       "personal": "個人設定",

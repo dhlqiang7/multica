@@ -379,7 +379,8 @@
       "quick_actions": "퀵 액션",
       "plugins": "Plugins",
       "mcp": "MCP",
-      "billing": "결제 및 요금제"
+      "billing": "결제 및 요금제",
+      "workflows": "워크플로"
     },
     "groups": {
       "personal": "개인 설정",

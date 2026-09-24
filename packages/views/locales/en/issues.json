@@ -1144,5 +1144,81 @@
     "issue_disabled_action": "Turn on",
     "workspace_disabled": "PR auto-complete is off for this workspace",
     "workspace_disabled_action": "Settings"
+  },
+  "workflows": {
+    "default_name": "Default",
+    "default_summary": "Every status, no handoffs",
+    "hands_off_to": "Hands off to {{name}}",
+    "not_in_workflow": "Not in the {{name}} workflow",
+    "drop_blocked": "{{status}} isn't part of the {{name}} workflow",
+    "create_handoff_hint": "Will be handed to {{name}}",
+    "handler": {
+      "none": "Keep assignee",
+      "agent": "Agent",
+      "squad": "Squad",
+      "member": "Member",
+      "project_lead": "Project lead",
+      "creator": "Issue creator",
+      "project_lead_named": "{{name}} (project lead)"
+    },
+    "settings": {
+      "title": "Workflows",
+      "description": "A workflow picks statuses from the library below and can hand an issue to someone when it enters a step. Each project chooses its workflow.",
+      "new": "New workflow",
+      "projects_one": "{{count}} project",
+      "projects_other": "{{count}} projects",
+      "default_projects": "Projects without a workflow",
+      "no_projects": "Not used yet",
+      "edit": "Edit",
+      "delete": "Delete",
+      "delete_title": "Delete {{name}}?",
+      "delete_description": "Issues keep their statuses.",
+      "delete_in_use": "Switch its projects to another workflow first.",
+      "deleted": "Workflow deleted",
+      "delete_error": "Couldn't delete the workflow",
+      "statuses_title": "Status library"
+    },
+    "editor": {
+      "create_title": "New workflow",
+      "edit_title": "Edit workflow",
+      "name": "Name",
+      "name_placeholder": "e.g. Delivery",
+      "description": "Description",
+      "steps": "Steps",
+      "add_step": "Add status",
+      "start": "Start",
+      "set_start": "Make starting step",
+      "move_up": "Move up",
+      "move_down": "Move down",
+      "remove": "Remove step",
+      "on_enter": "On entering, hand to",
+      "choose_target": "Choose…",
+      "instructions": "Handoff instructions",
+      "instructions_placeholder": "What should happen in this step?",
+      "next": "When done, move to",
+      "back": "When changes are needed, move back to",
+      "none_option": "None",
+      "save": "Save",
+      "create": "Create",
+      "cancel": "Cancel",
+      "saved": "Workflow saved",
+      "created": "Workflow created",
+      "error": "Couldn't save the workflow"
+    },
+    "mapping": {
+      "title": "Move issues into {{name}}",
+      "description": "These statuses aren't in the workflow. Choose where their issues go; issues on other statuses stay put.",
+      "issues_one": "{{count}} issue",
+      "issues_other": "{{count}} issues",
+      "no_handoff": "Moving issues this way doesn't hand them off or start runs.",
+      "confirm": "Move and switch",
+      "confirm_save": "Move and save",
+      "cancel": "Cancel"
+    },
+    "project": {
+      "label": "Workflow",
+      "switched": "Workflow changed",
+      "error": "Couldn't change the workflow"
+    }
   }
 }

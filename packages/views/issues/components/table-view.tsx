@@ -1160,6 +1160,7 @@ function IssueTableBodyCell({
           <StatusPicker
             status={issue.status}
             onUpdate={onUpdate}
+            projectId={issue.project_id}
             align="start"
             open={editorOpen}
             onOpenChange={setEditorOpen}

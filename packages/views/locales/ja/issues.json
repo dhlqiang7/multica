@@ -1112,5 +1112,79 @@
     "issue_disabled_action": "再開",
     "workspace_disabled": "このワークスペースでは PR による自動完了がオフです",
     "workspace_disabled_action": "設定"
+  },
+  "workflows": {
+    "default_name": "デフォルト",
+    "default_summary": "すべてのステータス、引き継ぎなし",
+    "hands_off_to": "{{name}} に引き継ぐ",
+    "not_in_workflow": "ワークフロー「{{name}}」にありません",
+    "drop_blocked": "「{{status}}」はワークフロー「{{name}}」に含まれていません",
+    "create_handoff_hint": "作成後に {{name}} に引き継ぎます",
+    "handler": {
+      "none": "担当者を変更しない",
+      "agent": "エージェント",
+      "squad": "スクワッド",
+      "member": "メンバー",
+      "project_lead": "プロジェクトリード",
+      "creator": "タスク作成者",
+      "project_lead_named": "{{name}}（プロジェクトリード）"
+    },
+    "settings": {
+      "title": "ワークフロー",
+      "description": "ワークフローは下のステータスライブラリからステータスを選び、タスクがステップに入ったときに担当を引き継げます。各プロジェクトが使うワークフローを選びます。",
+      "new": "新規ワークフロー",
+      "projects_other": "{{count}} 件のプロジェクト",
+      "default_projects": "ワークフロー未設定のプロジェクト",
+      "no_projects": "未使用",
+      "edit": "編集",
+      "delete": "削除",
+      "delete_title": "「{{name}}」を削除しますか？",
+      "delete_description": "タスクのステータスはそのまま残ります。",
+      "delete_in_use": "先に、使用中のプロジェクトを別のワークフローに切り替えてください。",
+      "deleted": "ワークフローを削除しました",
+      "delete_error": "ワークフローを削除できませんでした",
+      "statuses_title": "ステータスライブラリ"
+    },
+    "editor": {
+      "create_title": "新規ワークフロー",
+      "edit_title": "ワークフローを編集",
+      "name": "名前",
+      "name_placeholder": "例：開発フロー",
+      "description": "説明",
+      "steps": "ステップ",
+      "add_step": "ステータスを追加",
+      "start": "開始",
+      "set_start": "開始ステップにする",
+      "move_up": "上へ移動",
+      "move_down": "下へ移動",
+      "remove": "ステップを削除",
+      "on_enter": "このステップに入ったら引き継ぐ相手",
+      "choose_target": "選択…",
+      "instructions": "引き継ぎの指示",
+      "instructions_placeholder": "このステップで何をしますか？",
+      "next": "完了したら移動",
+      "back": "修正が必要なら戻す先",
+      "none_option": "なし",
+      "save": "保存",
+      "create": "作成",
+      "cancel": "キャンセル",
+      "saved": "ワークフローを保存しました",
+      "created": "ワークフローを作成しました",
+      "error": "ワークフローを保存できませんでした"
+    },
+    "mapping": {
+      "title": "タスクを「{{name}}」に移動",
+      "description": "以下のステータスはワークフローに含まれていません。これらのタスクの移動先を選んでください。ほかのタスクはそのままです。",
+      "issues_other": "タスク {{count}} 件",
+      "no_handoff": "この移動では引き継ぎも実行の開始も行われません。",
+      "confirm": "移動して切り替える",
+      "confirm_save": "移動して保存",
+      "cancel": "キャンセル"
+    },
+    "project": {
+      "label": "ワークフロー",
+      "switched": "ワークフローを変更しました",
+      "error": "ワークフローを変更できませんでした"
+    }
   }
 }

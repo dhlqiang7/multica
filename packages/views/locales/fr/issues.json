@@ -1144,5 +1144,81 @@
     "issue_disabled_action": "Réactiver",
     "workspace_disabled": "La fin automatique par PR est désactivée pour cet espace",
     "workspace_disabled_action": "Réglages"
+  },
+  "workflows": {
+    "default_name": "Par défaut",
+    "default_summary": "Tous les états, sans passage de relais",
+    "hands_off_to": "Confiée à {{name}}",
+    "not_in_workflow": "Absent du workflow {{name}}",
+    "drop_blocked": "{{status}} ne fait pas partie du workflow {{name}}",
+    "create_handoff_hint": "Sera confiée à {{name}}",
+    "handler": {
+      "none": "Garder l’assigné",
+      "agent": "Agent",
+      "squad": "Squad",
+      "member": "Membre",
+      "project_lead": "Responsable du projet",
+      "creator": "Créateur de la tâche",
+      "project_lead_named": "{{name}} (responsable du projet)"
+    },
+    "settings": {
+      "title": "Workflows",
+      "description": "Un workflow choisit des états dans la bibliothèque ci-dessous et peut confier une tâche à quelqu’un quand elle entre dans une étape. Chaque projet choisit son workflow.",
+      "new": "Nouveau workflow",
+      "projects_one": "{{count}} projet",
+      "projects_other": "{{count}} projets",
+      "default_projects": "Projets sans workflow",
+      "no_projects": "Pas encore utilisé",
+      "edit": "Modifier",
+      "delete": "Supprimer",
+      "delete_title": "Supprimer {{name}} ?",
+      "delete_description": "Les tâches conservent leur état.",
+      "delete_in_use": "Passez d’abord ses projets à un autre workflow.",
+      "deleted": "Workflow supprimé",
+      "delete_error": "Impossible de supprimer le workflow",
+      "statuses_title": "Bibliothèque d’états"
+    },
+    "editor": {
+      "create_title": "Nouveau workflow",
+      "edit_title": "Modifier le workflow",
+      "name": "Nom",
+      "name_placeholder": "ex. Livraison",
+      "description": "Description",
+      "steps": "Étapes",
+      "add_step": "Ajouter un état",
+      "start": "Début",
+      "set_start": "Définir comme étape de départ",
+      "move_up": "Monter",
+      "move_down": "Descendre",
+      "remove": "Retirer l’étape",
+      "on_enter": "À l’entrée, confier à",
+      "choose_target": "Choisir…",
+      "instructions": "Instructions de passage",
+      "instructions_placeholder": "Que doit-il se passer à cette étape ?",
+      "next": "Une fois terminé, passer à",
+      "back": "Si des changements sont nécessaires, revenir à",
+      "none_option": "Aucun",
+      "save": "Enregistrer",
+      "create": "Créer",
+      "cancel": "Annuler",
+      "saved": "Workflow enregistré",
+      "created": "Workflow créé",
+      "error": "Impossible d’enregistrer le workflow"
+    },
+    "mapping": {
+      "title": "Déplacer les tâches vers {{name}}",
+      "description": "Ces états ne font pas partie du workflow. Choisissez où vont leurs tâches ; les autres ne bougent pas.",
+      "issues_one": "{{count}} tâche",
+      "issues_other": "{{count}} tâches",
+      "no_handoff": "Ce déplacement ne confie pas les tâches et ne lance aucune exécution.",
+      "confirm": "Déplacer et changer",
+      "confirm_save": "Déplacer et enregistrer",
+      "cancel": "Annuler"
+    },
+    "project": {
+      "label": "Workflow",
+      "switched": "Workflow modifié",
+      "error": "Impossible de changer le workflow"
+    }
   }
 }

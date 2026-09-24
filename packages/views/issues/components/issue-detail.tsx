@@ -885,6 +885,7 @@ function SubIssueRow({
         <StatusPicker
           status={child.status}
           onUpdate={handleUpdate}
+          projectId={child.project_id}
           align="start"
           trigger={
             <StatusIcon
@@ -2522,6 +2523,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               status={issue.status}
               onUpdate={handleUpdateField}
               align="start"
+              projectId={issue.project_id}
               onMarkDuplicate={actions.openMarkDuplicate}
               isDuplicate={isDuplicateIssue(issue)}
             />

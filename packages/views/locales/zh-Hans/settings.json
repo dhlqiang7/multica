@@ -379,7 +379,8 @@
       "quick_actions": "快捷操作",
       "plugins": "Plugins",
       "mcp": "MCP",
-      "billing": "账单与套餐"
+      "billing": "账单与套餐",
+      "workflows": "工作流"
     },
     "groups": {
       "personal": "个人设置",

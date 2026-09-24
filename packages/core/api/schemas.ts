@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { normalizeIssueStatusCategory } from "../issues/config/status";
 import type {
+  IssueWorkflow,
+  IssueWorkflowDryRunResponse,
+  IssueWorkflowHandlerType,
+  ListIssueWorkflowsResponse,
   AgentBuilderRuntimeSwitch,
   AgentBuilderSession,
   AgentBuilderSessionSummary,
@@ -533,6 +537,82 @@ export const EMPTY_LIST_ISSUE_STATUSES_RESPONSE: ListIssueStatusesResponse = {
   statuses: [],
   categories: ["unstarted", "started", "done", "closed"],
   total: 0,
+};
+
+// Workspace workflows (MUL-7420). Handler types parse as plain strings and an
+// unknown one degrades to "none": a newer server may add a handler this build
+// cannot render, and the step's status must still show.
+const IssueWorkflowHandlerSchema = z.object({
+  type: z.string().transform((value): IssueWorkflowHandlerType =>
+    ISSUE_WORKFLOW_HANDLER_TYPES.has(value) ? (value as IssueWorkflowHandlerType) : "none",
+  ),
+  id: z.string().optional(),
+}).loose();
+
+const ISSUE_WORKFLOW_HANDLER_TYPES = new Set<string>([
+  "none", "agent", "squad", "member", "project_lead", "creator",
+]);
+
+const IssueWorkflowStepSchema = z.object({
+  status_key: z.string(),
+  handler: IssueWorkflowHandlerSchema.default({ type: "none" }),
+  instructions: z.string().default(""),
+  next_status_key: z.string().optional(),
+  back_status_key: z.string().optional(),
+}).loose();
+
+export const IssueWorkflowSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  name: z.string(),
+  description: z.string().default(""),
+  initial_status_key: z.string(),
+  steps: z.array(IssueWorkflowStepSchema).default([]),
+  project_ids: z.array(z.string()).default([]),
+  created_at: z.string(),
+  updated_at: z.string(),
+}).loose();
+
+export const ListIssueWorkflowsResponseSchema = z.object({
+  workflows: z.array(IssueWorkflowSchema).default([]),
+  total: z.number().default(0),
+}).loose();
+
+export const EMPTY_LIST_ISSUE_WORKFLOWS_RESPONSE: ListIssueWorkflowsResponse = {
+  workflows: [],
+  total: 0,
+};
+
+export const EMPTY_ISSUE_WORKFLOW: IssueWorkflow = {
+  id: "",
+  workspace_id: "",
+  name: "",
+  description: "",
+  initial_status_key: "",
+  steps: [],
+  project_ids: [],
+  created_at: "",
+  updated_at: "",
+};
+
+export const IssueWorkflowMappingPlanSchema = z.object({
+  required: z.array(z.object({
+    status_key: z.string(),
+    issue_count: z.number().default(0),
+    suggested_status_key: z.string().default(""),
+  }).loose()).default([]),
+  total_issues: z.number().default(0),
+  affected_issues: z.number().default(0),
+}).loose();
+
+export const IssueWorkflowDryRunResponseSchema = z.object({
+  dry_run: z.literal(true).default(true),
+  plan: IssueWorkflowMappingPlanSchema.default({ required: [], total_issues: 0, affected_issues: 0 }),
+}).loose();
+
+export const EMPTY_ISSUE_WORKFLOW_DRY_RUN: IssueWorkflowDryRunResponse = {
+  dry_run: true,
+  plan: { required: [], total_issues: 0, affected_issues: 0 },
 };
 
 export const ResourceLabelsResponseSchema = z.object({
@@ -1397,6 +1477,7 @@ const ProjectSchema = z.object({
   issue_count: z.number().default(0),
   done_count: z.number().default(0),
   resource_count: z.number().default(0),
+  workflow_id: z.string().nullable().default(null),
 }).loose();
 
 const SearchProjectResultSchema = ProjectSchema.extend({

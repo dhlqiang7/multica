@@ -18,12 +18,14 @@ import {
   Blocks,
   CreditCard,
   Server,
+  Workflow,
 } from "lucide-react";
 import { useCurrentWorkspace } from "@multica/core/paths";
 import { useFeatureEnabled } from "@multica/core/config";
 import {
   BILLING_WORKSPACE_SUBSCRIPTIONS_FLAG,
   PLUGINS_V1_FLAG,
+  PROJECT_WORKFLOWS_V1_FLAG,
 } from "@multica/core/feature-flags";
 import { cn } from "@multica/ui/lib/utils";
 import { resolveSettingsLocation, settingsHref } from "./settings-navigation";
@@ -38,6 +40,7 @@ import { IntegrationsTab } from "./integrations-tab";
 import { NotificationsTab } from "./notifications-tab";
 import { LabelsTab } from "./labels-tab";
 import { IssueStatusesTab } from "./issue-statuses-tab";
+import { WorkflowsTab } from "../../workflows/workflows-tab";
 import { PropertiesTab } from "./properties-tab";
 import { QuickActionsTab } from "./quick-actions-tab";
 import { KeyboardShortcutsTab } from "./keyboard-shortcuts-tab";
@@ -67,6 +70,7 @@ export function SettingsPage({ extraDeviceTabs = [] }: SettingsPageProps = {}) {
     useCurrentWorkspace()?.name ?? t(($) => $.page.workspace_fallback);
   const navigation = useNavigation();
   const pluginsEnabled = useFeatureEnabled(PLUGINS_V1_FLAG, false);
+  const workflowsEnabled = useFeatureEnabled(PROJECT_WORKFLOWS_V1_FLAG, false);
   const billingEnabled = useFeatureEnabled(
     BILLING_WORKSPACE_SUBSCRIPTIONS_FLAG,
     false,
@@ -150,6 +154,17 @@ export function SettingsPage({ extraDeviceTabs = [] }: SettingsPageProps = {}) {
       label: t(($) => $.page.groups.issues),
       scope: workspaceName,
       entries: [
+        ...(workflowsEnabled
+          ? [
+              entry(
+                "workflows",
+                t(($) => $.page.tabs.workflows),
+                Workflow,
+                <WorkflowsTab />,
+                true,
+              ),
+            ]
+          : []),
         entry(
           "issue-statuses",
           t(($) => $.page.tabs.issue_statuses),

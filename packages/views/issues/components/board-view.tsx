@@ -30,6 +30,13 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import type { IssueGrouping } from "@multica/core/issues/stores/view-store";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { BoardColumn, BOARD_CARD_WIDTH, type BoardColumnGroup } from "./board-column";
+import { BoardWorkflowContext, type BoardWorkflowContextValue } from "./board-workflow-context";
+import {
+  resolveProjectWorkflow,
+  useIssueWorkflows,
+  workflowAllowsStatus,
+} from "@multica/core/issue-workflows";
+import { projectListOptions } from "@multica/core/projects/queries";
 import { BoardCardContent } from "./board-card";
 import { HiddenColumnsPanel, HiddenColumnRow } from "./hidden-columns-panel";
 import { InfiniteScrollSentinel } from "./infinite-scroll-sentinel";
@@ -470,6 +477,34 @@ function BoardViewImpl({
 
   // --- Drag state ---
   const [activeIssue, setActiveIssue] = useState<Issue | null>(null);
+
+  // Project workflows (MUL-7420): a card can only move to a status its
+  // project's workflow lists, and a project board names each step's handler.
+  const { workflows } = useIssueWorkflows(boardWsId);
+  const { data: workspaceProjects } = useQuery(projectListOptions(boardWsId));
+  const workflowOfIssue = useCallback(
+    (issue: Issue | null | undefined) => {
+      if (!issue?.project_id) return null;
+      return resolveProjectWorkflow(
+        workflows,
+        workspaceProjects?.find((p) => p.id === issue.project_id),
+      );
+    },
+    [workflows, workspaceProjects],
+  );
+  const scopeProject = projectId ? workspaceProjects?.find((p) => p.id === projectId) ?? null : null;
+  const activeWorkflow = workflowOfIssue(activeIssue);
+  const boardWorkflow = useMemo<BoardWorkflowContextValue>(
+    () => ({
+      scopeWorkflow: resolveProjectWorkflow(workflows, scopeProject),
+      scopeProject,
+      dropBlockedReason: (status) =>
+        activeWorkflow && activeIssue?.status !== status && !workflowAllowsStatus(activeWorkflow, status)
+          ? t(($) => $.workflows.not_in_workflow, { name: activeWorkflow.name })
+          : null,
+    }),
+    [activeIssue?.status, activeWorkflow, scopeProject, t, workflows],
+  );
   // Shared drag/settle primitive: owns the local column mirror, the
   // dragging/settling locks, the post-move animation-frame throttle, and the
   // settle callback. Shared with list-view (and swimlane) so the surfaces
@@ -539,6 +574,9 @@ function BoardViewImpl({
         if (!activeCol || !overCol || activeCol === overCol) return prev;
         const targetStatus = groups.find((group) => group.id === overCol)?.status;
         if (targetStatus && catalog.entryOf(targetStatus)?.archived_at) return prev;
+        if (targetStatus && !workflowAllowsStatus(workflowOfIssue(issueMapRef.current.get(activeId)), targetStatus)) {
+          return prev;
+        }
 
         if (sortBy !== "position") return prev;
 
@@ -551,7 +589,7 @@ function BoardViewImpl({
         return { ...prev, [activeCol]: oldIds, [overCol]: newIds };
       });
     },
-    [groupIds, groups, catalog, sortBy, recentlyMovedRef, setColumns],
+    [groupIds, groups, catalog, sortBy, recentlyMovedRef, setColumns, workflowOfIssue],
   );
 
   const handleDragEnd = useCallback(
@@ -608,6 +646,22 @@ function BoardViewImpl({
       const map = issueMapRef.current;
       if (finalGroup.status && map.get(activeId)?.status !== finalGroup.status && catalog.entryOf(finalGroup.status)?.archived_at) {
         resetColumns();
+        return;
+      }
+      const movingWorkflow = workflowOfIssue(map.get(activeId));
+      if (
+        finalGroup.status &&
+        movingWorkflow &&
+        map.get(activeId)?.status !== finalGroup.status &&
+        !workflowAllowsStatus(movingWorkflow, finalGroup.status)
+      ) {
+        resetColumns();
+        toast.info(
+          t(($) => $.workflows.drop_blocked, {
+            status: catalog.labelOf(finalGroup.status),
+            name: movingWorkflow.name,
+          }),
+        );
         return;
       }
 
@@ -679,7 +733,7 @@ function BoardViewImpl({
       );
       applyPropertyGroupValue(finalGroup, activeId);
     },
-    [groupedIssues, groups, grouping, groupingOptionIds, onMoveIssue, groupIds, groupMap, sortBy, beginSettle, columnsRef, isDraggingRef, setColumns, applyPropertyGroupValue, catalog, t],
+    [groupedIssues, groups, grouping, groupingOptionIds, onMoveIssue, groupIds, groupMap, sortBy, beginSettle, columnsRef, isDraggingRef, setColumns, applyPropertyGroupValue, catalog, t, workflowOfIssue],
   );
 
   // An aborted drag (pointercancel, window resize, tab hide, Escape) fires
@@ -693,6 +747,7 @@ function BoardViewImpl({
   }, [groupedIssues, groups, grouping, groupingOptionIds, setColumns, isDraggingRef]);
 
   return (
+    <BoardWorkflowContext.Provider value={boardWorkflow}>
     <DndContext
       sensors={sensors}
       collisionDetection={collisionDetection}
@@ -804,6 +859,7 @@ function BoardViewImpl({
         ) : null}
       </DragOverlay>
     </DndContext>
+    </BoardWorkflowContext.Provider>
   );
 }
 

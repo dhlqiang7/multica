@@ -1112,5 +1112,79 @@
     "issue_disabled_action": "恢复",
     "workspace_disabled": "工作区未开启 PR 自动完成",
     "workspace_disabled_action": "设置"
+  },
+  "workflows": {
+    "default_name": "默认",
+    "default_summary": "全部状态，不自动交接",
+    "hands_off_to": "交给 {{name}}",
+    "not_in_workflow": "不在「{{name}}」工作流中",
+    "drop_blocked": "「{{status}}」不在「{{name}}」工作流中",
+    "create_handoff_hint": "创建后交给 {{name}}",
+    "handler": {
+      "none": "负责人不变",
+      "agent": "智能体",
+      "squad": "小队",
+      "member": "成员",
+      "project_lead": "项目负责人",
+      "creator": "任务创建者",
+      "project_lead_named": "{{name}}（项目负责人）"
+    },
+    "settings": {
+      "title": "工作流",
+      "description": "工作流从下方的状态库中挑选状态，并可在任务进入某一步时交给指定的处理人。每个项目选用一个工作流。",
+      "new": "新建工作流",
+      "projects_other": "{{count}} 个项目",
+      "default_projects": "未选用工作流的项目",
+      "no_projects": "暂未使用",
+      "edit": "编辑",
+      "delete": "删除",
+      "delete_title": "删除「{{name}}」？",
+      "delete_description": "任务会保留当前状态。",
+      "delete_in_use": "请先把使用它的项目切换到其他工作流。",
+      "deleted": "工作流已删除",
+      "delete_error": "无法删除工作流",
+      "statuses_title": "状态库"
+    },
+    "editor": {
+      "create_title": "新建工作流",
+      "edit_title": "编辑工作流",
+      "name": "名称",
+      "name_placeholder": "例如：研发流程",
+      "description": "描述",
+      "steps": "步骤",
+      "add_step": "添加状态",
+      "start": "起始",
+      "set_start": "设为起始步骤",
+      "move_up": "上移",
+      "move_down": "下移",
+      "remove": "移除步骤",
+      "on_enter": "进入时交给",
+      "choose_target": "请选择…",
+      "instructions": "交接说明",
+      "instructions_placeholder": "这一步要做什么？",
+      "next": "完成后进入",
+      "back": "需要修改时退回",
+      "none_option": "无",
+      "save": "保存",
+      "create": "创建",
+      "cancel": "取消",
+      "saved": "工作流已保存",
+      "created": "工作流已创建",
+      "error": "无法保存工作流"
+    },
+    "mapping": {
+      "title": "将任务移入「{{name}}」",
+      "description": "以下状态不在该工作流中，请为这些任务选择新状态；其他任务保持不变。",
+      "issues_other": "{{count}} 个任务",
+      "no_handoff": "这样移动不会触发交接，也不会启动运行。",
+      "confirm": "移动并切换",
+      "confirm_save": "移动并保存",
+      "cancel": "取消"
+    },
+    "project": {
+      "label": "工作流",
+      "switched": "已切换工作流",
+      "error": "无法切换工作流"
+    }
   }
 }

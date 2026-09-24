@@ -6,11 +6,14 @@ import type { IssueStatus, UpdateIssueRequest } from "@multica/core/types";
 import { STATUS_CONFIG } from "@multica/core/issues/config";
 import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { useProjectWithWorkflow, workflowStep } from "@multica/core/issue-workflows";
+import type { IssueWorkflowStep, Project } from "@multica/core/types";
 import { StatusIcon } from "../status-icon";
 import { PropertyPicker, PickerItem } from "./property-picker";
 import { useT } from "../../../i18n";
 import { useStatusLabel } from "../../utils/status-label";
-import { useStatusOptions } from "../../utils/status-options";
+import { useStatusOptions, type StatusOption } from "../../utils/status-options";
+import { useStepHandlerLabel } from "../../../workflows/step-handler";
 
 /** Above this many options the flat list stops being scannable. */
 const SEARCH_THRESHOLD = 9;
@@ -25,6 +28,7 @@ export function StatusPicker({
   align,
   onMarkDuplicate,
   isDuplicate,
+  projectId,
 }: {
   /**
    * The currently-selected status, used to check the matching row. `null`
@@ -47,6 +51,12 @@ export function StatusPicker({
   onMarkDuplicate?: () => void;
   /** The issue already carries a mark, so the action re-points it. */
   isDuplicate?: boolean;
+  /**
+   * The issue's project. When it uses a workflow, only that workflow's steps
+   * are offered, in workflow order, each naming who entering it hands the
+   * issue to. Omit for surfaces spanning projects (batch). (MUL-7420)
+   */
+  projectId?: string | null;
 }) {
   const [internalOpen, setInternalOpen] = useState(false);
   const open = controlledOpen ?? internalOpen;
@@ -68,7 +78,22 @@ export function StatusPicker({
    * the 7 built-ins until the catalog lands, so a cold render offers exactly
    * what it always did instead of an empty popover. (MUL-6243)
    */
-  const allOptions = useStatusOptions(wsId);
+  const catalogOptions = useStatusOptions(wsId);
+  const { workflow, project } = useProjectWithWorkflow(wsId, projectId);
+  const allOptions = useMemo<StatusOption[]>(() => {
+    if (!workflow) return catalogOptions;
+    const byKey = new Map(catalogOptions.map((o) => [o.key, o]));
+    return workflow.steps.map(
+      (step) =>
+        byKey.get(step.status_key) ?? {
+          key: step.status_key,
+          category: categoryOf(step.status_key),
+          label: labelOf(step.status_key),
+          color: colorOf(step.status_key),
+          icon: iconOf(step.status_key),
+        },
+    );
+  }, [catalogOptions, categoryOf, colorOf, iconOf, labelOf, workflow]);
 
   const options = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -148,8 +173,22 @@ export function StatusPicker({
             className="h-3.5 w-3.5"
           />
           <span className="truncate">{option.label}</span>
+          {workflow && <StepHandoffHint step={workflowStep(workflow, option.key)} project={project} />}
         </PickerItem>
       ))}
     </PropertyPicker>
+  );
+}
+
+/** Who entering a workflow step hands the issue to. (MUL-7420) */
+function StepHandoffHint({ step, project }: { step: IssueWorkflowStep | undefined; project: Project | null }) {
+  const { t } = useT("issues");
+  const handlerLabel = useStepHandlerLabel(project);
+  const handler = handlerLabel(step);
+  if (!handler) return null;
+  return (
+    <span className="ml-auto max-w-28 shrink-0 truncate pl-2 text-caption text-muted-foreground">
+      {t(($) => $.workflows.hands_off_to, { name: handler })}
+    </span>
   );
 }

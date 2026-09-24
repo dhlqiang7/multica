@@ -379,7 +379,8 @@
       "quick_actions": "Actions rapides",
       "plugins": "Plugins",
       "mcp": "MCP",
-      "billing": "Facturation"
+      "billing": "Facturation",
+      "workflows": "Workflows"
     },
     "groups": {
       "personal": "Personnel",

@@ -33,6 +33,9 @@ import { useRestoredScrollOffset, useRestoredScrollRef } from "../../platform";
 import { DeferredPopup } from "../../common/deferred-popup";
 import { DeferredTooltip } from "../../common/deferred-tooltip";
 import { VirtuosoSeed } from "../../common/virtuoso-seed";
+import { useBoardWorkflow } from "./board-workflow-context";
+import { stepHandlerActor, useStepHandlerLabel } from "../../workflows/step-handler";
+import { workflowStep } from "@multica/core/issue-workflows";
 import type { IssueCreateDefaults } from "../surface/types";
 
 // Insertion-position prediction intentionally omitted. The server's
@@ -126,7 +129,11 @@ export const BoardColumn = memo(function BoardColumn({
   const archived = !!status && !!entryOf(status)?.archived_at;
   const cfg = status ? STATUS_CONFIG[categoryOf(status)] : null;
   const { setNodeRef, isOver: droppableIsOver } = useDroppable({ id: group.id });
-  const isOver = droppableIsOver && !archived;
+  // A dragged card whose project workflow does not list this status cannot
+  // land here; the column dims and says why. (MUL-7420)
+  const { dropBlockedReason } = useBoardWorkflow();
+  const blockedReason = status ? dropBlockedReason(status) : null;
+  const isOver = droppableIsOver && !archived && !blockedReason;
   const viewStoreApi = useViewStoreApi();
   // A status fixed by the open saved view cannot be hidden from the board —
   // that would silently strip one of the view's own conditions.
@@ -192,9 +199,16 @@ export const BoardColumn = memo(function BoardColumn({
   );
 
   return (
-    <div style={{ width: BOARD_COL_WIDTH }} className={`flex shrink-0 flex-col rounded-xl ${cfg?.columnBg ?? "bg-muted/40"} p-2`}>
+    <div
+      style={{ width: BOARD_COL_WIDTH }}
+      className={`flex shrink-0 flex-col rounded-xl ${cfg?.columnBg ?? "bg-muted/40"} p-2 transition-opacity ${blockedReason ? "opacity-40" : ""}`}
+      title={blockedReason ?? undefined}
+    >
       <div className="mb-2 flex items-center justify-between px-1.5">
-        <BoardGroupHeading group={group} count={totalCount ?? issueIds.length} />
+        <div className="flex min-w-0 items-center gap-2">
+          <BoardGroupHeading group={group} count={totalCount ?? issueIds.length} />
+          {status && <WorkflowStepHandlerBadge status={status} />}
+        </div>
 
         {/* Right: add + menu */}
         <div className="flex items-center gap-1">
@@ -340,6 +354,37 @@ export const BoardColumn = memo(function BoardColumn({
     </div>
   );
 });
+
+/**
+ * On a project board whose project uses a workflow, names who entering this
+ * column hands the issue to. (MUL-7420)
+ */
+function WorkflowStepHandlerBadge({ status }: { status: string }) {
+  const { scopeWorkflow, scopeProject } = useBoardWorkflow();
+  const handlerLabel = useStepHandlerLabel(scopeProject);
+  const { t } = useT("issues");
+  const step = workflowStep(scopeWorkflow, status);
+  const label = handlerLabel(step);
+  if (!step || !label) return null;
+  const actor = stepHandlerActor(step, scopeProject);
+  const text = t(($) => $.workflows.hands_off_to, { name: label });
+  return (
+    <DeferredTooltip
+      trigger={
+        <span className="inline-flex shrink-0 items-center" aria-label={text}>
+          {actor ? (
+            <ActorAvatar actorType={actor.type} actorId={actor.id} size="xs" />
+          ) : (
+            <span className="rounded bg-background px-1 py-0.5 text-micro text-muted-foreground">
+              {label}
+            </span>
+          )}
+        </span>
+      }
+      content={text}
+    />
+  );
+}
 
 function BoardGroupHeading({
   group,
