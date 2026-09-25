@@ -300,6 +300,14 @@ make sqlc                                     # 迁移/查询变化后重新生�
    daemon 感知 profile 变更自动 re-register（MUL-3332），免重启。UI 路径：workspace 设置 → Runtime Profiles。
 2. **root 陷阱**：daemon 以 root 跑，OpenClaude 拒绝 root 下使用 `--permission-mode bypassPermissions`（`cannot be used with root/sudo privileges`）。放行需声明沙箱：systemd unit `/etc/systemd/system/multica-daemon.service` 加 `Environment=CLAUDE_CODE_BUBBLEWRAP=1` 后 `daemon-reload && restart`。pi/codex 不读此变量，无副作用。
 3. 兼容性实测（spawn 确切命令行 `-p --output-format stream-json --input-format stream-json --verbose --permission-mode bypassPermissions --disallowedTools AskUserQuestion`，stdin 保持打开）：事件流 `system→assistant→result`，`result.subtype=success`。`--effort/--strict-mcp-config/--settings/--resume/--max-turns` 均在 `claude --help` 确认支持。
+4. **owner 必须手工指定（2026-09-25 踩坑）**：daemon 以机器令牌（mdt_）注册，profile runtime 行的 `owner_id` 为空 → UI 按 MUL-3292 判定"无主 runtime 对所有人不可用"，创建 agent 的 RuntimePicker 里看不到 OpenClaude。一次性修复（SQL 层 COALESCE 保证 daemon 重注册不清掉，已实测）：
+   ```bash
+   docker exec multica-postgres-1 psql -U multica -d multica -c \
+     "UPDATE agent_runtime SET owner_id='<你的用户id>' WHERE profile_id='<profile-id>';"
+   # 用户 id：SELECT id,email FROM "user";  profile id：runtime-profiles API 返回值
+   # 验证：GET /api/runtimes?workspace_id=<ws> 应列出 OpenClaude（owner=你）
+   ```
+   创建 agent 时在 Runtime 下拉选「OpenClaude (主机名)」即可（agent 与 runtime 1:1 绑定）。
 
 ### 14.2 desktop 本地加密保存登录密码
 
